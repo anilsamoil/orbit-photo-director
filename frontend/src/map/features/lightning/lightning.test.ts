@@ -202,7 +202,7 @@ it.each([404, 200])('ignores a prior loading request returning HTTP %s after off
   expect(vendor.visibilityOf('lightning-layer')).toBe('visible');
   const accepted = status.textContent;
   expect(accepted).toContain('GOES-19 sector · 3 observed flashes');
-  const acceptedSource = vendor.sources.get('lightning');
+  const acceptedSource = structuredClone(vendor.sources.get('lightning'));
   expect(acceptedSource).toMatchObject({ data: { features: [{ geometry: { coordinates: [-80, 4] } }] } });
   oldRequest.resolve(code === 404 ? new Response('', { status: 404 }) : Response.json({
     ...raw, sectors: [{ ...raw.sectors[0], cells: [[-85, 9, 200, 100]] }, raw.sectors[1]],
@@ -210,7 +210,7 @@ it.each([404, 200])('ignores a prior loading request returning HTTP %s after off
   await vi.advanceTimersByTimeAsync(1);
   vendor.fire('moveend', undefined);
   expect.soft(status.textContent).toBe(accepted);
-  expect(vendor.sources.get('lightning')).toEqual(acceptedSource);
+  expect.soft(vendor.sources.get('lightning')).toEqual(acceptedSource);
   expect(vendor.visibilityOf('lightning-layer')).toBe('visible');
   expect(fetcher).toHaveBeenCalledTimes(2);
 });

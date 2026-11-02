@@ -147,7 +147,6 @@ def test_refresh_atomically_replaces_a_prior_feed_and_refuses_a_second_owner(tmp
     published.write_text("prior")
     with (folder / ".publisher.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        monkeypatch.setattr("generator.lightning_overlay._glm_granule_urls", lambda *_: [])
         with pytest.raises(BlockingIOError):
             refresh(tmp_path)
         assert published.read_text() == "prior"
