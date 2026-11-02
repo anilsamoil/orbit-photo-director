@@ -110,12 +110,14 @@ describe('map legend disclosure', () => {
     expect(css).toContain('--map-legend-right: calc(var(--map-hide-right) + var(--map-hide-width) + var(--map-corner-gap))');
   });
 
-  it('collapses again when the page is shown', () => {
+  it('keeps an opened legend across initial load and collapses on a cached return', () => {
     const button = mount(false);
     bindLegendDisclosure();
     button.click();
     expect(button.getAttribute('aria-expanded')).toBe('true');
-    window.dispatchEvent(new Event('pageshow'));
+    window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: false }));
+    expect(button.getAttribute('aria-expanded')).toBe('true');
+    window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true }));
     expect(button.getAttribute('aria-expanded')).toBe('false');
     expect(panelDisplay()).toBe('none');
   });

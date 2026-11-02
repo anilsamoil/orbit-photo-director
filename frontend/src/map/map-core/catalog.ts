@@ -19,6 +19,7 @@ export const LAYER_ORDER = [
   'night-lights-global-dim-layer',
   'terminator-night-fill-layer',
   'viirs-night-lights-layer',
+  'lightning-layer',
   'iss-track-layer',
   'my-targets-casing',
   'my-targets-layer',
@@ -49,6 +50,7 @@ export const RASTER_SOURCE_IDS = [
 
 export const GEOJSON_SOURCE_IDS = [
   'ne-coastline',
+  'lightning',
   'iss-track',
   'my-targets',
   'targets',

@@ -23,7 +23,7 @@ import {
 vi.mock('maplibre-gl', async () => (await import('./maplibre-double')).maplibreModuleMock());
 
 describe('the layer catalog', () => {
-  it('is the twenty-one slot paint order, bottom first', () => {
+  it('is the twenty-two slot paint order, bottom first', () => {
     expect([...LAYER_ORDER]).toEqual([
       'esri-imagery-layer',
       'carto-dark-layer',
@@ -34,6 +34,7 @@ describe('the layer catalog', () => {
       'night-lights-global-dim-layer',
       'terminator-night-fill-layer',
       'viirs-night-lights-layer',
+      'lightning-layer',
       'iss-track-layer',
       'my-targets-casing',
       'my-targets-layer',
@@ -55,10 +56,10 @@ describe('the layer catalog', () => {
   });
 
   it('places every satellite track in the one shared slot above the labels', () => {
-    expect(positionOf(satTrackLayerId('iss'))).toBe(18);
-    expect(positionOf(satTrackLayerId('tiangong'))).toBe(18);
-    expect(positionOf('esri-labels-reference-layer')).toBe(17);
-    expect(positionOf('lookup-pin-layer')).toBe(19);
+    expect(positionOf(satTrackLayerId('iss'))).toBe(19);
+    expect(positionOf(satTrackLayerId('tiangong'))).toBe(19);
+    expect(positionOf('esri-labels-reference-layer')).toBe(18);
+    expect(positionOf('lookup-pin-layer')).toBe(20);
   });
 
   it('derives the satellite ids from one key', () => {
@@ -145,7 +146,7 @@ describe('the catalog against what renderMap paints', () => {
     expect(painted).toHaveLength(17);
     for (const id of painted) expect(isLayerId(id)).toBe(true);
     const positions = painted.map((id) => positionOf(id as LayerId));
-    expect(positions).toEqual([0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
+    expect(positions).toEqual([0, 1, 2, 3, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
   });
 
   it('every source renderMap declares or adds is a catalog source id', async () => {

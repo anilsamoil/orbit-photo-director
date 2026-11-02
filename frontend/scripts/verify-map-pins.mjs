@@ -37,16 +37,23 @@ const PIN_FILES = [
   'test/map-satellites-contract.test.ts',
   'test/map-ground-track-contract.test.ts',
   'src/map/features/tracked/tracked.test.ts',
+  'src/map/features/lightning/lightning.test.ts',
   'src/map/features/targets/targets.test.ts',
   'src/map/features/launch-corridor/launch-corridor.test.ts',
 ];
 
 const MUTATIONS = [
   {
+    contract: 'recent lightning disappears on a scrub',
+    file: 'src/map/features/lightning/index.ts',
+    find: 'feed && !scrubbed && now - feed.end < STALE_MS',
+    replace: 'feed && now - feed.end < STALE_MS',
+  },
+  {
     contract: 'night overlays stay below the ISS ground track',
     file: CATALOG,
-    find: "  'viirs-night-lights-layer',\n  'iss-track-layer',",
-    replace: "  'iss-track-layer',\n  'viirs-night-lights-layer',",
+    find: "  'viirs-night-lights-layer',\n  'lightning-layer',\n  'iss-track-layer',",
+    replace: "  'iss-track-layer',\n  'lightning-layer',\n  'viirs-night-lights-layer',",
   },
   {
     contract: 'a layer added later still paints at its catalog position',

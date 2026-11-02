@@ -36,6 +36,16 @@ Paths below are relative to `frontend/`. Tests run with `bun run test <path>` fr
 | Tests | `src/map/features/satellites/satellites.test.ts` mounts on the vendor double with `fetchSatelliteTLE` mocked. `test/map-satellites-contract.test.ts` drives it through `renderMap` and the MapLibre double with a stubbed CelesTrak. `test/satellites.test.ts` covers the fetch and cache. |
 | Traps | Every add fetches CelesTrak through `fetchSatelliteTLE`; mock the `src/satellites` module in tests or the suite goes to the network. A persisted satellite whose fetch failed at mount is not retried (`FOLLOWUPS.md`). Opening the picker leaves launch mode (`setMapLaunchMode(false)`). The tickers skip while scrubbed and `clock.onViewTime` repaints instead, so a scrub test must advance the view time, not the timers. |
 
+### lightning
+
+| | |
+| --- | --- |
+| Directory and entrypoint | `src/map/features/lightning/`, `lightning` |
+| User reaches it | Tap the lightning bolt beside IR. The legend opens with the NOAA GLM sector at map center, its five-minute observation interval and feed age. The IR line shows the requested GIBS frame time or identifies the latest RealEarth frame as untimed. |
+| What it draws | Each circle marks the latest quality-accepted flash centroid in an occupied grid cell. Older circles fade. The catalog places them above imagery and below the ISS track and pins. A scrub or a feed at least eight minutes old hides all circles. |
+| Coverage and update | The independent producer writes `lightning/latest.json`. The map polls every two minutes while enabled. A complete sector may report zero flashes. A missing or incomplete sector shows unavailable, and a center beyond the pilot footprint shows outside coverage. |
+| Check | `src/map/features/lightning/lightning.test.ts`, `tests/test_lightning_overlay.py` and verify-opd `drive map-lightning`. |
+
 ### basemap
 
 | | |
