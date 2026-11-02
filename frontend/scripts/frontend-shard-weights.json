@@ -6,6 +6,7 @@
   "src/map/features/iss-marker/iss-marker.test.ts": 0.456,
   "src/map/features/labels/labels.test.ts": 0.448,
   "src/map/features/launch-corridor/launch-corridor.test.ts": 0.476,
+  "src/map/features/lightning/lightning.test.ts": 0.062,
   "src/map/features/night-lights/night-lights.test.ts": 0.457,
   "src/map/features/pin-drop/pin-drop.test.ts": 0.742,
   "src/map/features/satellites/satellites.test.ts": 0.555,
