@@ -344,6 +344,28 @@ describe('plan inset labels', () => {
     inset.destroy();
   });
 
+  it('restores Kenya and Nigeria at zoom 6.5 when only a stale dark z6 box is inside the canvas', () => {
+    const names = () => {
+      const filter = created.options?.style.layers.find((layer) => layer.id === 'inset-countries-viewport')?.filter as [string, unknown, [string, string[]]];
+      return filter[2][1];
+    };
+    for (const [name, center, size] of [
+      ['Kenya', [38.4677, 0.7652], [320, 80]],
+      ['Nigeria', [9.1539, 11.0242], [320, 280]],
+    ] as const) {
+      created.zoom = 6.5;
+      created.center = [...center];
+      created.size = [...size];
+      const frame = document.createElement('div');
+      Object.defineProperty(frame, 'clientWidth', { value: size[0] });
+      Object.defineProperty(frame, 'clientHeight', { value: size[1] });
+      const inset = createTrackInset(frame, document.createElement('div'));
+      created.events.render?.();
+      expect(names(), name).toContain(name);
+      inset.destroy();
+    }
+  });
+
   it('caps the label raster at the audited tile level', () => {
     const frame = document.createElement('div');
     Object.defineProperty(frame, 'clientWidth', { value: 800 });

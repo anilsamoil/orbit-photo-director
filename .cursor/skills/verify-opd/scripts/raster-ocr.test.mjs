@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createServer } from 'node:http';
 import { mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { checkRasterOcr, clearRasterOcrRun, countryRasterUrls, ocrPython, ocrRasterTile, rasterWords, readableRasterName, rasterOcrStats } from './raster-ocr.mjs';
 
 const moduleUrl = new URL('./raster-ocr.mjs', import.meta.url).href;
@@ -67,6 +69,28 @@ test('bounded OCR retains sovereign-name context instead of accepting state or o
   assert.equal(readableRasterName(pack([[word('GREAT',10),word('AUSTRALIAN',55),word('BIGHT',100)],[word('AUSTRALIA',10)]]),{viewport},'Australia').readable,true);
 });
 
+
+test('glyph scale follows the drawn tile, not round(zoom + 1) past the source cap', () => {
+  const word = { text: 'FRANCE', uppercase: true, box: [10, 10, 80, 40] };
+  const pack = { mosaics: [{ z: 6, service: 'reference', lines: [[word]], words: [word] }] };
+  const staleScale = (512 * (2 ** 6.5)) / (256 * (2 ** 8));
+  const row = {
+    zoom: 6.5,
+    viewport: { width: 100, height: 100, scale: staleScale, origin: { x: 0, y: 0 }, occlusions: [] },
+  };
+  assert.equal(readableRasterName(pack, row, 'France').readable, false);
+});
+
+test('the python helper is resolved from the module path when vitest rewrites the page URL', async () => {
+  const source = readFileSync(new URL('./raster-ocr.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /new\s+URL\(\s*['"]\.\/raster-ocr\.py['"]\s*,\s*import\.meta\.url\s*\)/);
+  const { rasterHelperFrom } = await import('./raster-ocr.mjs');
+  const modulePath = fileURLToPath(new URL('./raster-ocr.mjs', import.meta.url));
+  const helper = fileURLToPath(new URL('./raster-ocr.py', import.meta.url));
+  assert.equal(typeof rasterHelperFrom, 'function');
+  assert.equal(rasterHelperFrom(`http://127.0.0.1:42700/@fs${modulePath}`), helper);
+  assert.equal(rasterHelperFrom(pathToFileURL(modulePath).href), helper);
+});
 
 test('centroid neighborhoods only select already rendered URLs and retain seam neighbors', () => {
   const urls=[];

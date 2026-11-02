@@ -12,7 +12,7 @@ function loadHelpers() {
     getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
   };
   vm.createContext(context);
-  vm.runInContext(`${PLAN_TILE_HELPERS}\nthis.planWaitTiles = planWaitTiles;\nthis.planSymbolNames = planSymbolNames;`, context);
+  vm.runInContext(`${PLAN_TILE_HELPERS}\nthis.planWaitTiles = planWaitTiles;\nthis.planSymbolNames = planSymbolNames;\nthis.planViewport = planViewport;`, context);
   return context;
 }
 
@@ -55,6 +55,73 @@ function waitingMap({ idle, unloadAfterRepaint }) {
     triggerRepaint() {},
   };
 }
+
+function centerTile(z) {
+  const n = 2 ** z;
+  const lng = 2;
+  const lat = 46;
+  const x = Math.max(0, Math.min(n - 1, Math.floor(((lng + 180) / 360) * n)));
+  const rad = lat * Math.PI / 180;
+  const yRaw = Math.floor((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2 * n);
+  const y = Math.max(0, Math.min(n - 1, yRaw));
+  return { canonical: { z, x, y } };
+}
+
+function cappedFranceMap(zoom) {
+  const labelZ = Math.min(6, Math.max(0, Math.round(zoom + 1)));
+  const baseZ = Math.min(20, Math.max(0, Math.round(zoom + 1)));
+  const manager = (z) => ({
+    getVisibleCoordinates: () => [centerTile(z)],
+    getTile: () => ({ state: 'loaded' }),
+  });
+  return {
+    getZoom: () => zoom,
+    getCenter: () => ({ lng: 2, lat: 46 }),
+    areTilesLoaded: () => true,
+    getCanvas: () => ({
+      clientWidth: 800,
+      clientHeight: 600,
+      getBoundingClientRect: () => ({ left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600 }),
+    }),
+    getStyle: () => ({
+      sources: {
+        'inset-labels': { tiles: ['https://tiles.example/labels/{z}/{y}/{x}'], tileSize: 256, maxzoom: 6 },
+        'inset-basemap': { tiles: ['https://tiles.example/dark/{z}/{y}/{x}'], tileSize: 256, maxzoom: 20 },
+      },
+      layers: [],
+    }),
+    project: () => ({ x: 10, y: 10 }),
+    getRenderWorldCopies: () => false,
+    style: {
+      tileManagers: {
+        'inset-labels': manager(labelZ),
+        'inset-basemap': manager(baseZ),
+      },
+    },
+    once(event, callback) {
+      if (event === 'idle') queueMicrotask(callback);
+    },
+    triggerRepaint() {},
+  };
+}
+
+test('France at 5.49, 5.5, 6.5, and 8 counts each source at the tile it draws', async () => {
+  const { planWaitTiles, planViewport } = loadHelpers();
+  for (const zoom of [5.49, 5.5, 6.5, 8]) {
+    const map = cappedFranceMap(zoom);
+    const waited = await planWaitTiles(map);
+    const labelZ = Math.min(6, Math.max(0, Math.round(zoom + 1)));
+    const baseZ = Math.min(20, Math.max(0, Math.round(zoom + 1)));
+    assert.equal(waited.tilesOk, true, `${zoom} ${JSON.stringify(waited.detail)}`);
+    assert.equal(waited.tileZ, labelZ);
+    assert.ok(waited.urls.some((url) => url.includes(`/labels/${labelZ}/`)), waited.urls.join(' '));
+    assert.ok(waited.urls.some((url) => url.includes(`/dark/${baseZ}/`)), waited.urls.join(' '));
+    assert.equal(waited.urls.some((url) => url.includes(`/labels/${Math.round(zoom + 1)}/`)), zoom <= 5.49);
+    const scale = planViewport(map).scale;
+    const drawn = (512 * (2 ** zoom)) / (256 * (2 ** labelZ));
+    assert.ok(Math.abs(scale - drawn) < 1e-9, `${zoom} scale ${scale} expected ${drawn}`);
+  }
+});
 
 test('a 400ms repaint timeout is a tile failure', async () => {
   const { planWaitTiles } = loadHelpers();

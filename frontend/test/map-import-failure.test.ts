@@ -390,7 +390,10 @@ describe('map import recovery', () => {
   });
 });
 
+let nativeHeadAppend: typeof document.head.appendChild;
+
 beforeEach(() => {
+  nativeHeadAppend = document.head.appendChild.bind(document.head);
   mapGate.mode = 'stale';
   mapGate.evaluations = 0;
   mapGate.renderWait = null;
@@ -446,6 +449,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  document.head.appendChild = nativeHeadAppend;
   for (const observer of styleObservers) observer.disconnect();
   styleObservers.length = 0;
   mapGate.release();
@@ -677,6 +681,26 @@ describe('map pane when the chunk fails', () => {
     await vi.waitFor(() => expect(replace).toHaveBeenCalledTimes(1));
     expect(sessionStorage.getItem(MAP_IMPORT_RETRY_KEY)).toBe('1');
     expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes('maplibre-vendor-V.js?map-probe='))).toBe(true);
+  });
+
+  it('loads the build map entry when the stylesheet error is dispatched during insertion', async () => {
+    mapGate.mode = 'ok';
+    seedSnapshot();
+    document.head.insertAdjacentHTML('beforeend', '<script type="module" src="/assets/index-ENTRY.js"></script>');
+    window.history.replaceState({}, '', '/?u=anil&map-retry=17');
+    sessionStorage.setItem(MAP_IMPORT_URL_KEY, 'http://127.0.0.1:42700/assets/maplibre-vendor-V.js');
+    const append = document.head.appendChild.bind(document.head);
+    document.head.appendChild = ((node: Node) => {
+      const inserted = append(node);
+      if (node instanceof HTMLLinkElement && node.rel === 'stylesheet') node.dispatchEvent(new Event('error'));
+      return inserted;
+    }) as typeof document.head.appendChild;
+    settleStylesheets('load');
+    const { init } = await import('../src/main');
+    await init();
+    const recovery = await import('../src/map-import');
+    await vi.waitFor(() => expect(recovery.loadFreshMapModule).toHaveBeenCalled());
+    expect(vi.mocked(recovery.loadFreshMapModule).mock.calls.at(-1)?.slice(0, 2)).toEqual(['http://127.0.0.1:42700/assets/index-MAP.js', '17']);
   });
 
   it('loads the build map entry with a fresh graph instead of a stale stored vendor URL', async () => {

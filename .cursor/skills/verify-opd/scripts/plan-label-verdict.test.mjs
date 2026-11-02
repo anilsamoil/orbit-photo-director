@@ -48,6 +48,23 @@ test('opacity and false Australia-hole mutations fail the real-style guard', () 
   }
 });
 
+test('France at 5.49, 5.5, 6.5, and 8 is proved at the capped label tile', () => {
+  for (const zoom of [5.49, 5.5, 6.5, 8]) {
+    const tileZ = Math.min(6, Math.max(0, Math.round(zoom + 1)));
+    const verdict = oneNameSource({
+      tilesOk: true,
+      zoom,
+      tileZ,
+      country: 'France',
+      names: [],
+      words: 'FRANCE',
+      rasterReadable: true,
+    });
+    assert.equal(verdict.ok, true, `${zoom} ${verdict.reason} expected ${verdict.expected}`);
+    assert.equal(verdict.reason, undefined);
+  }
+});
+
 test('whole-tile words cannot override clipped or occluded composed-viewport evidence', () => {
   const row = { tilesOk: true, zoom: 5, tileZ: 6, country: 'Canada', words: 'CANADA', rasterReadable: false, names: [] };
   assert.equal(oneNameSource(row).reason, 'gap');
@@ -149,4 +166,6 @@ test('the plan-inset docs name the level-6 clamp at zoom 5.5', () => {
   assert.match(skill, /view zoom 5\.5/);
   assert.match(iss, /tile level 6/);
   assert.match(skill, /tile level 6/);
+  assert.match(iss, /min\(round\(zoom \+ 1\), source maxzoom\)/);
+  assert.match(skill, /min\(round\(zoom \+ 1\), source maxzoom\)/);
 });

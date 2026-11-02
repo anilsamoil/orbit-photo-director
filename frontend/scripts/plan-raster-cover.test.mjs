@@ -22,6 +22,21 @@ const cameras = [
   { center: [-0.33, 46], zoom: 5.5 },
 ];
 
+test('the dark basemap at zoom 6.5 draws z8, which has no audited lettering box', () => {
+  assert.match(product, /const INSET_BASEMAP_MAX_ZOOM = 20/);
+  assert.match(product, /inset-basemap': \{ type: 'raster', tiles: ESRI_DARK_TILES, tileSize: 256, maxzoom: INSET_BASEMAP_MAX_ZOOM \}/);
+  assert.doesNotMatch(product, /bounds\?\.\[name\]\?\.\[tile\]/);
+  for (const center of [[38, 1], [8, 10]]) {
+    const dark = cover(center, 6.5, 20);
+    const labels = cover(center, 6.5, levels.through);
+    assert.ok(dark.length > 0, `${center} basemap cover`);
+    assert.ok(dark.every((tile) => tile.canonical.z === 8), `${center} basemap drew ${dark.map((tile) => tile.canonical.z).join(',')}`);
+    assert.ok(labels.length > 0 && labels.every((tile) => tile.canonical.z <= levels.through));
+  }
+  assert.equal(levels.bounds.Kenya['8'], undefined);
+  assert.equal(levels.bounds.Nigeria['8'], undefined);
+});
+
 test('the label source is capped where the renderer would otherwise fetch z7-z9', () => {
   assert.match(product, /inset-labels': \{ type: 'raster', tiles: ESRI_LABEL_TILES, tileSize: 256, maxzoom: COUNTRY_RASTER_LEVELS\.through \}/);
   for (const camera of cameras) {
