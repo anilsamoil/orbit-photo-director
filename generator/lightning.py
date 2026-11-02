@@ -284,7 +284,9 @@ class _GLMGranule:
     flashes: list[_GLMFlash]
 
 
-def _decode_glm_granule(buf: bytes) -> _GLMGranule | None:
+def _decode_glm_granule(
+    buf: bytes, *, overlay_platform: str | None = None,
+) -> _GLMGranule | None:
     """A valid granule may contain zero flashes. Unusable data returns None."""
     try:
         import netCDF4
@@ -294,11 +296,24 @@ def _decode_glm_granule(buf: bytes) -> _GLMGranule | None:
             if start.tzinfo is None:
                 raise ValueError("missing time zone in granule start")
             start = start.astimezone(UTC)
+            flags = None
+            if overlay_platform is not None:
+                end = datetime.fromisoformat(ds.time_coverage_end.replace("Z", "+00:00"))
+                no_loss = bool(ds["percent_uncorrectable_L0_errors"][()] == 0)
+                navigated = bool(ds["percent_navigated_L1b_events"][()] == 1)
+                if (ds.platform_ID != overlay_platform or end - start != GLM_GRANULE_CADENCE
+                        or not no_loss or not navigated):
+                    raise ValueError("wrong platform, incomplete interval or lost GLM data")
+                flags = ds["flash_quality_flag"][:].filled(-1)
+                if len(flags) != len(ds["flash_lat"]):
+                    raise ValueError("missing GLM quality flags")
             flashes = []
-            for lat, lon, offset in zip(
+            for index, (lat, lon, offset) in enumerate(zip(
                 ds["flash_lat"][:], ds["flash_lon"][:],
                 ds["flash_time_offset_of_first_event"][:], strict=True,
-            ):
+            )):
+                if flags is not None and flags[index] != 0:
+                    continue
                 if not (-90 <= lat <= 90 and -180 <= lon <= 180 and math.isfinite(offset)):
                     raise ValueError("invalid flash coordinates or offset")
                 t = start + timedelta(seconds=float(offset))
