@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   AUDITED_RASTER_LEVELS, auditRasterLevels, countryStyleVerdict, countrySweepZooms,
-  loadCountryRasterLevels, loadCountrySymbolLayers, oneNameSource, planLabelVerdict, rasterPainted,
+  loadCountryRasterLevels, loadCountrySymbolLayers, oneNameSource, planLabelReaders, planLabelVerdict, rasterPainted,
 } from './plan-label-verdict.mjs';
 
 test('an exact sovereign name is not vetoed by an unrelated adjective', () => {
@@ -19,7 +20,7 @@ test('an exact sovereign name is not vetoed by an unrelated adjective', () => {
 
 test('generated sweep includes fitted extremes and both sides of every audited tile edge', () => {
   const samples = countrySweepZooms();
-  for (const z of [-1.1497862143712645, -0.23372503287116042, -0.51, -0.5, -0.49, 1.49, 1.5, 1.51, 2.49, 2.5, 2.51, 3.49, 3.5, 3.51, 4.49, 4.5, 4.51, 5]) {
+  for (const z of [-1.1497862143712645, -0.23372503287116042, -0.51, -0.5, -0.49, 1.49, 1.5, 1.51, 2.49, 2.5, 2.51, 3.49, 3.5, 3.51, 4.49, 4.5, 4.51, 5, 5.5, 6.5, 6.51, 8]) {
     assert.ok(samples.includes(z), `missing ${z}`);
   }
   assert.equal(new Set(samples).size, samples.length);
@@ -88,6 +89,53 @@ test('a transparent or mismatched label is not a painted country name', () => {
     rendered: [placed('France', { textColor: 'transparent' })],
   });
   assert.equal((transparent.names || []).includes('France'), false);
+});
+
+test('readPlanLabels keeps each feature paint object and does not collapse two Frances', () => {
+  const context = {};
+  vm.createContext(context);
+  vm.runInContext(`${planLabelReaders()}\nthis.readPlanLabels = readPlanLabels;`, context);
+  const formatted = { sections: [{ text: 'France' }] };
+  const color = { r: 0.97, g: 0.96, b: 0.92, a: 1 };
+  const france = {
+    properties: { name: 'France' },
+    geometry: { type: 'Point', coordinates: [2, 46] },
+    layer: {
+      layout: { 'text-field': formatted, visibility: 'visible' },
+      paint: { 'text-color': color, 'text-opacity': 1 },
+    },
+  };
+  const hidden = {
+    ...france,
+    layer: {
+      layout: { 'text-field': formatted, visibility: 'none' },
+      paint: { 'text-color': color, 'text-opacity': 1 },
+    },
+  };
+  const others = ['Canada', 'Mexico', 'Brazil', 'Japan'].map((name, index) => ({
+    properties: { name },
+    geometry: { type: 'Point', coordinates: [index, 20] },
+    layer: {
+      layout: { 'text-field': { sections: [{ text: name }] }, visibility: 'visible' },
+      paint: { 'text-color': color, 'text-opacity': 1 },
+    },
+  }));
+  const orbit = {
+    getLayer: () => ({ id: 'inset-countries' }),
+    getPaintProperty: (_id, key) => (key === 'text-opacity' ? 1 : color),
+    getLayoutProperty: (_id, key) => {
+      if (key === 'text-field') return { sections: [{ text: 'X' }] };
+      if (key === 'visibility') return 'visible';
+      return undefined;
+    },
+    getStyle: () => ({ layers: [{ id: 'inset-countries', source: 'inset-countries', type: 'symbol' }] }),
+    queryRenderedFeatures: () => [france, france, hidden, ...others],
+    querySourceFeatures: () => [france, ...others],
+    project: () => ({ x: 40, y: 40 }),
+  };
+  const verdict = context.readPlanLabels(orbit, 12000, 320, 240);
+  assert.equal(verdict.names.filter((name) => name === 'France').length, 2);
+  assert.equal(verdict.names.includes('Canada'), true);
 });
 
 test('the plan-inset docs name the level-6 clamp at zoom 5.5', () => {

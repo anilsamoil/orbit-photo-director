@@ -344,6 +344,15 @@ describe('plan inset labels', () => {
     inset.destroy();
   });
 
+  it('caps the label raster at the audited tile level', () => {
+    const frame = document.createElement('div');
+    Object.defineProperty(frame, 'clientWidth', { value: 800 });
+    Object.defineProperty(frame, 'clientHeight', { value: 800 });
+    const inset = createTrackInset(frame, document.createElement('div'));
+    expect(created.options?.style.sources['inset-labels']?.maxzoom).toBe(countryRasterLevels.through);
+    inset.destroy();
+  });
+
   it('keeps a pinch or a pan, recenters on a double click, and moves the night with the clock', () => {
     created.fitCount = 0;
     created.sources.clear();

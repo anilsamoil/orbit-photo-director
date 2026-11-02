@@ -97,3 +97,35 @@ test('plan symbol names ignore a transparent or mismatched label', () => {
   };
   assert.deepEqual([...planSymbolNames(map)], ['France']);
 });
+
+test('MapLibre color and formatted text stay visible, hidden text stays out, and two Frances both count', () => {
+  const { planSymbolNames } = loadHelpers();
+  const color = { r: 0.97, g: 0.96, b: 0.92, a: 1 };
+  const clear = { r: 0, g: 0, b: 0, a: 0 };
+  const formatted = { sections: [{ text: 'France' }] };
+  const france = (layer) => ({
+    properties: { name: 'France' },
+    geometry: { type: 'Point', coordinates: [2, 46] },
+    layer,
+  });
+  const visible = {
+    type: 'symbol',
+    source: 'inset-countries',
+    paint: { 'text-opacity': 1, 'text-color': color },
+    layout: { 'text-field': formatted, visibility: 'visible' },
+  };
+  const map = {
+    getZoom: () => 1.49,
+    getCanvas: () => ({ clientWidth: 400, clientHeight: 300 }),
+    getStyle: () => ({ layers: [{ id: 'inset-countries', type: 'symbol', source: 'inset-countries', paint: { 'text-opacity': 1, 'text-color': '#f7f4ea' } }] }),
+    project: () => ({ x: 20, y: 20 }),
+    queryRenderedFeatures: () => [
+      france(visible),
+      france(visible),
+      france({ ...visible, layout: { ...visible.layout, visibility: 'none' } }),
+      france({ ...visible, paint: { 'text-opacity': 1, 'text-color': clear } }),
+    ],
+  };
+  const names = [...planSymbolNames(map)];
+  assert.deepEqual(names, ['France', 'France']);
+});
