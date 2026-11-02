@@ -146,7 +146,7 @@ it('does not upload data or replace unchanged status on camera moves within an a
   observer.disconnect();
 });
 
-it('ignores a prior loading request after the overlay is toggled off and back on', async () => {
+it.each([404, 200])('ignores a prior loading request returning HTTP %s after off and back on', async code => {
   const { button, vendor, status, fetcher } = mountFeed();
   const oldRequest = Promise.withResolvers<Response>();
   const newRequest = Promise.withResolvers<Response>();
@@ -160,8 +160,11 @@ it('ignores a prior loading request after the overlay is toggled off and back on
   await vi.advanceTimersByTimeAsync(1);
   expect(vendor.visibilityOf('lightning-layer')).toBe('visible');
   const accepted = status.textContent;
-  oldRequest.resolve(new Response('', { status: 404 }));
+  oldRequest.resolve(code === 404 ? new Response('', { status: 404 }) : Response.json({
+    ...raw, sectors: [{ ...raw.sectors[0], cells: [[-80, 4, 200, 100]] }, raw.sectors[1]],
+  }));
   await vi.advanceTimersByTimeAsync(1);
+  vendor.fire('moveend', undefined);
   expect(status.textContent).toBe(accepted);
   expect(vendor.visibilityOf('lightning-layer')).toBe('visible');
   expect(fetcher).toHaveBeenCalledTimes(2);
