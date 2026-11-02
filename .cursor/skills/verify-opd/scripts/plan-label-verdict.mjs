@@ -300,7 +300,13 @@ export function planLabelVerdict(sample) {
   const names = [];
   const rendered = Array.isArray(sample.rendered) ? sample.rendered : [];
   for (const feature of rendered) {
-    const text = shownText(sample.textField, feature && feature.properties);
+    const field = feature && feature.textField != null ? feature.textField : sample.textField;
+    const featureOpacity = feature && feature.textOpacity != null ? resolvedOpacity(feature.textOpacity) : opacity;
+    const featureAlpha = feature && feature.textColor != null ? colorAlpha(feature.textColor) : alpha;
+    if (!(featureOpacity > 0) || !(featureAlpha > 0)) continue;
+    const text = shownText(field, feature && feature.properties);
+    const propertyName = feature && feature.properties && feature.properties.name;
+    if (typeof propertyName === 'string' && text !== propertyName) continue;
     if (text.length < 2 || !catalog.includes(text)) continue;
     if (!(feature.x >= 8 && feature.y >= 8 && feature.x <= width - 8 && feature.y <= height - 8)) continue;
     if (!names.includes(text)) names.push(text);

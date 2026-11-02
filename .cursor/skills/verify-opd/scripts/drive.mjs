@@ -6584,6 +6584,29 @@ function planOpacityOn(layer, zoom) {
   }
   return value !== 0;
 }
+function planShownText(field, properties) {
+  if (typeof field === 'string') return field;
+  if (Array.isArray(field) && field[0] === 'get' && typeof field[1] === 'string') {
+    const value = properties ? properties[field[1]] : undefined;
+    return typeof value === 'string' ? value : '';
+  }
+  return '';
+}
+function planColorAlpha(color) {
+  if (color == null) return 1;
+  if (typeof color !== 'string') return 0;
+  const text = color.trim().toLowerCase();
+  if (text === 'transparent') return 0;
+  const hex = /^#([0-9a-f]+)$/.exec(text);
+  if (hex && (hex[1].length === 3 || hex[1].length === 6)) return 1;
+  if (hex && hex[1].length === 8) return parseInt(hex[1].slice(6, 8), 16) / 255;
+  const rgba = /^rgba?\(([^)]*)\)$/.exec(text);
+  if (!rgba) return 0;
+  const parts = rgba[1].split(',').map((part) => part.trim());
+  if (parts.length < 4) return 1;
+  const alpha = Number(parts[3]);
+  return Number.isFinite(alpha) ? alpha : 0;
+}
 function planSymbolNames(map) {
   const zoom = map.getZoom();
   const canvas = map.getCanvas();
@@ -6591,12 +6614,21 @@ function planSymbolNames(map) {
     .filter((layer) => (layer.source === 'inset-countries' || layer.source === 'inset-country-fallbacks') && layer.type === 'symbol' && planOpacityOn(layer, zoom))
     .map((layer) => layer.id);
   const features = layers.length ? (map.queryRenderedFeatures({ layers }) || []) : [];
-  return features.filter((feature) => {
+  const names = [];
+  for (const feature of features) {
     const coordinates = feature.geometry && feature.geometry.coordinates;
-    if (!coordinates || coordinates.length < 2) return false;
+    if (!coordinates || coordinates.length < 2) continue;
     const point = map.project(coordinates);
-    return point.x >= 0 && point.y >= 0 && point.x <= canvas.clientWidth && point.y <= canvas.clientHeight;
-  }).map((feature) => (feature.properties && feature.properties.name) || '');
+    if (!(point.x >= 0 && point.y >= 0 && point.x <= canvas.clientWidth && point.y <= canvas.clientHeight)) continue;
+    const name = feature.properties && feature.properties.name;
+    if (typeof name !== 'string' || !name) continue;
+    const layer = feature.layer || {};
+    if (!planOpacityOn(layer, zoom)) continue;
+    if (planColorAlpha(layer.paint && layer.paint['text-color']) <= 0) continue;
+    if (planShownText(layer.layout && layer.layout['text-field'], feature.properties) !== name) continue;
+    if (!names.includes(name)) names.push(name);
+  }
+  return names;
 }
 function planLayerCovers(map, name, zoom) {
   const layers = ((map.getStyle() && map.getStyle().layers) || [])
@@ -6629,13 +6661,26 @@ async function planWaitTiles(map) {
   const ready = (pack) => !!(pack && pack.tiles.length > 0
     && pack.tiles.every((tile) => tile.state === 'loaded')
     && pack.tiles.some((tile) => tile.x === pack.center.x && tile.y === pack.center.y));
-  const tilesOk = ready(labels) && ready(base) && map.areTilesLoaded();
+  let tilesOk = ready(labels) && ready(base) && map.areTilesLoaded();
   if (tilesOk) {
-    await new Promise((resolve) => {
-      const timer = setTimeout(resolve, 400);
-      map.once('idle', () => { clearTimeout(timer); resolve(); });
+    const painted = await new Promise((resolve) => {
+      let finished = false;
+      const timer = setTimeout(() => {
+        if (finished) return;
+        finished = true;
+        resolve(false);
+      }, 400);
+      map.once('idle', () => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        resolve(true);
+      });
       if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
     });
+    labels = planVisibleTiles(map, 'inset-labels');
+    base = planVisibleTiles(map, 'inset-basemap');
+    tilesOk = painted === true && ready(labels) && ready(base) && map.areTilesLoaded();
   }
   const urls = tilesOk
     ? planTileUrls(map, 'inset-labels', labels.tiles).concat(planTileUrls(map, 'inset-basemap', base.tiles))

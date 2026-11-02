@@ -76,13 +76,32 @@ def stems(name: str) -> list[str]:
     return found
 
 
+def sovereign_spans(tokens: list[str], country: str) -> list[tuple[int, int]]:
+    name = country.upper()
+    stem_list = stems(name)
+    normalized = [re.sub(r"[^A-Z]", "", unicodedata.normalize("NFKD", token).upper()) for token in tokens]
+    spans = []
+    for start in range(len(tokens)):
+        for end in range(start + 1, min(len(tokens), start + len(name)) + 1):
+            if not all(token.isupper() for token in tokens[start:end]):
+                continue
+            joined = "".join(normalized[start:end])
+            if joined not in stem_list or not sovereign_context(normalized, start, end):
+                continue
+            spans.append((start, end))
+    return spans
+
+
 def raster_painted(words: str, country: str) -> bool:
     name = country.upper()
     if len(name) < 4:
         return False
     stem_list = stems(name)
-    for line in words.upper().splitlines():
-        tokens = re.findall(r"[A-Z]+", line)
+    for line in words.splitlines():
+        raw = re.findall(r"[A-Za-z]+", line)
+        if any(end > start + 1 for start, end in sovereign_spans(raw, country)):
+            return True
+        tokens = [token.upper() for token in raw]
         for index, word in enumerate(tokens):
             if not sovereign_context(tokens, index, index + 1):
                 continue
@@ -160,24 +179,16 @@ def ocr_image(image: Image.Image) -> str:
 
 
 def name_boxes(lines: list[list[dict]], country: str) -> list[list[float]]:
-    name = country.upper()
     boxes = []
     for line in lines:
-        tokens = [re.sub(r"[^A-Z]", "", unicodedata.normalize("NFKD", word["text"]).upper()) for word in line]
-        for start in range(len(tokens)):
-            for end in range(start + 1, min(len(tokens), start + len(name)) + 1):
-                joined = "".join(tokens[start:end])
-                if joined not in stems(name) or not sovereign_context(tokens, start, end):
-                    continue
-                if not all(word["text"].isupper() for word in line[start:end]):
-                    continue
-                picked = [word["box"] for word in line[start:end]]
-                box = [min(b[0] for b in picked) - 1, min(b[1] for b in picked) - 1, max(b[2] for b in picked) + 1, max(b[3] for b in picked) + 1]
-                existing = next((b for b in boxes if min(b[2], box[2]) > max(b[0], box[0]) and min(b[3], box[3]) > max(b[1], box[1])), None)
-                if existing is None:
-                    boxes.append(box)
-                else:
-                    existing[:] = [min(existing[0], box[0]), min(existing[1], box[1]), max(existing[2], box[2]), max(existing[3], box[3])]
+        for start, end in sovereign_spans([word["text"] for word in line], country):
+            picked = [word["box"] for word in line[start:end]]
+            box = [min(b[0] for b in picked) - 1, min(b[1] for b in picked) - 1, max(b[2] for b in picked) + 1, max(b[3] for b in picked) + 1]
+            existing = next((b for b in boxes if min(b[2], box[2]) > max(b[0], box[0]) and min(b[3], box[3]) > max(b[1], box[1])), None)
+            if existing is None:
+                boxes.append(box)
+            else:
+                existing[:] = [min(existing[0], box[0]), min(existing[1], box[1]), max(existing[2], box[2]), max(existing[3], box[3])]
     return boxes
 
 

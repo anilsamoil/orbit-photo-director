@@ -191,7 +191,7 @@ function mercatorLngLat(x: number, y: number): [number, number] {
 
 function viewportFallbacks(map: MapLibreMap, frame: HTMLElement): string[] {
   const zoom = map.getZoom();
-  const tile = Math.max(0, Math.round(zoom + 1));
+  const tile = Math.min(COUNTRY_RASTER_LEVELS.through, Math.max(0, Math.round(zoom + 1)));
   const frameBox = frame.getBoundingClientRect();
   const viewport = { left: 0, top: 0, right: frame.clientWidth, bottom: frame.clientHeight };
   const occlusions = Array.from(frame.ownerDocument.querySelectorAll('[data-iss-clock], [data-iss-edition], [data-iss-split-chrome]'))
@@ -204,7 +204,7 @@ function viewportFallbacks(map: MapLibreMap, frame: HTMLElement): string[] {
     if (feature.geometry.type !== 'Point') return [];
     const name = String(feature.properties?.name);
     const painted = COUNTRY_RASTER_LEVELS.countries[name] ?? [];
-    if (!painted.includes(Math.min(tile, COUNTRY_RASTER_LEVELS.through))) return [];
+    if (!painted.includes(tile)) return [];
     const anchor = map.project(feature.geometry.coordinates as [number, number]);
     if (anchor.x < 0 || anchor.y < 0 || anchor.x > viewport.right || anchor.y > viewport.bottom) return [];
     const readable = (COUNTRY_RASTER_LEVELS.bounds?.[name]?.[tile] ?? []).some(({ box }) => {
