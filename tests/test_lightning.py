@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -300,27 +300,27 @@ from generator.lightning import (  # noqa: E402
     CombinedLightningSampler,
     GFSCAPELightningSampler,
     GLMSampler,
+    _covering_satellites,
     _GLMFlash,
-    _in_glm_coverage,
 )
 
 
 def test_glm_coverage_envelope() -> None:
     """A2: targets outside GOES coverage skip GLM lookup entirely."""
     # Americas (in coverage)
-    assert _in_glm_coverage(40.0, -74.0)   # New York
-    assert _in_glm_coverage(-33.0, -70.0)  # Santiago
-    assert _in_glm_coverage(34.0, -118.0)  # LA
+    assert _covering_satellites(40.0, -74.0)   # New York
+    assert _covering_satellites(-33.0, -70.0)  # Santiago
+    assert _covering_satellites(34.0, -118.0)  # LA
+    assert _covering_satellites(0, 179) == ["noaa-goes18"]
     # Outside coverage
-    assert not _in_glm_coverage(51.5, 0.0)   # London
-    assert not _in_glm_coverage(35.6, 139.7) # Tokyo
-    assert not _in_glm_coverage(-26.2, 28.0) # Johannesburg
-    assert not _in_glm_coverage(80.0, -100.0) # Above 60° lat
+    assert not _covering_satellites(51.5, 0.0)   # London
+    assert not _covering_satellites(35.6, 139.7) # Tokyo
+    assert not _covering_satellites(-26.2, 28.0) # Johannesburg
+    assert not _covering_satellites(80.0, -100.0) # Above 60° lat
 
 
 def test_glm_sampler_with_no_data_returns_zero() -> None:
-    """Sim-env case: NOAA S3 returns 0 granules → sampler has no data
-    → sample() returns 0 potential with source="glm-" (no age suffix)."""
+    """An empty listing supplies no observation evidence."""
     when = datetime(2026, 5, 21, 12, 0, tzinfo=UTC)
     sampler = GLMSampler(
         when=when,
@@ -329,7 +329,7 @@ def test_glm_sampler_with_no_data_returns_zero() -> None:
     )
     result = sampler.sample(30.0, -90.0, when)
     assert result.lightning_potential == 0.0
-    assert result.source.startswith("glm")
+    assert result.source == "glm-no-data"
 
 
 def test_glm_sampler_skips_out_of_coverage() -> None:
@@ -358,11 +358,62 @@ def test_glm_sampler_aggregates_synthetic_flashes() -> None:
     for f in flashes_near + flashes_far:
         from generator.lightning import _bucket_key
         sampler._flashes_by_bucket.setdefault(_bucket_key(f.lat, f.lon), []).append(f)
-    sampler._oldest_granule_age_min = 30
     result = sampler.sample(30.0, -90.0, when)
     assert result.flash_rate_per_min == pytest.approx(10 / 60.0, abs=0.01)
     assert result.lightning_potential > 0
-    assert result.source == "glm-30m"
+    assert result.source == "glm-0m"
+
+
+@pytest.mark.parametrize(("age", "complete", "expected"), [
+    (0, True, "glm-0m"), (5, True, "glm-5m"), (6, True, "glm-no-data"),
+    (0, False, "glm-no-data"),
+])
+def test_quiet_requires_fresh_continuous_covering_sector(monkeypatch, age, complete, expected):
+    from generator.lightning import _GLMGranule
+
+    when = datetime(2026, 5, 21, 12, tzinfo=UTC)
+    latest = when - timedelta(minutes=age)
+    starts = list(range(3600, age * 60 - 1, -20)) if complete else [0]
+    monkeypatch.setattr(
+        "generator.lightning._decode_glm_granule",
+        lambda offset: _GLMGranule(when - timedelta(seconds=offset), []),
+    )
+    sampler = GLMSampler(
+        when, fetcher=int, lister=lambda sat: list(map(str, starts)) if sat == "noaa-goes19" else [],
+    )
+    sample = sampler.sample(0, -75, when)
+    assert sample.source == expected
+    assert sample.observed_at == (latest if complete and age <= 5 else None)
+    assert sampler.sample(0, -150, when).source == "glm-no-data"
+    assert sampler.sample(0, 0, when).source == "glm-out-of-coverage"
+    assert sampler.sample(0, -75, when + timedelta(minutes=21)).source == "glm-no-data"
+
+
+def test_decoder_distinguishes_valid_empty_granule(tmp_path):
+    import netCDF4
+
+    path = tmp_path / "quiet.nc"
+    with netCDF4.Dataset(path, "w") as ds:
+        ds.createDimension("flashes", None)
+        for field in ("flash_lat", "flash_lon", "flash_time_offset_of_first_event"):
+            ds.createVariable(field, "f4", ("flashes",))
+        ds.time_coverage_start = "2026-05-21T12:00:00Z"
+    granule = _decode_glm_granule(path.read_bytes())
+    assert granule is not None and granule.flashes == []
+
+
+def test_paired_sectors_count_overlap_once_and_wrap_dateline(monkeypatch):
+    from generator.lightning import _GLMGranule
+
+    now = datetime(2026, 5, 21, 12, tzinfo=UTC)
+    flashes = [_GLMFlash(0, lon, now) for lon in (-100, -115, -179.9)]
+    granule = _GLMGranule(now, [*flashes, _GLMFlash(0, -100, now + timedelta(seconds=1))])
+    monkeypatch.setattr("generator.lightning._decode_glm_granule", lambda _: granule)
+    sampler = GLMSampler(now, lister=lambda sat: [sat], fetcher=lambda _: b"")
+    for lon in (-100, -115, 179.9):
+        sample = sampler.sample(0, lon, now)
+        assert sample.flash_rate_per_min == pytest.approx(1 / 60)
+        assert sample.observed_at == now
 
 
 def test_gfs_cape_lightning_sampler_no_data() -> None:
@@ -497,8 +548,8 @@ def _make_s3_listing_xml(keys: list[str]) -> str:
 
 
 def test_glm_granule_urls_empty_window_returns_empty() -> None:
-    assert _glm_granule_urls("noaa-goes16", datetime.now(tz=UTC), 0) == []
-    assert _glm_granule_urls("noaa-goes16", datetime.now(tz=UTC), -10) == []
+    assert _glm_granule_urls("noaa-goes19", datetime.now(tz=UTC), 0) == []
+    assert _glm_granule_urls("noaa-goes19", datetime.now(tz=UTC), -10) == []
 
 
 def test_glm_granule_urls_parses_keys_within_window() -> None:
@@ -509,17 +560,17 @@ def test_glm_granule_urls_parses_keys_within_window() -> None:
     # Within last 60 min: at 12:15 (15 min ago)
     in_window_key = (
         f"GLM-L2-LCFA/2026/{doy:03d}/12/"
-        f"OR_GLM-L2-LCFA_G16_s2026{doy:03d}121500_e2026{doy:03d}121520_c2026{doy:03d}121530.nc"
+        f"OR_GLM-L2-LCFA_G19_s2026{doy:03d}121500_e2026{doy:03d}121520_c2026{doy:03d}121530.nc"
     )
     # Older than 60 min: at 10:30 (2 hours ago)
     too_old_key = (
         f"GLM-L2-LCFA/2026/{doy:03d}/10/"
-        f"OR_GLM-L2-LCFA_G16_s2026{doy:03d}103000_e2026{doy:03d}103020_c2026{doy:03d}103030.nc"
+        f"OR_GLM-L2-LCFA_G19_s2026{doy:03d}103000_e2026{doy:03d}103020_c2026{doy:03d}103030.nc"
     )
     # Malformed timestamp
     malformed_key = (
         f"GLM-L2-LCFA/2026/{doy:03d}/12/"
-        f"OR_GLM-L2-LCFA_G16_sBADTIME000000_e2026{doy:03d}121520_c2026{doy:03d}121530.nc"
+        f"OR_GLM-L2-LCFA_G19_sBADTIME000000_e2026{doy:03d}121520_c2026{doy:03d}121530.nc"
     )
     xml = _make_s3_listing_xml([in_window_key, too_old_key, malformed_key])
 
@@ -530,7 +581,7 @@ def test_glm_granule_urls_parses_keys_within_window() -> None:
             pass
 
     with patch("generator.lightning.requests.get", return_value=MockResp()):
-        urls = _glm_granule_urls("noaa-goes16", when, 60)
+        urls = _glm_granule_urls("noaa-goes19", when, 60)
     # Only the in-window key should be retained; deduplicated across hours.
     assert any(in_window_key in u for u in urls)
     assert not any(too_old_key in u for u in urls)
@@ -544,7 +595,7 @@ def test_glm_granule_urls_handles_request_exception() -> None:
         "generator.lightning.requests.get",
         side_effect=__import__("requests").RequestException("network down"),
     ):
-        urls = _glm_granule_urls("noaa-goes16", when, 60)
+        urls = _glm_granule_urls("noaa-goes19", when, 60)
     assert urls == []
 
 
@@ -559,18 +610,18 @@ def test_glm_granule_urls_handles_no_keys() -> None:
             pass
 
     with patch("generator.lightning.requests.get", return_value=MockResp()):
-        urls = _glm_granule_urls("noaa-goes16", when, 60)
+        urls = _glm_granule_urls("noaa-goes19", when, 60)
     assert urls == []
 
 
 def test_decode_glm_granule_handles_corrupt_buffer() -> None:
-    """Invalid NetCDF bytes → empty list, no crash."""
+    """Invalid NetCDF bytes represent missing observations."""
     flashes = _decode_glm_granule(b"not a NetCDF file")
-    assert flashes == []
+    assert flashes is None
 
 
 def test_decode_glm_granule_empty_bytes() -> None:
-    assert _decode_glm_granule(b"") == []
+    assert _decode_glm_granule(b"") is None
 
 
 def test_decode_glm_granule_synthesizes_in_memory_netcdf() -> None:
@@ -604,7 +655,9 @@ def test_decode_glm_granule_synthesizes_in_memory_netcdf() -> None:
 
         with open(path, "rb") as f:
             buf = f.read()
-        flashes = _decode_glm_granule(buf)
+        granule = _decode_glm_granule(buf)
+        assert granule is not None
+        flashes = granule.flashes
         assert len(flashes) == 3
         # Sorted by index — first flash is (30.0, -90.0) at t+0s
         assert flashes[0].lat == pytest.approx(30.0, abs=0.01)
@@ -648,7 +701,7 @@ def test_glm_sampler_full_construction_with_mocked_fetch() -> None:
     sampler = GLMSampler(
         when=when,
         window_minutes=60,
-        lister=lambda _bucket: ["https://fake/granule.nc"] if _bucket == "noaa-goes16" else [],
+        lister=lambda _bucket: ["https://fake/granule.nc"] if _bucket == "noaa-goes19" else [],
         fetcher=lambda _url: buf,
     )
     # 5 flashes ingested.
@@ -714,7 +767,7 @@ def test_glm_sampler_fetches_concurrently() -> None:
     urls = [f"https://fake/g{i}.nc" for i in range(8)]
     GLMSampler(
         when=when,
-        lister=lambda _bucket: urls if _bucket == "noaa-goes16" else [],
+        lister=lambda _bucket: urls if _bucket == "noaa-goes19" else [],
         fetcher=_slow_fetcher,
     )
     # With 8 URLs × 50ms each, a serial loop would take 400ms and use 1
@@ -767,7 +820,7 @@ def test_glm_sampler_partial_success_aggregation(caplog: Any) -> None:
             when=when,
             lister=lambda _bucket: (
                 list(good_urls) + list(bad_urls)
-                if _bucket == "noaa-goes16"
+                if _bucket == "noaa-goes19"
                 else []
             ),
             fetcher=_mixed_fetcher,
@@ -844,7 +897,7 @@ def test_glm_sampler_overall_budget_drops_pending(caplog: Any,
             when=when,
             lister=lambda _bucket: (
                 [slow_url] + fast_urls
-                if _bucket == "noaa-goes16"
+                if _bucket == "noaa-goes19"
                 else []
             ),
             fetcher=_mixed_fetcher,
@@ -887,7 +940,6 @@ def _glm_with_flashes(when, flashes):
     s._when = when
     s._window_minutes = 60
     s._flashes_by_bucket = {}
-    s._oldest_granule_age_min = 0
     for (lat, lon) in flashes:
         f = _GLMFlash(lat=lat, lon=lon, t=when)
         s._flashes_by_bucket.setdefault(_bucket_key(lat, lon), []).append(f)
@@ -905,6 +957,10 @@ def test_strongest_cluster_in_annulus_finds_strong_limb_storm() -> None:
     s = _glm_with_flashes(when, flashes)
     c = s.strongest_cluster_in_annulus(iss_lat, iss_lon)
     assert c is not None
+    assert s.strongest_cluster_in_annulus(iss_lat, iss_lon, when=when + timedelta(minutes=20))
+    assert s.strongest_cluster_in_annulus(iss_lat, iss_lon, when=when + timedelta(days=1)) is None
+    s._when = when + timedelta(minutes=61)
+    assert s.strongest_cluster_in_annulus(iss_lat, iss_lon) is None
     assert c.flash_count >= SPRITE_MIN_FLASHES
     assert 900.0 <= c.distance_km <= 3200.0
     assert 350.0 <= c.bearing_deg or c.bearing_deg <= 10.0  # ~due north

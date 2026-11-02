@@ -2,10 +2,11 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { LaunchCatalogStore } from '../src/launch-catalog';
+import { launchCatalog, LaunchCatalogStore } from '../src/launch-catalog';
 import { parseLaunchArtifact, parseLaunchCatalogPointer, parseLaunchPointer } from '../src/launch-schema';
 import { LaunchStore, LAUNCH_STORAGE_KEY, validateLaunchBytes } from '../src/launch-store';
-import { catalog, envelope, iso, NOW } from './launch-fixtures';
+import { renderMapLaunchBrief } from '../src/launch-map-brief';
+import { catalog, catalogItem, envelope, iso, NOW, state } from './launch-fixtures';
 
 beforeEach(() => localStorage.clear());
 
@@ -195,6 +196,55 @@ describe('launch catalog store', () => {
     await bothStore.refresh(true);
     expect(bothStore.read(NOW)).toBeNull();
     expect(bothStore.read(Date.parse(iso(-2)))?.revision).toBe('r1');
+  });
+
+  it('notifies an open map when a Shot crosses the 48 hour forecast label', async () => {
+    const net = Date.parse('2026-10-13T10:33:44Z');
+    const early = net - 48 * 60 * 60 * 1000 - 1000;
+    const at = net - 48 * 60 * 60 * 1000;
+    const generated = early - 60_000;
+    const body = catalog([
+      catalogItem({
+        event_id: 'bf2c3027-a314-403e-a416-2bfd5d165ad1',
+        name: 'Falcon 9 Block 5 | Dragon CRS-2 SpX-35',
+        tier: 'shot',
+        schedule: {
+          net: '2026-10-13T10:33:44Z',
+          window_start: '2026-10-13T10:33:44Z',
+          window_end: '2026-10-13T10:33:44Z',
+          precision: 'Second',
+          status: 'Go',
+          destination: 'ISS',
+        },
+      }),
+    ], {
+      generated_at: new Date(generated).toISOString(),
+      schedule_valid_until: new Date(generated + 75 * 60_000).toISOString(),
+      geometry_valid_until: new Date(generated + 15 * 60_000).toISOString(),
+    });
+    const store = new LaunchCatalogStore(catalogFetcher(await catalogEnvelope(body)));
+    await store.refresh(true);
+    const summaries: string[] = [];
+    let view = early;
+    store.subscribe(() => {
+      const tiers = store.read(view);
+      const container = document.createElement('div');
+      const read = vi.spyOn(launchCatalog, 'read').mockReturnValue(tiers);
+      try {
+        renderMapLaunchBrief(container, state(), view, () => undefined);
+      } finally {
+        read.mockRestore();
+      }
+      const text = container.querySelector('.map-launch-primary > summary')?.textContent;
+      if (text) summaries.push(text);
+    });
+    store.tick(view);
+    view = at;
+    store.tick(view);
+    expect(summaries).toEqual([
+      'Next launch · Shot',
+      'Next launch · Shot (forecast)',
+    ]);
   });
 
   it('ticks only when the read signature changes', async () => {

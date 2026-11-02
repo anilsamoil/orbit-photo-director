@@ -263,7 +263,7 @@ function repickGeoIRForView(): void {
     return;
   }
   const sat = pickGeoIRSat(lat, lng);
-  const time = geoIRTimeForNow();
+  const time = geoIRTimeForNow(mapClock().now());
   const changed = (sat?.layer ?? null) !== (state.currentGeoIRSat?.layer ?? null) || time !== state.currentGeoIRTime;
   state.currentGeoIRSat = sat;
   if (sat && changed) {
@@ -393,13 +393,13 @@ export function ensureImageryDateBadge(container: HTMLElement, manifest: Manifes
       badge.textContent = 'IR: no geostationary coverage here';
     } else if (state.geoIrFeedDown) {
       badge.textContent = `IR · ${state.currentGeoIRSat.label} · feed unavailable`;
-    } else if (mapClock().isScrubbed()) {
-      badge.textContent = `IR · ${state.currentGeoIRSat.label} · LIVE now (not the scrubbed time) · misses low cloud`;
     } else {
-      const fresh = state.currentGeoIRSat.source === 'realearth'
-        ? 'latest'
-        : (state.currentGeoIRTime ? formatImageryAge(Date.parse(state.currentGeoIRTime), mapClock().now()) : '');
-      badge.textContent = `IR · ${state.currentGeoIRSat.label}${fresh ? ` · ${fresh}` : ''} · misses low cloud`;
+      const frame = state.currentGeoIRTime;
+      const time = state.currentGeoIRSat.source === 'gibs' && frame
+        ? `frame ${frame.slice(11, 16)} UTC · ${formatImageryAge(Date.parse(frame), mapClock().now())}`
+        : 'latest · frame time unavailable';
+      const scrub = mapClock().isScrubbed() ? ' · LIVE now (not the scrubbed time)' : '';
+      badge.textContent = `IR · ${state.currentGeoIRSat.label} · ${time}${scrub} · misses low cloud`;
     }
     badge.hidden = false;
     return;

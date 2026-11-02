@@ -1,6 +1,7 @@
 import type { MapFeature } from '../map-core/feature';
 import { basemap } from './basemap';
 import { groundTrack } from './ground-track';
+import { lightning } from './lightning';
 import { labels } from './labels';
 import { nightLights } from './night-lights';
 import { pinDrop } from './pin-drop';
@@ -15,6 +16,7 @@ import { timeScrub } from './time-scrub';
 
 export const FEATURES: readonly MapFeature[] = [
   basemap,
+  lightning,
   pinDrop,
   satellites,
   labels,

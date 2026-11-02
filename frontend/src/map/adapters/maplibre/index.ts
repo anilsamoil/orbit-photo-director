@@ -25,17 +25,45 @@ import type {
   VendorMap,
   VendorMapOptions,
 } from '../../map-core/vendor-map';
+import { getMapLaunchMode, launchCardBuried } from '../../../map-launch-mode';
+import { gestureBlocksFollow, type GestureReading } from './gesture';
 import { collapseAttribution } from './attribution';
 import { layerListener, mapListener, toHit, toLngLat } from './events';
 
+type HeldPoint = { _lastPoint?: object | null };
+type HeldTouches = { _firstTwoTouches?: object | null };
+type RotateHandlers = { _mouseRotate?: HeldPoint; _mousePitch?: HeldPoint; _mouseRoll?: HeldPoint };
+type PinchHandlers = { _touchZoom?: HeldTouches; _touchRotate?: HeldTouches; _tapDragZoom?: HeldTouches };
+
+function pointHeld(handler: HeldPoint | undefined): boolean {
+  return handler?._lastPoint != null;
+}
+
+function touchesHeld(handler: HeldTouches | undefined): boolean {
+  return handler?._firstTwoTouches != null;
+}
+
+/** MapLibre 6.11.2 leaves isActive false until the first move past the click
+ *  tolerance. The handler already recorded the gesture in _lastPoint or
+ *  _firstTwoTouches, and reset clears both. */
+function gesturePending(map: maplibregl.Map): boolean {
+  const rotate = map.dragRotate as unknown as RotateHandlers;
+  const pinch = map.touchZoomRotate as unknown as PinchHandlers;
+  const pitch = map.touchPitch as unknown as HeldTouches;
+  return pointHeld(rotate._mouseRotate) || pointHeld(rotate._mousePitch) || pointHeld(rotate._mouseRoll)
+    || touchesHeld(pinch._touchZoom) || touchesHeld(pinch._touchRotate) || touchesHeld(pinch._tapDragZoom)
+    || touchesHeld(pitch);
+}
+
 /** The MapLibre constructor options for an initial camera. Every gesture is
- *  on, the world repeats across the antimeridian, and the map page does not
- *  mount the attribution control. */
+ *  on, the world repeats across the antimeridian, a rotate near north stays
+ *  put, and the map page does not mount the attribution control. */
 export function maplibreMapOptions(camera: InitialCamera): {
   center: LngLat;
   zoom: number;
   attributionControl: false;
   renderWorldCopies: true;
+  bearingSnap: 0;
   dragPan: true;
   dragRotate: true;
   scrollZoom: true;
@@ -47,6 +75,7 @@ export function maplibreMapOptions(camera: InitialCamera): {
     zoom: camera.zoom,
     attributionControl: false,
     renderWorldCopies: true,
+    bearingSnap: 0,
     dragPan: true,
     dragRotate: true,
     scrollZoom: true,
@@ -73,16 +102,337 @@ function toVendorSource(spec: SourceSpec): SourceSpecification {
   return spec;
 }
 
-/** Park an open popup in the reserved inspector and resize the map under it. */
-function syncMapInspector(map: maplibregl.Map): void {
-  if (typeof map.getContainer !== 'function') return;
-  const pane = map.getContainer().closest('#map-pane');
-  if (!(pane instanceof HTMLElement)) return;
-  const open = map.getContainer().querySelector('.maplibregl-popup') !== null;
+function mapInspector(map: maplibregl.Map): HTMLElement | null {
+  if (typeof map.getContainer !== 'function') return null;
+  return map.getContainer().closest('#map-pane')?.querySelector<HTMLElement>('#map-inspector') ?? null;
+}
+
+/** Park open popups outside the map's stacking context and reserve their space. */
+function syncMapInspector(map: maplibregl.Map, applied: InspectorLayout): void {
+  const slot = mapInspector(map);
+  const pane = slot?.closest('#map-pane');
+  if (!slot || !(pane instanceof HTMLElement)) return;
+  for (const popup of map.getContainer().querySelectorAll('.maplibregl-popup')) slot.appendChild(popup);
+  const open = slot.querySelector('.maplibregl-popup') !== null;
   pane.classList.toggle('map-inspector-open', open);
-  const slot = document.getElementById('map-inspector');
-  if (slot) slot.hidden = !open;
+  slot.hidden = !open;
+  if (open) boundMapInspector(map, applied);
+  else syncLaunchBrief(slot);
   requestAnimationFrame(() => map.resize());
+}
+
+const INSPECTOR_CHROME = '.map-toolbar, .map-control-dock, .map-controls-time, #map-legend-toggle, #map-legend-panel, .maplibregl-ctrl-group, #map-chrome-toggle, #satellite-picker-panel, #map-launch-coverage';
+const INSPECTOR_BANNERS = '#status-banner, #shotlist-bar';
+const INSPECTOR_SURFACES = `${INSPECTOR_CHROME}, ${INSPECTOR_BANNERS}`;
+/** Narrow maps keep this much of the canvas free so a framed drop stays on it.
+ *  232px is `--map-hit-min` with a 0px safe area. */
+const NARROW_HIT_BAND_PX = 232;
+/** Centered width that still covers a zoom-4 drop a few degrees off the framed point. */
+const NARROW_HIT_CORE_PX = 182;
+/** Narrowest sheet that still has a pass-row column. Head height is separate. */
+const NARROW_PASS_ROW_PX = 96;
+/** Panes no taller than this reserve a centered drop. 560px keeps 550px phones
+ *  on the side column and leaves a 568px-tall portrait on the full-width band. */
+const SHORT_PANE_PX = 560;
+/** Title and heading already filled a 120px sheet when the wrapped first row measured 104px. */
+const SHORT_PASS_HEAD_PX = 224;
+/** Heading plus the 70px first row WebKit measured once the sheet is wider than the pass-row container. */
+const WIDE_PASS_HEAD_PX = 137;
+
+type InspectorRect = { left: number; top: number; right: number; bottom: number };
+/** Preserve requested geometry alongside CSSOM's rounded pixel serialization. */
+type InspectorLayout = Map<string, { value: number; serialized: string }>;
+
+/** A persistent env probe also lets ResizeObserver follow inset changes. */
+function inspectorInsetProbe(slot: HTMLElement): HTMLElement {
+  const existing = slot.querySelector<HTMLElement>('[data-map-inspector-insets]');
+  if (existing) return existing;
+  const probe = document.createElement('div');
+  probe.setAttribute('data-map-inspector-insets', '');
+  probe.setAttribute('aria-hidden', 'true');
+  probe.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;pointer-events:none';
+  for (const side of ['top', 'right', 'bottom', 'left']) {
+    probe.style.setProperty(`padding-${side}`, `env(safe-area-inset-${side}, 0px)`);
+  }
+  slot.prepend(probe);
+  return probe;
+}
+
+function inspectorChromeElements(pane: Element): Set<Element> {
+  const chrome = [...pane.querySelectorAll(INSPECTOR_CHROME), ...document.querySelectorAll(INSPECTOR_BANNERS)];
+  return new Set(chrome.flatMap((element) => [element, ...element.querySelectorAll('button, input, select, a')]));
+}
+
+function visibleInspectorRect(element: Element, clip: InspectorRect): InspectorRect | null {
+  const rect = element.getBoundingClientRect();
+  const result = {
+    left: Math.max(rect.left, clip.left), top: Math.max(rect.top, clip.top),
+    right: Math.min(rect.right, clip.right), bottom: Math.min(rect.bottom, clip.bottom),
+  };
+  for (let ancestor: Element | null = element; ancestor; ancestor = ancestor.parentElement) {
+    const style = getComputedStyle(ancestor);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return null;
+    if (ancestor === element) continue;
+    const bounds = ancestor.getBoundingClientRect();
+    if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) {
+      result.left = Math.max(result.left, bounds.left);
+      result.right = Math.min(result.right, bounds.right);
+    }
+    if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) {
+      result.top = Math.max(result.top, bounds.top);
+      result.bottom = Math.min(result.bottom, bounds.bottom);
+    }
+  }
+  return result.right > result.left && result.bottom > result.top ? result : null;
+}
+
+/** Centered drop protection. Callers inflate it by the chrome gap. */
+function narrowHitObstacle(mapRect: DOMRect, bandWidth: number, bandHeight: number): InspectorRect | null {
+  if (mapRect.width <= 0 || mapRect.height <= 0) return null;
+  const width = Math.min(bandWidth, mapRect.width);
+  const height = Math.min(bandHeight, mapRect.height);
+  if (width <= 0 || height <= 0) return null;
+  const top = mapRect.top + (mapRect.height - height) / 2;
+  const left = mapRect.left + (mapRect.width - width) / 2;
+  return { left, top, right: left + width, bottom: top + height };
+}
+
+function inflateObstacle(rect: InspectorRect, gap: number): InspectorRect {
+  return { left: rect.left - gap, top: rect.top - gap, right: rect.right + gap, bottom: rect.bottom + gap };
+}
+
+/** Largest free rectangle among the measured obstacles. */
+function chooseInspectorSlot(
+  bounds: InspectorRect,
+  obstacles: InspectorRect[],
+  preferredWidth: number,
+  preferredHeight: number,
+  narrow: boolean,
+  sideColumn: boolean,
+  rowHeight: number,
+  passHead: number,
+): (InspectorRect & { score: number }) | null {
+  const lefts = [...new Set([bounds.left, ...obstacles.map((rect) => rect.right)])].filter((x) => x >= bounds.left && x < bounds.right);
+  const rights = [...new Set([bounds.right, ...obstacles.map((rect) => rect.left)])].filter((x) => x > bounds.left && x <= bounds.right);
+  let best: (InspectorRect & { score: number }) | null = null;
+  for (const left of lefts) for (const right of rights) {
+    const width = Math.min(preferredWidth, right - left);
+    if (width <= 0) continue;
+    const x = right - width;
+    const blocked = obstacles.filter((rect) => rect.left < right && rect.right > x)
+      .sort((a, b) => a.top - b.top);
+    let top = bounds.top;
+    for (const obstacle of [...blocked, { top: bounds.bottom, bottom: bounds.bottom }]) {
+      const bottom = Math.min(bounds.bottom, obstacle.top);
+      const height = Math.min(preferredHeight, bottom - top);
+      if (height > 0) {
+        const headTarget = passHead > 0 ? (width > 260 ? WIDE_PASS_HEAD_PX : passHead) : 0;
+        const column = width >= rowHeight && height >= rowHeight;
+        const fitsPassHead = headTarget <= 0 || height >= Math.min(headTarget, preferredHeight);
+        const readable = column && fitsPassHead;
+        const usable = width >= Math.min(sideColumn ? rowHeight : 240, preferredWidth) && readable;
+        const score = (readable ? 1e9 : 0) + (usable ? 1e9 : width >= 80 && height >= 80 ? 1e6 : 0)
+          + (passHead > 0 && column ? Math.min(height, headTarget) * 1e4 : 0)
+          + width * Math.min(height, narrow ? preferredHeight : 600)
+          + right / 1e4 + (narrow && width >= rowHeight && height >= rowHeight ? bottom * 1e3 : narrow ? 0 : -top / 1e6);
+        if (!best || score > best.score) best = {
+          left: x, right, top: narrow ? bottom - height : top,
+          bottom: narrow ? bottom : top + height, score,
+        };
+      }
+      top = Math.max(top, obstacle.bottom);
+    }
+  }
+  return best;
+}
+
+function syncLaunchBrief(slot: HTMLElement): void {
+  const brief = slot.closest('#map-pane')?.querySelector<HTMLElement>('#map-launch-coverage');
+  if (!brief) return;
+  if (launchCardBuried(slot)) {
+    if (!brief.hidden) brief.hidden = true;
+    return;
+  }
+  if (getMapLaunchMode() && brief.hidden) brief.hidden = false;
+}
+
+function boundMapInspector(map: maplibregl.Map, applied: InspectorLayout): void {
+  const slot = mapInspector(map);
+  const pane = slot?.closest('#map-pane');
+  if (!slot || !(pane instanceof HTMLElement) || slot.hidden) return;
+  syncLaunchBrief(slot);
+  const paneRect = pane.getBoundingClientRect();
+  const mapRect = map.getContainer().getBoundingClientRect();
+  const insetStyle = getComputedStyle(inspectorInsetProbe(slot));
+  const inset = (side: 'Top' | 'Right' | 'Bottom' | 'Left'): number => Number.parseFloat(insetStyle[`padding${side}`]) || 0;
+  const gap = 8;
+  const bounds = {
+    left: Math.max(paneRect.left, mapRect.left, inset('Left')) + gap,
+    top: Math.max(paneRect.top, mapRect.top, inset('Top')) + gap,
+    right: Math.min(paneRect.right, mapRect.right, window.innerWidth - inset('Right')) - gap,
+    bottom: Math.min(paneRect.bottom, mapRect.bottom, window.innerHeight - inset('Bottom')) - gap,
+  };
+  if (bounds.right <= bounds.left || bounds.bottom <= bounds.top) return;
+  const launchSheet = slot.querySelector(':scope > .maplibregl-popup:last-child .launch-ascent-card') !== null;
+  const buriedLaunch = !launchSheet && slot.querySelector('.launch-ascent-card') !== null;
+  const reserveDrop = !launchSheet;
+  const obstacles = [...inspectorChromeElements(pane)].flatMap((element) => {
+    if (buriedLaunch && element.closest('#map-launch-coverage')) return [];
+    const rect = visibleInspectorRect(element, bounds);
+    return rect ? [{ left: rect.left - gap, top: rect.top - gap, right: rect.right + gap, bottom: rect.bottom + gap }] : [];
+  });
+  const narrow = paneRect.width < 900;
+  const short = paneRect.height <= SHORT_PANE_PX;
+  const sideColumn = short && narrow;
+  const preferredWidth = narrow ? bounds.right - bounds.left : 320;
+  const preferredHeight = narrow ? 260 : bounds.bottom - bounds.top;
+  const rowHeight = Math.min(NARROW_PASS_ROW_PX, preferredHeight);
+  const passHead = sideColumn ? SHORT_PASS_HEAD_PX : 0;
+  const place = (extra: InspectorRect | null) => chooseInspectorSlot(
+    bounds,
+    extra ? [...obstacles, inflateObstacle(extra, gap)] : obstacles,
+    preferredWidth,
+    preferredHeight,
+    narrow,
+    sideColumn,
+    rowHeight,
+    passHead,
+  );
+  const hitHeight = Math.min(NARROW_HIT_BAND_PX, mapRect.height);
+  const square = short;
+  let best = (narrow || short) && reserveDrop
+    ? place(narrowHitObstacle(
+      mapRect,
+      square ? Math.min(NARROW_HIT_BAND_PX, mapRect.width) : mapRect.width,
+      hitHeight,
+    ))
+    : place(null);
+  const readableSlot = (candidate: InspectorRect | null): boolean => {
+    if (candidate === null) return false;
+    const width = candidate.right - candidate.left;
+    const height = candidate.bottom - candidate.top;
+    const headTarget = passHead > 0 ? (width > 260 ? WIDE_PASS_HEAD_PX : passHead) : 0;
+    return width >= rowHeight && height >= rowHeight
+      && (headTarget <= 0 || height >= Math.min(headTarget, preferredHeight));
+  };
+  if (reserveDrop && square && !readableSlot(best)) {
+    const core = place(narrowHitObstacle(mapRect, Math.min(NARROW_HIT_CORE_PX, mapRect.width), hitHeight));
+    if (core && (best === null || core.score > best.score)) best = core;
+  }
+  best ??= { left: bounds.left, right: bounds.left, top: bounds.top, bottom: bounds.top, score: 0 };
+  const layout = {
+    left: best.left - paneRect.left, top: best.top - paneRect.top,
+    width: best.right - best.left, height: best.bottom - best.top,
+  };
+  for (const [property, value] of Object.entries(layout)) {
+    const current = slot.style.getPropertyValue(property);
+    const previous = applied.get(property);
+    if (previous?.value === value && previous.serialized === current) continue;
+    const pixels = `${value}px`;
+    if (current !== pixels) slot.style.setProperty(property, pixels);
+    applied.set(property, { value, serialized: slot.style.getPropertyValue(property) });
+  }
+}
+
+/** Follow chrome and its layout ancestors only while a popup is open. Disclosure
+ *  remeasures immediately and again after layout, so a later expand does not keep
+ *  the collapsed shell. Inspector writes and map animation do not feed back, and
+ *  updates never resize the map. */
+function inspectorSync(map: maplibregl.Map): () => void {
+  let resizeObserver: ResizeObserver | null = null;
+  let mutationObserver: MutationObserver | null = null;
+  let observed = new Set<Element>();
+  let pending = false;
+  let dirty = false;
+  let watching = false;
+  let epoch = 0;
+  const applied: InspectorLayout = new Map();
+  const observeSizes = (): void => {
+    const pane = mapInspector(map)?.closest('#map-pane');
+    if (!pane) return;
+    const next = new Set([pane, map.getContainer(), ...inspectorChromeElements(pane),
+      ...pane.querySelectorAll('.map-controls-time > *, [data-map-inspector-insets]')]);
+    for (const element of [...next]) {
+      for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) next.add(ancestor);
+    }
+    for (const element of observed) if (!next.has(element)) resizeObserver?.unobserve(element);
+    for (const element of next) if (!observed.has(element)) resizeObserver?.observe(element);
+    observed = next;
+  };
+  const remeasure = (): void => {
+    if (!watching) return;
+    observeSizes();
+    boundMapInspector(map, applied);
+  };
+  const schedule = (): void => {
+    if (!watching) return;
+    dirty = true;
+    if (pending) return;
+    pending = true;
+    const scheduledEpoch = epoch;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (scheduledEpoch !== epoch) return;
+        pending = false;
+        if (!watching || !dirty) return;
+        dirty = false;
+        remeasure();
+        if (dirty) schedule();
+      });
+    });
+  };
+  const remeasureDisclosure = (): void => {
+    remeasure();
+    schedule();
+  };
+  const watchedChrome = (element: Element, slot: HTMLElement): boolean =>
+    !slot.contains(element)
+    && !element.matches('.maplibregl-ctrl-compass .maplibregl-ctrl-icon')
+    && (observed.has(element) || element.closest(INSPECTOR_SURFACES) !== null || element.querySelector(INSPECTOR_SURFACES) !== null);
+  return () => {
+    syncMapInspector(map, applied);
+    const slot = mapInspector(map);
+    const pane = slot?.closest('#map-pane');
+    if (!slot || !pane) return;
+    if (slot.hidden) {
+      watching = false;
+      dirty = false;
+      pending = false;
+      epoch += 1;
+      resizeObserver?.disconnect();
+      mutationObserver?.disconnect();
+      resizeObserver = null;
+      mutationObserver = null;
+      observed.clear();
+      window.removeEventListener('resize', schedule);
+      return;
+    }
+    if (watching) return;
+    watching = true;
+    if (typeof ResizeObserver !== 'undefined') resizeObserver = new ResizeObserver(schedule);
+    if (typeof MutationObserver !== 'undefined') {
+      mutationObserver = new MutationObserver((records) => {
+        let disclosure = false;
+        let later = false;
+        for (const record of records) {
+          const element = record.target instanceof Element ? record.target : record.target.parentElement;
+          if (!element || !watchedChrome(element, slot)) continue;
+          const attribute = record.attributeName;
+          if (record.type === 'childList' || attribute === 'class' || attribute === 'hidden'
+            || attribute === 'aria-expanded' || attribute === 'aria-hidden') disclosure = true;
+          else later = true;
+        }
+        if (disclosure) remeasureDisclosure();
+        else if (later) schedule();
+      });
+      mutationObserver.observe(pane, { attributes: true, childList: true, subtree: true, characterData: true });
+      mutationObserver.observe(document.body, { attributes: true, childList: true, subtree: true, characterData: true });
+      mutationObserver.observe(document.documentElement, { attributes: true });
+    }
+    observeSizes();
+    window.addEventListener('resize', schedule);
+    schedule();
+  };
 }
 
 function exposeForEndToEnd(map: maplibregl.Map): void {
@@ -100,6 +450,38 @@ export function createVendorMap(options: VendorMapOptions): VendorMap {
   map.addControl(new maplibregl.NavigationControl(), 'top-left');
   collapseAttribution(options.container);
   exposeForEndToEnd(map);
+  const syncInspector = inspectorSync(map);
+  let userDriven = false;
+  map.on('movestart', (event) => {
+    userDriven = Boolean(event.originalEvent);
+  });
+  map.on('moveend', () => {
+    userDriven = false;
+  });
+  const reading = (): GestureReading => ({
+    hidden: document.hidden,
+    pending: gesturePending(map),
+    dragRotate: map.dragRotate.isActive(),
+    dragPan: map.dragPan.isActive(),
+    touchZoomRotate: map.touchZoomRotate.isActive(),
+    touchPitch: map.touchPitch.isActive(),
+    keyboard: map.keyboard.isActive(),
+    rotating: map.isRotating(),
+    moving: map.isMoving(),
+    userDriven,
+  });
+  const releaseAbandoned = (): void => {
+    if (!gestureBlocksFollow({ ...reading(), hidden: false })) return;
+    map.stop();
+  };
+  map.getCanvas().addEventListener('lostpointercapture', (event) => {
+    if (event.buttons === 0) return;
+    releaseAbandoned();
+  });
+  map.getCanvas().addEventListener('pointercancel', releaseAbandoned);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) releaseAbandoned();
+  });
 
   return {
     whenLoaded: () => new Promise<void>((resolve) => map.once('load', () => resolve())),
@@ -127,6 +509,8 @@ export function createVendorMap(options: VendorMapOptions): VendorMap {
     center: () => toLngLat(map.getCenter()),
     zoom: () => map.getZoom(),
     bearing: () => map.getBearing(),
+    moving: () => map.isMoving(),
+    userGesture: () => gestureBlocksFollow(reading()),
     setCenter: (at: LngLat) => map.setCenter(at),
     setBearing: (degrees: number) => map.setBearing(degrees),
     easeTo: (move: CameraMove) => map.easeTo(move),
@@ -170,19 +554,27 @@ export function createVendorMap(options: VendorMapOptions): VendorMap {
       };
     },
     openPopup: ({ at, content, maxWidth, closeOnClick }): PopupHandle => {
+      const inspector = mapInspector(map);
       const popupOptions = {
         ...(maxWidth === undefined ? {} : { maxWidth }),
         ...(closeOnClick === undefined ? {} : { closeOnClick }),
+        ...(inspector ? { focusAfterOpen: false } : {}),
       };
       const popup = new maplibregl.Popup(Object.keys(popupOptions).length === 0 ? undefined : popupOptions)
         .setLngLat(at)
         .setDOMContent(content)
         .addTo(map);
       const release = () => {
-        syncMapInspector(map);
+        syncInspector();
       };
       popup.on('close', release);
-      syncMapInspector(map);
+      syncInspector();
+      if (inspector) {
+        const element = popup.getElement();
+        element.querySelector<HTMLElement>('.maplibregl-popup-close-button')?.focus({ preventScroll: true });
+        const scroller = element.querySelector<HTMLElement>('.maplibregl-popup-content');
+        if (scroller) scroller.scrollTop = 0;
+      }
       return {
         remove: () => {
           popup.remove();

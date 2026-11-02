@@ -160,22 +160,48 @@ async function resolveSessionProfile(urlHref: string): Promise<AccountProfile> {
     throw new Error('Connect once to verify your Google account. Your saved data is still on this device.');
   }
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10_000);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let settled = false;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      settled = true;
+      controller.abort();
+      reject(new Error('The session request timed out'));
+    }, 10_000);
+  });
+  const forgetLate = <T>(error: unknown): Promise<T> => {
+    if (settled) return new Promise<T>(() => {});
+    return Promise.reject(error);
+  };
+  const headers = fetch('/api/browser/session', {
+    credentials: 'same-origin', redirect: 'manual', cache: 'no-store',
+    signal: controller.signal,
+  }).catch((error: unknown) => forgetLate<Response>(error));
   try {
     let response: Response;
     try {
-      response = await fetch('/api/browser/session', {
-        credentials: 'same-origin', redirect: 'manual', cache: 'no-store',
-        signal: controller.signal,
-      });
+      response = await Promise.race([headers, deadline]);
     } catch (error) {
+      settled = true;
       // iOS can report online during LOS. A transport failure can resume this
       // tab read-only; an actual HTTP denial or malformed response cannot.
       const cached = resumeOfflineProfile();
       if (cached) return cached;
       throw error;
     }
-    const decided = await decideSessionResponse(response, urlHref);
+    const decision = decideSessionResponse(response, urlHref)
+      .catch((error: unknown) => forgetLate<SessionDecision>(error));
+    let decided: SessionDecision;
+    try {
+      decided = await Promise.race([decision, deadline]);
+      settled = true;
+    } catch (error) {
+      settled = true;
+      if (!(error instanceof Error) || error.message !== 'The session request timed out') throw error;
+      const cached = resumeOfflineProfile();
+      if (cached) return cached;
+      throw error;
+    }
     if (decided.kind === 'local') return adoptLocalProfile(decided.name);
     if (decided.kind === 'sign-in') throw new SessionSignInRequired();
     const body = sessionJson(decided.body);

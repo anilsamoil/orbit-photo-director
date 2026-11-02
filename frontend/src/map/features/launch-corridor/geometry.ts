@@ -1,6 +1,6 @@
 import { wrapLon } from '../../../geo';
 import { legacyLaunchInHorizon, selectLaunches } from '../../../launch-selectors';
-import type { TierCatalog } from '../../../launch-tiers';
+import { shotForecastLabel, type TierCatalog } from '../../../launch-tiers';
 import type { LaunchState } from '../../../launch-store';
 import type { PassEntry } from '../../../types';
 
@@ -59,15 +59,18 @@ export function buildLaunchMapFeatures(launchState: LaunchState, now: number): {
 }
 
 /** Pads at tier pins. A corridor line exists only when that pin has one. */
-export function buildTierMapFeatures(tiers: TierCatalog): { lines: GeoJSON.Feature[]; pads: GeoJSON.Feature[] } {
+export function buildTierMapFeatures(tiers: TierCatalog, now: number): { lines: GeoJSON.Feature[]; pads: GeoJSON.Feature[] } {
   const lines: GeoJSON.Feature[] = [];
   const pads: GeoJSON.Feature[] = [];
   const pins = tiers.pins;
   for (const pin of pins) {
+    const forecast = pin.tier === 'shot'
+      ? shotForecastLabel(pin.schedule.netMs, pin.schedule.windowEndMs, now)
+      : null;
     const properties = {
       event_id: pin.eventId,
       revision: pin.revision,
-      label: `LAUNCH / ${pin.tier === 'shot' ? 'SHOT' : 'LIKELY'}`,
+      label: forecast ?? `LAUNCH / ${pin.tier === 'shot' ? 'SHOT' : 'LIKELY'}`,
       catalog: 'tier',
       launch_name: pin.name,
     };

@@ -91,6 +91,15 @@ export function tierWord(tier: Tier): string {
   return 'No shot';
 }
 
+const SHOT_FORECAST_MS = 48 * 60 * 60 * 1000;
+
+export function shotForecastLabel(netMs: number, windowEndMs: number | null, now: number): string | null {
+  const liftoff = windowEndMs !== null && windowEndMs >= netMs ? windowEndMs : netMs;
+  const remaining = liftoff - now;
+  if (!Number.isFinite(remaining) || remaining <= 0 || remaining > SHOT_FORECAST_MS) return null;
+  return 'Shot (forecast)';
+}
+
 export function monthDay(ms: number): string {
   const date = new Date(ms);
   return `${MONTHS[date.getUTCMonth()]} ${date.getUTCDate()}`;
@@ -112,6 +121,17 @@ export function tierLabel(launch: TierLaunch): string {
 
 export function scheduleLabel(launch: TierLaunch): string {
   return `${launch.name} · ${launch.site.name} · ${monthDay(launch.schedule.netMs)}`;
+}
+
+/** Native select typeahead matches prefixes; aliases keep the same option value. */
+export function launchPickerLabels(name: string, label: string): string[] {
+  const code = missionCode(name);
+  const spx = /^SpX-(\d+)$/i.exec(code);
+  if (!spx || !/\bCRS(?:-\d+)?\b/i.test(name)) return [label];
+  const aliases = [code, `CRS-${spx[1]}`];
+  return [label, ...aliases
+    .filter((alias) => !label.toLowerCase().startsWith(alias.toLowerCase()))
+    .map((alias) => `${alias} · ${label}`)];
 }
 
 function instant(value: string | null): number | null {

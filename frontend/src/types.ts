@@ -100,9 +100,10 @@ export interface PassEntry {
    *  Observed sources (GLM, Blitzortung) populate; forecast sources (CAPE)
    *  report 0. v1.3.1 placeholder always reports 0. */
   flash_rate_per_min?: number;
+  lightning_observed_at?: string;
   /** Which sampler produced lightning_potential. Drives the
    *  "observed" vs "forecast" subtext on the ⚡ tag. */
-  lightning_source?: 'placeholder' | 'glm' | 'blitzortung' | 'gfs-cape' | 'combined-no-data';
+  lightning_source?: 'placeholder' | 'glm' | `glm-${number}m` | 'blitzortung' | 'gfs-cape' | 'combined-no-data';
   /** Additive score bonus from lightning_potential, in 0-30 range
    *  (capped per the locked D3 architecture decision). Lets the score
    *  breakdown panel show "lightning: +12" alongside the multiplicative

@@ -169,6 +169,49 @@ describe('launch sites near telemetry', () => {
 });
 
 describe('selected launch in the ISS view', () => {
+  it.each([
+    ['chance', 'CRS'], ['chance', 'SpX-35'],
+    ['all', 'CRS'], ['all', 'SpX-35'],
+  ])('keeps the saved CRS/SpX aliases available in the v2 %s fallback for %s', async (group, prefix) => {
+    const name = 'Falcon 9 Block 5 | Dragon CRS-2 SpX-35';
+    const item = selection(supported({ event_id: 'bf2c3027-a314-403e-a416-2bfd5d165ad1', name }));
+    const host = document.createElement('div');
+    document.body.append(host);
+    const scene = mountIssScene(host, {
+      nowMs: () => NOW,
+      launches: () => [item],
+      allLaunches: () => [item],
+      createRenderer: () => ({
+        ready: () => Promise.resolve(), aim: () => Promise.resolve(), resize() {}, destroy() {},
+      }),
+      drive: 'manual',
+      session: { mode: 'horizon' },
+    });
+    try {
+      scene.update(shot());
+      await settle();
+      await scene.paint();
+      const picker = host.querySelector('[data-iss-launch-picker]');
+      if (!(picker instanceof HTMLSelectElement)) throw new Error('missing picker');
+      picker.focus();
+      const option = [...picker.options].find((entry) => entry.textContent?.startsWith(prefix)
+        && (entry.parentElement instanceof HTMLOptGroupElement) === (group === 'all'));
+      if (!option) throw new Error('missing prefix option');
+      picker.selectedIndex = [...picker.options].indexOf(option);
+      picker.dispatchEvent(new Event('change', { bubbles: true }));
+      await settle();
+      await scene.paint();
+      expect(picker.value).toBe(`${group === 'all' ? 'all:' : ''}${item.item.event_id}`);
+      expect(picker.selectedOptions[0]).toBe(option);
+      expect(document.activeElement).toBe(picker);
+      expect(host.querySelector('[data-iss-launch-name]')?.textContent).toBe(name);
+      expect(host.querySelector('[data-iss-launch-card]')?.hasAttribute('hidden')).toBe(false);
+    } finally {
+      scene.dispose();
+      host.remove();
+    }
+  });
+
   it('chooses one launch without moving the aim, then keeps the pad nudge', async () => {
     const shown: string[][] = [];
     const aims: IssAim[] = [];

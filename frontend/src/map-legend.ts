@@ -10,6 +10,11 @@ function applyLegendDisclosure(button: HTMLButtonElement, state: LegendDisclosur
   button.setAttribute('aria-expanded', state === 'expanded' ? 'true' : 'false');
 }
 
+export function showMapLegend(): void {
+  const button = document.getElementById('map-legend-toggle');
+  if (button instanceof HTMLButtonElement) applyLegendDisclosure(button, 'expanded');
+}
+
 function legendWarningText(imagery: Element | null): string {
   const text = imagery?.textContent?.trim() ?? '';
   if (!text) return '';
@@ -85,5 +90,7 @@ export function bindLegendDisclosure(root?: ParentNode | null): void {
     if (event.repeat) return;
     applyLegendDisclosure(button, readLegendDisclosure(button) === 'expanded' ? 'collapsed' : 'expanded');
   });
-  window.addEventListener('pageshow', collapse);
+  window.addEventListener('pageshow', event => {
+    if (event.persisted) collapse();
+  });
 }

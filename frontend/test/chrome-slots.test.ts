@@ -1,0 +1,824 @@
+import { describe, expect, it } from 'vitest';
+import { needsZoomRow, solveChromeSlots, type Box, type ChromeMeasure, type Slot } from '../src/chrome-slots';
+
+const empty: Box = { x: 0, y: 0, w: 0, h: 0 };
+
+function measure(over: Partial<ChromeMeasure>): ChromeMeasure {
+  return {
+    viewport: { w: 800, h: 600 },
+    insets: { top: 0, right: 0, bottom: 0, left: 0 },
+    zoom: empty,
+    compass: empty,
+    show: empty,
+    showButtons: [],
+    sliderChip: empty,
+    slider: empty,
+    timeButtons: [],
+    footer: empty,
+    shotList: empty,
+    scrollbar: 0,
+    pip: null,
+    hide: empty,
+    legendButton: empty,
+    legendPanel: empty,
+    legendOpen: false,
+    legendNaturalBottom: 0,
+    dockCorridor: 0,
+    chromeHidden: false,
+    ...over,
+  };
+}
+
+function rightOf(box: Slot | Box): number {
+  return box.x + box.w;
+}
+
+function bottomOf(box: Slot | Box): number {
+  return box.y + box.h;
+}
+
+function meets(a: Slot | Box, b: Slot | Box): boolean {
+  return a.w >= 1 && b.w >= 1 && a.h >= 1 && b.h >= 1
+    && a.x < rightOf(b) - 0.5 && rightOf(a) > b.x + 0.5
+    && a.y < bottomOf(b) - 0.5 && bottomOf(a) > b.y + 0.5;
+}
+
+describe('chrome slots', () => {
+  it('keeps the landscape zoom column when all three targets clear the raised footer', () => {
+    const zoom: Box = { x: 70, y: 110, w: 44, h: 88 };
+    const time: Box = { x: 281.40625, y: 57, w: 448.4375, h: 44 };
+    expect(needsZoomRow(zoom, time, 244.84375)).toBe(false);
+    expect(needsZoomRow(zoom, time, 243)).toBe(true);
+  });
+
+  it('retains the full zoom-to-time separation even when the footer is lower', () => {
+    const zoom: Box = { x: 70, y: 110, w: 44, h: 88 };
+    expect(needsZoomRow(zoom, { x: 122, y: 249, w: 400, h: 44 }, 381)).toBe(true);
+    expect(needsZoomRow(zoom, { x: 122, y: 250, w: 400, h: 44 }, 381)).toBe(false);
+  });
+
+  it('returns the same slots for the same painted boxes', () => {
+    const input = measure({
+      viewport: { w: 430, h: 400 },
+      insets: { top: 24, right: 0, bottom: 34, left: 47 },
+      zoom: { x: 55, y: 134, w: 44, h: 88 },
+      compass: { x: 55, y: 222, w: 44, h: 44 },
+      show: { x: 55, y: 77, w: 180, h: 52 },
+      hide: { x: 330, y: 250, w: 88, h: 44 },
+      legendButton: { x: 234, y: 250, w: 88, h: 44 },
+      scrollbar: 6,
+    });
+    expect(solveChromeSlots(input)).toEqual(solveChromeSlots(input));
+  });
+
+  it('keeps the 430x400 dock out of the zoom lane', () => {
+    const zoomOut: Box = { x: 55, y: 178, w: 44, h: 44 };
+    const compass: Box = { x: 55, y: 222, w: 44, h: 44 };
+    const slots = solveChromeSlots(measure({
+      viewport: { w: 430, h: 400 },
+      insets: { top: 24, right: 0, bottom: 34, left: 47 },
+      zoom: { x: 55, y: 134, w: 44, h: 88 },
+      compass,
+      show: { x: 55, y: 77, w: 180, h: 52 },
+      showButtons: [{ x: 143.8, y: 81, w: 63.61, h: 44 }],
+      hide: { x: 330, y: 198, w: 88, h: 44 },
+      legendButton: { x: 234, y: 198, w: 88, h: 44 },
+      footer: { x: 0, y: 293.4, w: 430, h: 72.6 },
+      scrollbar: 6,
+      legendOpen: false,
+    }));
+    expect(slots.dock).not.toBeNull();
+    expect(slots.time).not.toBeNull();
+    if (!slots.dock || !slots.time) return;
+    expect(slots.dock.x).toBeGreaterThanOrEqual(55 + 44 + 8);
+    expect(slots.dock.axis === 'row' ? slots.dock.h : slots.dock.w).toBeGreaterThanOrEqual(44 + 6);
+    expect(meets(slots.dock, zoomOut)).toBe(false);
+    expect(meets(slots.dock, compass)).toBe(false);
+    expect(meets(slots.time, { x: 143.8, y: 81, w: 63.61, h: 44 })).toBe(false);
+    expect(slots.time.y).toBeGreaterThanOrEqual(81 + 44 + 4);
+    expect(slots.time.h).toBe(44);
+  });
+
+  it('places the 719 time slot below Show', () => {
+    for (const height of [400, 521]) {
+      const launches: Box = { x: 143.8, y: 81, w: 63.61, h: 44 };
+      const slots = solveChromeSlots(measure({
+        viewport: { w: 719, h: height },
+        insets: { top: 24, right: 0, bottom: 34, left: 47 },
+        zoom: { x: 55, y: 134, w: 44, h: 44 },
+        compass: { x: 55, y: 178, w: 44, h: 44 },
+        show: { x: 8, y: 77, w: 203.41, h: 52 },
+        showButtons: [launches],
+        sliderChip: { x: 115, y: 108.41, w: 588, h: 81.59 },
+        slider: { x: 153.67, y: 102.41, w: 416.66, h: 44 },
+        hide: { x: 619, y: height - 80, w: 88, h: 44 },
+        legendButton: { x: 523, y: height - 80, w: 88, h: 44 },
+        scrollbar: 6,
+      }));
+      expect(slots.time).not.toBeNull();
+      if (!slots.time) continue;
+      expect(slots.time.y).toBeGreaterThanOrEqual(bottomOf(launches) + 4);
+      expect(meets(slots.time, launches)).toBe(false);
+      expect(slots.time.h).toBeGreaterThanOrEqual(44);
+      expect(slots.time.x).toBeGreaterThanOrEqual(55 + 44 + 8);
+    }
+  });
+
+  it.each([
+    { top: 0, bottom: 0, left: 0, mapTop: 60, cornerTop: 441 },
+    { top: 24, bottom: 34, left: 47, mapTop: 84, cornerTop: 407 },
+  ])('uses a compact 719px time row when stacking covers the drop core: bottom=$bottom', ({ top, bottom, left, mapTop, cornerTop }) => {
+    const input = measure({
+      viewport: { w: 719, h: 521 },
+      map: { x: 0, y: mapTop, w: 719, h: 521 - mapTop },
+      insets: { top, right: 0, bottom, left },
+      zoom: { x: left + 8, y: mapTop + 70, w: 44, h: 88 },
+      compass: { x: left + 8, y: mapTop + 158, w: 44, h: 44 },
+      show: { x: left + 8, y: mapTop + 8, w: 203, h: 52 },
+      hide: { x: 619, y: cornerTop, w: 88, h: 44 },
+      legendButton: { x: 523, y: cornerTop, w: 88, h: 44 },
+    });
+    const time = solveChromeSlots(input).time!;
+    expect(time.h).toBe(44);
+    expect(time.y).toBe(cornerTop - 8 - 44);
+    expect(time.y).toBeGreaterThan(mapTop + (521 - mapTop) / 2 + (bottom ? 5 : 91));
+  });
+
+  it('retains the tall portrait time stack when its footer brings it near the map center', () => {
+    const time = solveChromeSlots(measure({
+      viewport: { w: 402, h: 874 },
+      map: { x: 0, y: 84, w: 402, h: 790 },
+      insets: { top: 24, right: 0, bottom: 34, left: 47 },
+      zoom: { x: 55, y: 154, w: 44, h: 88 },
+      compass: { x: 55, y: 242, w: 44, h: 44 },
+      show: { x: 55, y: 92, w: 203, h: 52 },
+      hide: { x: 302, y: 672, w: 88, h: 44 },
+      legendButton: { x: 206, y: 672, w: 88, h: 44 },
+    })).time;
+    expect(time).toEqual({ x: 107, y: 568, w: 275, h: 96 });
+  });
+
+  it('keeps the short landscape canvas center clear even when the time row is narrow', () => {
+    const time = solveChromeSlots(measure({
+      viewport: { w: 568, h: 320 },
+      map: { x: 0, y: 48, w: 568, h: 272 },
+      show: { x: 8, y: 53, w: 203.40625, h: 52 },
+      zoom: { x: 8, y: 110, w: 88, h: 44 },
+      compass: { x: 96, y: 110, w: 44, h: 44 },
+      hide: { x: 468, y: 240, w: 88, h: 44 },
+      legendButton: { x: 372, y: 240, w: 88, h: 44 },
+      footer: { x: 0, y: 297.03125, w: 568, h: 22.96875 },
+    })).time!;
+    expect(time).toEqual({ x: 148, y: 188, w: 400, h: 44 });
+    expect(meets(time, { x: 283, y: 183, w: 2, h: 2 })).toBe(false);
+  });
+
+  it('uses the free space below the zoom lane for a readable narrow portrait slider', () => {
+    const time = solveChromeSlots(measure({
+      viewport: { w: 390, h: 520 },
+      map: { x: 0, y: 48, w: 390, h: 472 },
+      show: { x: 8, y: 53, w: 203.40625, h: 52 },
+      zoom: { x: 8, y: 110, w: 44, h: 88 },
+      compass: { x: 8, y: 198, w: 44, h: 44 },
+      hide: { x: 290, y: 440, w: 88, h: 44 },
+      legendButton: { x: 194, y: 440, w: 88, h: 44 },
+      footer: { x: 0, y: 497.03125, w: 390, h: 22.96875 },
+    })).time!;
+    expect(time).toEqual({ x: 8, y: 388, w: 362, h: 44 });
+    expect(time.w - (5 * 44 + 5 * 2 + 4)).toBeGreaterThanOrEqual(100);
+  });
+
+  it('uses the free band between raised corners and time before squeezing Legend below time', () => {
+    const input = measure({
+      viewport: { w: 360, h: 521 },
+      map: { x: 0, y: 113, w: 360, h: 408 },
+      insets: { top: 24, right: 0, bottom: 34, left: 0 },
+      show: { x: 8, y: 118, w: 203.40625, h: 52 },
+      zoom: { x: 8, y: 184, w: 44, h: 88 },
+      compass: { x: 8, y: 272, w: 44, h: 44 },
+      hide: { x: 260, y: 205, w: 88, h: 44 },
+      legendButton: { x: 164, y: 205, w: 88, h: 44 },
+      footer: { x: 0, y: 414.4375, w: 360, h: 72.5625 },
+      legendOpen: true, legendContentHeight: 70, scrollbar: 8,
+    });
+    const slots = solveChromeSlots(input);
+    expect(slots.legend).toEqual({ x: 76, y: 257, w: 176, h: 59 });
+    for (const obstacle of [input.show, input.zoom, input.compass, input.hide, input.legendButton, input.footer, slots.time!, slots.dock!]) {
+      expect(meets(slots.legend!, obstacle)).toBe(false);
+    }
+  });
+
+  it('places all six compact time targets beside Show after the short footer reflows', () => {
+    const input = measure({
+      viewport: { w: 568, h: 320 },
+      map: { x: 0, y: 72, w: 568, h: 248 },
+      insets: { top: 24, right: 0, bottom: 34, left: 47 },
+      show: { x: 55, y: 77, w: 203.40625, h: 52 },
+      zoom: { x: 55, y: 134, w: 88, h: 44 },
+      compass: { x: 143, y: 134, w: 44, h: 44 },
+      hide: { x: 468, y: 118, w: 88, h: 44 },
+      legendButton: { x: 372, y: 118, w: 88, h: 44 },
+      footer: { x: 0, y: 182, w: 568, h: 51 },
+      shotList: { x: 0, y: 233, w: 568, h: 87 },
+    });
+    const { time, dock } = solveChromeSlots(input);
+    expect(time).not.toBeNull();
+    expect(dock).not.toBeNull();
+    if (!time || !dock) return;
+    expect(time).toEqual({ x: 266.41, y: 72, w: 281.59, h: 44 });
+    expect(dock.y).toBe(bottomOf(input.show));
+    expect(meets(dock, input.show)).toBe(false);
+    for (const obstacle of [input.show, input.zoom, input.compass, input.hide, input.legendButton, input.footer, input.shotList]) {
+      expect(meets(time, obstacle)).toBe(false);
+    }
+    const opened = solveChromeSlots({ ...input, legendOpen: true, scrollbar: 8 });
+    expect(opened.time).toEqual(time);
+    expect(opened.dock).toEqual({ x: 195, y: 129, w: 52, h: 52, axis: 'row' });
+    expect(opened.legend).toEqual({ x: 255, y: 129, w: 109, h: 52 });
+    for (const obstacle of [input.show, input.zoom, input.compass, input.hide, input.legendButton, input.footer, input.shotList, time, opened.dock!]) {
+      expect(meets(opened.legend!, obstacle)).toBe(false);
+    }
+    expect(solveChromeSlots({ ...input, footer: { x: 0, y: 149.25, w: 568, h: 72.5625 }, hide: { ...input.hide, y: 97 }, legendButton: { ...input.legendButton, y: 97 } }).time).toBeNull();
+  });
+
+  it('leaves the wide time strip alone and lifts a legend panel off T+90', () => {
+    const t90: Box = { x: 440.609, y: 378.422, w: 59.36, h: 49.578 };
+    const hide: Box = { x: 620, y: 388, w: 88, h: 44 };
+    const legendButton: Box = { x: 524, y: 388, w: 88, h: 44 };
+    const slots = solveChromeSlots(measure({
+      viewport: { w: 720, h: 500 },
+      hide,
+      legendButton,
+      legendOpen: true,
+      legendPanel: { x: 436, y: 314.422, w: 176, h: 69.578 },
+      legendNaturalBottom: 384,
+      timeButtons: [t90],
+      dockCorridor: 120,
+      scrollbar: 6,
+    }));
+    expect(slots.time).toBeNull();
+    expect(slots.dock).toBeNull();
+    expect(slots.legend).not.toBeNull();
+    if (!slots.legend) return;
+    expect(bottomOf(slots.legend)).toBeLessThanOrEqual(t90.y - 4);
+    expect(meets(slots.legend, t90)).toBe(false);
+    expect(slots.legend.w).toBe(176);
+    expect(rightOf(slots.legend)).toBeCloseTo(rightOf(legendButton), 1);
+    expect(hide).toEqual({ x: 620, y: 388, w: 88, h: 44 });
+  });
+
+  it('gives an 800x600 dock a 44px cross axis clear of the preview and the time strip', () => {
+    const pip: Box = { x: 566, y: 89, w: 222, h: 144 };
+    const hide: Box = { x: 700, y: 312, w: 88, h: 44 };
+    const zoom: Box = { x: 8, y: 239, w: 44, h: 88 };
+    const slider: Box = { x: 46.66, y: 403.2, w: 175.92, h: 32 };
+    const t90: Box = { x: 537.02, y: 398, w: 50.98, h: 44 };
+    const slots = solveChromeSlots(measure({
+      viewport: { w: 800, h: 600 },
+      insets: { top: 24, right: 0, bottom: 20, left: 47 },
+      zoom,
+      compass: { x: 8, y: 327, w: 44, h: 44 },
+      show: { x: 8, y: 89, w: 203.38, h: 52 },
+      pip,
+      hide,
+      legendButton: { x: 604, y: 312, w: 88, h: 44 },
+      slider,
+      sliderChip: { x: 8, y: 384, w: 588, h: 116 },
+      timeButtons: [t90],
+      dockCorridor: 43,
+      scrollbar: 6,
+    }));
+    expect(slots.time).toBeNull();
+    expect(slots.dock).not.toBeNull();
+    if (!slots.dock) return;
+    expect(slots.dock.axis).toBe('row');
+    expect(slots.dock.h).toBeGreaterThanOrEqual(44 + 6);
+    expect(slots.dock.x).toBeGreaterThanOrEqual(rightOf(zoom) + 8);
+    expect(bottomOf(slots.dock)).toBeLessThanOrEqual(hide.y - 8);
+    expect(meets(slots.dock, pip)).toBe(false);
+    expect(meets(slots.dock, hide)).toBe(false);
+    expect(meets(slots.dock, zoom)).toBe(false);
+    expect(meets(slots.dock, slider)).toBe(false);
+    expect(meets(slots.dock, t90)).toBe(false);
+  });
+
+  it.each([
+    { bottom: 20, bannerHeight: 72.5625 },
+    { bottom: 34, bannerHeight: 72.5625 },
+    { bottom: 20, bannerHeight: 88.15625 },
+    { bottom: 34, bannerHeight: 88.15625 },
+  ])('keeps the inset-shifted dock clear of open Legend at bottom $bottom with banner height $bannerHeight', ({ bottom, bannerHeight }) => {
+    const cornerTop = 352 - bottom * 2;
+    const panel: Box = { x: 516, y: 241, w: 176, h: cornerTop - 245 };
+    const hide: Box = { x: 700, y: cornerTop, w: 88, h: 44 };
+    const slots = solveChromeSlots(measure({
+      insets: { top: 24, right: 0, bottom, left: 47 },
+      zoom: { x: 55, y: 239, w: 44, h: 88 },
+      compass: { x: 55, y: 327, w: 44, h: 44 },
+      show: { x: 8, y: 89, w: 203.40625, h: 52 },
+      pip: { x: 566, y: 89, w: 222, h: 144 },
+      hide,
+      legendButton: { x: 604, y: cornerTop, w: 88, h: 44 },
+      legendPanel: panel,
+      legendOpen: true,
+      legendNaturalBottom: cornerTop - 4,
+      sliderChip: { x: 63, y: 438 - bottom * 2, w: 525, h: 44 },
+      footer: { x: 0, y: 600 - bottom - bannerHeight, w: 800, h: bannerHeight },
+      shotList: { x: 0, y: 535.8125 - bottom, w: 800, h: 64.1875 + bottom },
+      dockCorridor: 43,
+      scrollbar: 8,
+    }));
+    expect(slots.legend).toBeNull();
+    expect(slots.dock).not.toBeNull();
+    if (!slots.dock) return;
+    expect(slots.dock.x).toBe(107);
+    expect(slots.dock.w).toBeGreaterThanOrEqual(44);
+    expect(slots.dock.h).toBe(52);
+    expect(bottomOf(slots.dock)).toBeLessThanOrEqual(hide.y - 8);
+    expect(meets(slots.dock, panel)).toBe(false);
+  });
+
+  it('allocates the wide dock against the resolved Legend position, not its previous paint', () => {
+    const panel: Box = { x: 516, y: 241, w: 176, h: 67 };
+    const input = measure({
+      insets: { top: 24, right: 0, bottom: 20, left: 47 },
+      zoom: { x: 55, y: 239, w: 44, h: 88 },
+      compass: { x: 55, y: 327, w: 44, h: 44 },
+      show: { x: 8, y: 89, w: 203.40625, h: 52 },
+      hide: { x: 700, y: 312, w: 88, h: 44 },
+      legendButton: { x: 604, y: 312, w: 88, h: 44 },
+      legendPanel: panel,
+      legendOpen: true,
+      legendNaturalBottom: 308,
+      timeButtons: [{ x: 544, y: 230, w: 44, h: 44 }],
+      dockCorridor: 43,
+      scrollbar: 8,
+    });
+    const slots = solveChromeSlots(input);
+    expect(slots.legend).not.toBeNull();
+    expect(slots.dock).not.toBeNull();
+    if (!slots.legend || !slots.dock) return;
+    expect(bottomOf(slots.legend)).toBe(226);
+    expect(meets(slots.dock, slots.legend)).toBe(false);
+    expect(solveChromeSlots({ ...input, legendPanel: slots.legend })).toEqual(slots);
+  });
+
+  it('keeps a short wide dock at 874x402 clear of zoom and the footer', () => {
+    const zoom: Box = { x: 8, y: 70, w: 44, h: 88 };
+    const footer: Box = { x: 0, y: 360, w: 874, h: 42 };
+    const slots = solveChromeSlots(measure({
+      viewport: { w: 874, h: 402 },
+      zoom,
+      compass: { x: 8, y: 158, w: 44, h: 44 },
+      show: { x: 8, y: 53, w: 220, h: 52 },
+      footer,
+      hide: { x: 774, y: 310, w: 88, h: 44 },
+      legendButton: { x: 678, y: 310, w: 88, h: 44 },
+      dockCorridor: 30,
+      scrollbar: 6,
+    }));
+    expect(slots.time).not.toBeNull();
+    expect(slots.dock).not.toBeNull();
+    if (!slots.dock || !slots.time) return;
+    expect(slots.time.h).toBe(44);
+    expect(meets(slots.time, zoom)).toBe(false);
+    expect(meets(slots.time, footer)).toBe(false);
+    expect(meets(slots.time, slots.dock)).toBe(false);
+    expect(slots.dock.h).toBeGreaterThanOrEqual(50);
+    expect(slots.dock.x).toBeGreaterThanOrEqual(rightOf(zoom) + 8);
+    expect(meets(slots.dock, zoom)).toBe(false);
+    expect(meets(slots.dock, footer)).toBe(false);
+  });
+
+  it('stops an open narrow legend at the footer', () => {
+    const footer: Box = { x: 0, y: 293.4375, w: 430, h: 72 };
+    const zoom: Box = { x: 55, y: 134, w: 44, h: 88 };
+    const slots = solveChromeSlots(measure({
+      viewport: { w: 430, h: 400 },
+      insets: { top: 24, right: 0, bottom: 34, left: 47 },
+      zoom,
+      compass: { x: 55, y: 222, w: 44, h: 44 },
+      show: { x: 55, y: 77, w: 180, h: 52 },
+      hide: { x: 330, y: 198, w: 88, h: 44 },
+      legendButton: { x: 234, y: 198, w: 88, h: 44 },
+      footer,
+      legendOpen: true,
+      scrollbar: 6,
+    }));
+    expect(slots.legend).not.toBeNull();
+    if (!slots.legend || !slots.time) return;
+    const legendButton: Box = { x: 234, y: 198, w: 88, h: 44 };
+    const hide: Box = { x: 330, y: 198, w: 88, h: 44 };
+    expect(bottomOf(slots.legend)).toBeLessThanOrEqual(footer.y - 8);
+    expect(meets(slots.legend, footer)).toBe(false);
+    expect(meets(slots.legend, zoom)).toBe(false);
+    expect(meets(slots.legend, legendButton)).toBe(false);
+    expect(meets(slots.legend, hide)).toBe(false);
+    expect(slots.legend.x).toBeGreaterThanOrEqual(rightOf(zoom) + 8);
+    expect(slots.legend.w).toBeGreaterThan(88);
+    expect(meets(slots.legend, slots.time)).toBe(false);
+  });
+
+  it('keeps a 390x520 time stack tall enough for a full-width slider', () => {
+    const hide: Box = { x: 290, y: 440, w: 88, h: 44 };
+    const slots = solveChromeSlots(measure({
+      viewport: { w: 390, h: 520 },
+      zoom: { x: 8, y: 110, w: 44, h: 88 },
+      compass: { x: 8, y: 198, w: 44, h: 44 },
+      show: { x: 8, y: 53, w: 203, h: 52 },
+      hide,
+      legendButton: { x: 194, y: 440, w: 88, h: 44 },
+      footer: { x: 0, y: 497, w: 390, h: 23 },
+      legendOpen: false,
+      scrollbar: 6,
+    }));
+    expect(slots.time).not.toBeNull();
+    if (!slots.time) return;
+    expect(slots.time.h).toBe(96);
+    expect(bottomOf(slots.time)).toBeLessThanOrEqual(hide.y);
+    expect(slots.time.w).toBeGreaterThanOrEqual(100);
+    expect(meets(slots.time, hide)).toBe(false);
+  });
+
+  it('allocates the painted launch brief clear of the inset zoom lane and numeric time strip', () => {
+    const zoom: Box = { x: 55, y: 134, w: 44, h: 88 };
+    const compass: Box = { x: 55, y: 222, w: 44, h: 44 };
+    const sliderChip: Box = { x: 63, y: 395, w: 445, h: 44 };
+    const dock: Box = { x: 645.84375, y: 77, w: 66.15625, h: 290 };
+    const input = measure({
+      viewport: { w: 720, h: 500 },
+      insets: { top: 24, right: 0, bottom: 34, left: 47 },
+      zoom,
+      compass,
+      show: { x: 8, y: 77, w: 203.40625, h: 52 },
+      sliderChip,
+      dock,
+      hide: { x: 620, y: 386, w: 88, h: 44 },
+      legendButton: { x: 524, y: 386, w: 88, h: 44 },
+      footer: { x: 0, y: 443.03125, w: 720, h: 22.96875 },
+      launchBrief: { x: 8, y: 143, w: 512, h: 250 },
+    });
+    const slots = solveChromeSlots(input);
+    expect(slots.launch).toBeTruthy();
+    if (!slots.launch) return;
+    expect(slots.launch.x).toBeGreaterThanOrEqual(107);
+    expect(slots.launch.y).toBeGreaterThanOrEqual(133);
+    expect(slots.launch.w).toBeGreaterThanOrEqual(180);
+    expect(slots.launch.h).toBeGreaterThanOrEqual(64);
+    for (const obstacle of [zoom, compass, sliderChip, dock, input.hide, input.legendButton]) {
+      expect(meets(slots.launch, obstacle)).toBe(false);
+    }
+    expect(bottomOf(slots.launch)).toBeLessThanOrEqual(sliderChip.y - 8);
+    expect(solveChromeSlots({ ...input, launchBrief: slots.launch })).toEqual(slots);
+  });
+
+  it('reserves a full launch action row before an open portrait Legend without moving time or dock', () => {
+    const input = measure({
+      viewport: { w: 402, h: 874 },
+      insets: { top: 24, right: 0, bottom: 34, left: 47 },
+      zoom: { x: 55, y: 175, w: 44, h: 88 },
+      compass: { x: 55, y: 263, w: 44, h: 44 },
+      show: { x: 55, y: 118, w: 203.40625, h: 52 },
+      hide: { x: 302, y: 760, w: 88, h: 44 },
+      legendButton: { x: 206, y: 760, w: 88, h: 44 },
+      legendPanel: { x: 118, y: 174, w: 176, h: 474 },
+      legendOpen: true,
+      footer: { x: 0, y: 817.03125, w: 402, h: 22.96875 },
+      scrollbar: 8,
+    });
+    const withoutLaunch = solveChromeSlots(input);
+    const slots = solveChromeSlots({ ...input, launchBrief: { x: 8, y: 184, w: 330, h: 352 } });
+    expect(slots.launch).toBeTruthy();
+    expect(slots.legend).not.toBeNull();
+    expect(slots.time).toEqual(withoutLaunch.time);
+    expect(slots.dock).toEqual(withoutLaunch.dock);
+    if (!slots.launch || !slots.legend || !slots.time || !slots.dock) return;
+    expect(slots.launch.w).toBeGreaterThanOrEqual(180);
+    expect(slots.launch.h).toBeGreaterThanOrEqual(64);
+    for (const obstacle of [slots.legend, slots.time, slots.dock, input.zoom, input.compass]) {
+      expect(meets(slots.launch, obstacle)).toBe(false);
+    }
+    expect(slots.legend.h).toBeGreaterThanOrEqual(32);
+  });
+
+  it('leaves unused narrow Legend space available to the pin inspector', () => {
+    const input = measure({
+      viewport: { w: 402, h: 874 },
+      zoom: { x: 8, y: 151, w: 44, h: 88 },
+      compass: { x: 8, y: 239, w: 44, h: 44 },
+      show: { x: 8, y: 94, w: 203.40625, h: 52 },
+      hide: { x: 302, y: 794, w: 88, h: 44 },
+      legendButton: { x: 206, y: 794, w: 88, h: 44 },
+      legendPanel: { x: 118, y: 150, w: 176, h: 532 },
+      legendOpen: true,
+      footer: { x: 0, y: 851.03125, w: 402, h: 22.96875 },
+      scrollbar: 8,
+    });
+    const stretched = solveChromeSlots(input);
+    const slots = solveChromeSlots({ ...input, legendContentHeight: 71.25 });
+    expect(slots.legend).not.toBeNull();
+    if (!slots.legend) return;
+    expect(bottomOf(slots.legend)).toBe(bottomOf(stretched.legend!));
+    expect(slots.legend.h).toBe(71.25);
+    expect(slots.time).toEqual(stretched.time);
+    expect(slots.dock).toEqual(stretched.dock);
+  });
+
+  it.each([200, 179.25, 163.65625])('shares the Show row with time while clearing a raised Legend button at %s', (cornerY) => {
+    const input = measure({
+      viewport: { w: 874, h: 402 },
+      insets: { top: 24, right: 0, bottom: 34, left: 47 },
+      zoom: { x: 55, y: 134, w: 44, h: 88 },
+      compass: { x: 55, y: 222, w: 44, h: 44 },
+      show: { x: 55, y: 77, w: 203.640625, h: 52 },
+      sliderChip: { x: 110.625, y: 163.640625, w: 503.75, h: 44 },
+      dock: { x: 799.84375, y: 77, w: 66.15625, h: 71.625 },
+      dockCorridor: 71.640625,
+      hide: { x: 774, y: cornerY, w: 88, h: 44 },
+      legendButton: { x: 678, y: cornerY, w: 88, h: 44 },
+      legendPanel: { x: 590, y: 88.375, w: 176, h: 71.265625 },
+      legendContentHeight: 71.265625,
+      legendNaturalBottom: cornerY - 4,
+      legendOpen: true,
+      footer: { x: 0, y: 215.65625, w: 874, h: 88.15625 },
+      shotList: { x: 0, y: 303.8125, w: 874, h: 98.1875 },
+      launchBrief: { x: 8, y: 143, w: 512, h: 201 },
+    });
+    const slots = solveChromeSlots(input);
+    expect(slots.time).not.toBeNull();
+    expect(slots.launch).toBeTruthy();
+    if (!slots.time || !slots.launch) return;
+    expect(slots.time.x).toBeGreaterThanOrEqual(rightOf(input.show) + 8 - 0.01);
+    expect(slots.time.y).toBe(81);
+    expect(slots.time.h).toBe(44);
+    expect(slots.time.w).toBeGreaterThanOrEqual(300);
+    expect(slots.legend).not.toBeNull();
+    if (slots.legend) {
+      expect(meets(slots.legend, input.legendButton)).toBe(false);
+      expect(bottomOf(slots.legend)).toBeLessThanOrEqual(input.legendButton.y - 4 + 0.01);
+      expect(slots.legend.h).toBeGreaterThan(0);
+      expect(solveChromeSlots({ ...input, legendPanel: slots.legend })).toEqual(slots);
+    }
+    expect(slots.launch.w).toBeGreaterThanOrEqual(180);
+    expect(slots.launch.h).toBeGreaterThanOrEqual(64);
+    for (const obstacle of [slots.time, slots.legend, input.dock, input.zoom, input.compass, input.footer].filter((box): box is Box => !!box)) {
+      expect(meets(slots.launch, obstacle)).toBe(false);
+    }
+  });
+
+  it.each([
+    { bottom: 0, legendOpen: false },
+    { bottom: 0, legendOpen: true },
+    { bottom: 34, legendOpen: false },
+    { bottom: 34, legendOpen: true },
+  ])('uses the clear launch region below narrow time with bottom $bottom and Legend=$legendOpen', ({ bottom, legendOpen }) => {
+    const inset = bottom > 0;
+    const input = measure({
+      viewport: { w: 719, h: 521 },
+      insets: { top: inset ? 24 : 0, right: 0, bottom, left: inset ? 47 : 0 },
+      zoom: inset ? { x: 55, y: 155, w: 44, h: 88 } : { x: 8, y: 131, w: 88, h: 44 },
+      compass: inset ? { x: 55, y: 243, w: 44, h: 44 } : { x: 96, y: 131, w: 44, h: 44 },
+      show: { x: inset ? 55 : 8, y: inset ? 89 : 65, w: 203.640625, h: 52 },
+      hide: { x: 619, y: inset ? 205 : 273, w: 88, h: 44 },
+      legendButton: { x: 523, y: inset ? 205 : 273, w: 88, h: 44 },
+      legendPanel: inset ? { x: 339, y: 257.828125, w: 176, h: 70 } : { x: 435, y: 121, w: 176, h: 40 },
+      legendContentHeight: 70,
+      legendOpen,
+      footer: { x: 0, y: inset ? 335.84375 : 384.84375, w: 719, h: inset ? 86.96875 : 71.96875 },
+      shotList: { x: 0, y: inset ? 422.8125 : 456.8125, w: 719, h: inset ? 98.1875 : 64.1875 },
+      launchBrief: { x: 8, y: inset ? 155 : 131, w: 512, h: inset ? 203.5 : 220.5 },
+      scrollbar: 8,
+    });
+    const slots = solveChromeSlots(input);
+    const launch = slots.launch ?? input.launchBrief!;
+    for (const obstacle of [slots.time, slots.dock, slots.legend, input.zoom, input.compass, input.show, input.hide, input.legendButton, input.footer, input.shotList].filter((box): box is Box => !!box)) {
+      expect(meets(launch, obstacle)).toBe(false);
+    }
+    expect(slots.launch).toBeTruthy();
+    expect(launch.w).toBeGreaterThanOrEqual(180);
+    expect(launch.h).toBeGreaterThanOrEqual(64);
+    expect(launch.y).toBeGreaterThanOrEqual(bottomOf(slots.time!) + 8);
+    expect(bottomOf(launch)).toBeLessThanOrEqual(input.footer.y - 8 + 0.01);
+    expect(solveChromeSlots({ ...input, launchBrief: launch })).toEqual(slots);
+  });
+
+  it('hides every slot when the chrome is hidden', () => {
+    expect(solveChromeSlots(measure({
+      viewport: { w: 390, h: 520 },
+      chromeHidden: true,
+      legendOpen: true,
+      dockCorridor: 10,
+    }))).toEqual({ time: null, dock: null, legend: null });
+  });
+
+  it.each([390, 568])('jointly leaves an inspector row and the working inset map target at %spx', (width) => {
+    const short = width === 568;
+    const height = short ? 320 : 520;
+    const input = measure({
+      viewport: { w: width, h: height },
+      map: { x: 0, y: 72, w: width, h: height - 72 },
+      insets: { top: 24, right: 0, bottom: 34, left: 47 },
+      show: { x: 55, y: 77, w: 203.40625, h: 52 },
+      zoom: { x: 55, y: 134, w: short ? 88 : 44, h: short ? 44 : 88 },
+      compass: { x: short ? 143 : 55, y: short ? 134 : 222, w: 44, h: 44 },
+      hide: { x: width - 100, y: short ? 206 : 395, w: 88, h: 44 },
+      legendButton: { x: width - 196, y: short ? 206 : 395, w: 88, h: 44 },
+      footer: { x: 0, y: short ? 263.03125 : 447.4375, w: width, h: short ? 22.96875 : 38.5625 },
+      scrollbar: 8, inspectorOpen: true,
+    });
+    const slots = solveChromeSlots(input);
+    const target = short ? { x: 374, y: 195, w: 2, h: 2 } : { x: 194, y: 384, w: 2, h: 2 };
+    expect(slots.time).toBeTruthy();
+    expect(slots.dock).toBeTruthy();
+    for (const item of [slots.time!, slots.dock!]) {
+      expect(meets(item, target)).toBe(false);
+      for (const obstacle of [input.show, input.zoom, input.compass, input.hide, input.legendButton, input.footer]) {
+        expect(meets(item, obstacle)).toBe(false);
+      }
+    }
+    expect(meets(slots.time!, slots.dock!)).toBe(false);
+    expect(slots.time!.w).toBeGreaterThanOrEqual(278);
+    expect(solveChromeSlots({ ...input, dock: slots.dock!, sliderChip: slots.time! })).toEqual(slots);
+  });
+
+  it('reconsiders a stretched time row and dock instead of leaving the natural launch brief over them', () => {
+    const input = measure({
+      viewport: { w: 568, h: 320 }, map: { x: 0, y: 48, w: 568, h: 272 },
+      show: { x: 8, y: 53, w: 203.640625, h: 52 },
+      zoom: { x: 8, y: 110, w: 88, h: 44 },
+      compass: { x: 96, y: 110, w: 44, h: 44 },
+      hide: { x: 468, y: 152, w: 88, h: 44 },
+      legendButton: { x: 372, y: 152, w: 88, h: 44 },
+      footer: { x: 0, y: 215.625, w: 568, h: 51.375 },
+      shotList: { x: 0, y: 267, w: 568, h: 53 },
+      launchBrief: { x: 8, y: 119, w: 496, h: 160 }, scrollbar: 8,
+    });
+    const slots = solveChromeSlots(input);
+    expect(slots.launch).toBeTruthy();
+    if (!slots.launch || !slots.time || !slots.dock) throw new Error('Expected a joint launch/time/dock solution');
+    expect(slots.launch.w).toBeGreaterThanOrEqual(180);
+    expect(slots.launch.h).toBeGreaterThanOrEqual(64);
+    for (const obstacle of [slots.time, slots.dock, input.show, input.zoom, input.compass, input.hide, input.legendButton, input.footer]) {
+      expect(meets(slots.launch, obstacle)).toBe(false);
+    }
+    expect(solveChromeSlots({ ...input, dock: slots.dock, sliderChip: slots.time, launchBrief: slots.launch })).toEqual(slots);
+  });
+
+  it('uses the space alongside Show for a short portrait launch panel instead of imposing its global bottom', () => {
+    const input = measure({
+      viewport: { w: 390, h: 520 }, map: { x: 0, y: 72, w: 390, h: 448 },
+      insets: { top: 24, right: 0, bottom: 34, left: 47 },
+      show: { x: 55, y: 77, w: 203.640625, h: 52 },
+      zoom: { x: 55, y: 134, w: 88, h: 44 },
+      compass: { x: 143, y: 134, w: 44, h: 44 },
+      hide: { x: 290, y: 250, w: 88, h: 44 },
+      legendButton: { x: 194, y: 250, w: 88, h: 44 },
+      footer: { x: 0, y: 302.46875, w: 390, h: 119.34375 },
+      shotList: { x: 0, y: 421.8125, w: 390, h: 98.1875 },
+      launchBrief: { x: 8, y: 143, w: 318, h: 260 }, scrollbar: 8,
+    });
+    const slots = solveChromeSlots(input);
+    if (!slots.launch || !slots.time || !slots.dock) throw new Error('Expected a joint launch/time/dock solution');
+    expect(slots.launch.y).toBeLessThan(bottomOf(input.show));
+    expect(slots.launch.h).toBeGreaterThanOrEqual(64);
+    for (const obstacle of [slots.time, slots.dock, input.show, input.zoom, input.compass, input.hide, input.legendButton, input.footer]) {
+      expect(meets(slots.launch, obstacle)).toBe(false);
+    }
+    expect(solveChromeSlots({ ...input, dock: slots.dock, sliderChip: slots.time, launchBrief: slots.launch })).toEqual(slots);
+  });
+
+  it('fits the open picker clear of the lifted time strip and relocated Legend', () => {
+    const input = measure({
+      map: { x: 0, y: 84, w: 800, h: 416 },
+      insets: { top: 24, right: 0, bottom: 20, left: 47 },
+      show: { x: 55, y: 89, w: 203.40625, h: 52 },
+      zoom: { x: 55, y: 155, w: 44, h: 88 },
+      compass: { x: 55, y: 243, w: 44, h: 44 },
+      dock: { x: 725.84375, y: 89, w: 66.15625, h: 204 },
+      sliderChip: { x: 63, y: 391, w: 525, h: 44 },
+      legendPanel: { x: 516, y: 241, w: 176, h: 67 },
+      legendButton: { x: 604, y: 312, w: 88, h: 44 },
+      hide: { x: 700, y: 312, w: 88, h: 44 },
+      legendOpen: true,
+      legendNaturalBottom: 308,
+      footer: { x: 0, y: 443.25, w: 800, h: 72.5625 },
+      shotList: { x: 0, y: 515.8125, w: 800, h: 84.1875 },
+      picker: { x: 424, y: 155, w: 288, h: 250 },
+    });
+    const slots = solveChromeSlots(input);
+    expect(slots.picker).toBeTruthy();
+    if (!slots.picker) return;
+    expect(slots.picker.h).toBeGreaterThanOrEqual(290);
+    expect(slots.picker.w).toBeGreaterThanOrEqual(180);
+    for (const obstacle of [input.show, input.zoom, input.compass, input.dock!, input.sliderChip, input.legendPanel, input.legendButton, input.hide, input.footer]) {
+      expect(meets(slots.picker, obstacle)).toBe(false);
+    }
+    expect(solveChromeSlots({ ...input, picker: slots.picker })).toEqual(slots);
+    expect(solveChromeSlots({ ...input, picker: { ...slots.picker, h: 400 } })).toEqual(slots);
+    const closed = solveChromeSlots({ ...input, picker: empty });
+    expect(closed.picker).toBeUndefined();
+    expect({ ...slots, picker: undefined }).toEqual(closed);
+    expect(solveChromeSlots({ ...input, inspectorOpen: true })).toEqual(slots);
+  });
+
+  it('jointly keeps a readable inspector beside Satellite on the 568x320 inset screen', () => {
+    const input = measure({
+      viewport: { w: 568, h: 320 }, map: { x: 0, y: 72, w: 568, h: 248 },
+      insets: { top: 24, right: 0, bottom: 34, left: 47 },
+      show: { x: 55, y: 77, w: 203.40625, h: 52 },
+      zoom: { x: 55, y: 134, w: 88, h: 44 },
+      compass: { x: 143, y: 134, w: 44, h: 44 },
+      hide: { x: 468, y: 206, w: 88, h: 44 },
+      legendButton: { x: 372, y: 206, w: 88, h: 44 },
+      footer: { x: 0, y: 263.03125, w: 568, h: 22.96875 },
+      picker: { x: 192, y: 143, w: 288, h: 160 },
+      scrollbar: 8, inspectorOpen: true,
+    });
+    const slots = solveChromeSlots(input);
+    expect(slots.picker).toBeTruthy();
+    if (!slots.picker || !slots.time || !slots.dock) throw new Error('Expected a joint picker/time/dock solution');
+    expect(slots.picker.w).toBeGreaterThanOrEqual(180);
+    expect(slots.picker.h).toBeGreaterThanOrEqual(64);
+    const inspector = { x: 480, y: 80, w: 80, h: 112 };
+    const fixed = [input.show, input.zoom, input.compass, input.hide, input.legendButton, input.footer];
+    for (const item of [slots.time, slots.dock, slots.picker]) {
+      for (const obstacle of [...fixed, inspector]) expect(meets(item, obstacle)).toBe(false);
+    }
+    expect(meets(slots.time, slots.dock)).toBe(false);
+    expect(meets(slots.time, slots.picker)).toBe(false);
+    expect(meets(slots.dock, slots.picker)).toBe(false);
+    expect(solveChromeSlots({ ...input, dock: slots.dock, sliderChip: slots.time, picker: slots.picker })).toEqual(slots);
+  });
+
+  it('keeps the measured zoom column stable when jointly opening the 390x520 picker', () => {
+    const input = measure({
+      viewport: { w: 390, h: 520 }, map: { x: 0, y: 48, w: 390, h: 472 },
+      zoom: { x: 8, y: 110, w: 44, h: 88 }, compass: { x: 8, y: 198, w: 44, h: 44 },
+      show: { x: 8, y: 53, w: 203.40625, h: 52 },
+      dock: { x: 330, y: 53, w: 52, h: 327 },
+      hide: { x: 290, y: 440, w: 88, h: 44 },
+      legendButton: { x: 194, y: 440, w: 88, h: 44 },
+      footer: { x: 0, y: 497.03125, w: 390, h: 22.96875 },
+      picker: { x: 60, y: 113, w: 262, h: 267 }, inspectorOpen: true, scrollbar: 8,
+    });
+    const slots = solveChromeSlots(input);
+    if (!slots.time || !slots.dock || !slots.picker) throw new Error('Expected a joint picker/time/dock solution');
+    expect(slots.time.y).toBeGreaterThanOrEqual(bottomOf(input.compass) + 8);
+    expect(meets(slots.picker, slots.time)).toBe(false);
+    expect(meets(slots.picker, slots.dock)).toBe(false);
+    expect(solveChromeSlots({ ...input, dock: slots.dock, sliderChip: slots.time, picker: slots.picker })).toEqual(slots);
+  });
+
+  it('keeps the tall phone inspector readable when the picker opens', () => {
+    const input = measure({
+      viewport: { w: 402, h: 874 },
+      map: { x: 0, y: 113, w: 402, h: 761 },
+      insets: { top: 24, right: 0, bottom: 20, left: 47 },
+      show: { x: 55, y: 118, w: 203.40625, h: 52 },
+      zoom: { x: 55, y: 184, w: 44, h: 88 },
+      compass: { x: 55, y: 272, w: 44, h: 44 },
+      hide: { x: 302, y: 763, w: 88, h: 44 },
+      legendButton: { x: 206, y: 763, w: 88, h: 44 },
+      footer: { x: 0, y: 815.4375, w: 402, h: 38.5625 },
+      legendOpen: true, legendContentHeight: 72, scrollbar: 8,
+      picker: { x: 107, y: 178, w: 227, h: 287.53125 },
+    });
+    const closed = solveChromeSlots(input);
+    const opened = solveChromeSlots({ ...input, inspectorOpen: true });
+    expect(opened.picker).toEqual({ x: 55, y: 377.5, w: 279, h: 193.5 });
+    if (!opened.picker) throw new Error('Expected a usable picker slot');
+    expect(meets(opened.picker, { x: 107, y: 178, w: 227, h: 191.5 })).toBe(false);
+    for (const obstacle of [input.show, input.zoom, input.compass, input.hide, input.legendButton, input.footer, opened.time!, opened.dock!, opened.legend!]) {
+      expect(meets(opened.picker, obstacle)).toBe(false);
+    }
+    expect({ ...opened, picker: undefined }).toEqual({ ...closed, picker: undefined });
+    expect(solveChromeSlots({ ...input, inspectorOpen: false })).toEqual(closed);
+    expect(solveChromeSlots({ ...input, inspectorOpen: true, picker: opened.picker })).toEqual(opened);
+    const short = { ...input, viewport: { w: 719, h: 521 }, map: { x: 0, y: 113, w: 719, h: 408 } };
+    expect(solveChromeSlots({ ...short, inspectorOpen: true })).toEqual(solveChromeSlots(short));
+  });
+
+  it('keeps a short landscape launch brief off the map center', () => {
+    const map: Box = { x: 0, y: 60, w: 874, h: 342 };
+    const input = measure({
+      viewport: { w: 874, h: 402 },
+      map,
+      zoom: { x: 8, y: 130, w: 44, h: 132 },
+      compass: { x: 8, y: 270, w: 44, h: 44 },
+      show: { x: 8, y: 68, w: 204, h: 52 },
+      sliderChip: { x: 60, y: 300, w: 640, h: 70 },
+      footer: { x: 0, y: 370, w: 874, h: 32 },
+      hide: { x: 770, y: 340, w: 88, h: 44 },
+      legendButton: { x: 670, y: 340, w: 88, h: 44 },
+      dock: { x: 810, y: 68, w: 52, h: 220 },
+      launchBrief: { x: 60, y: 130, w: 512, h: 160 },
+    });
+    const slots = solveChromeSlots(input);
+    expect(slots.launch).toBeTruthy();
+    if (!slots.launch) return;
+    const center: Box = { x: map.x + map.w / 2 - 1, y: map.y + map.h / 2 - 1, w: 2, h: 2 };
+    expect(meets(slots.launch, center)).toBe(false);
+    expect(slots.launch.w).toBeGreaterThanOrEqual(180);
+    expect(slots.launch.h).toBeGreaterThanOrEqual(64);
+  });
+});

@@ -1,17 +1,11 @@
 """Live-S3 smoke test for the GLM sampler (v1.5.5.0 / weather v1.3.2).
 
-Builds a GLMSampler at "now" and reports what it finds. Use this to
-verify the live path after real-world deployment when NOAA S3 has
-data for today.
-
-In the simulated-2026 dev env this will print "0 granules" because
-the bucket only has data through 2025 — that's expected, not a bug.
-The mocked unit tests are what gate v1.3.2 correctness.
+Reports the latest usable granule from each operational satellite.
 """
 
 from datetime import UTC, datetime
 
-from generator.lightning import GLMSampler
+from generator.lightning import GLM_SUBPOINT_LON, GLMSampler
 
 
 def main() -> None:
@@ -20,7 +14,8 @@ def main() -> None:
     total_flashes = sum(len(v) for v in sampler._flashes_by_bucket.values())
     print(f"GLM-SMOKE @ {now.isoformat()}")
     print(f"  total flashes ingested: {total_flashes}")
-    print(f"  oldest granule age: {sampler._oldest_granule_age_min} min")
+    for satellite in GLM_SUBPOINT_LON:
+        print(f"  {satellite} latest granule: {sampler._latest_by_satellite.get(satellite)}")
     print(f"  spatial buckets populated: {len(sampler._flashes_by_bucket)}")
     print()
     print("Sample lookups (expect 'glm-' source w/ age for in-coverage targets):")
@@ -38,11 +33,7 @@ def main() -> None:
             f"flashes/min={result.flash_rate_per_min:.2f}"
         )
 
-    # Sprite-watch live-verify (Unit 7): the limb-annulus cluster scan is
-    # invisible in dev (no live GLM past 2025), so this is the only place it
-    # can be exercised against real flashes. Sweep a few sub-points sitting
-    # over GLM coverage and report the strongest in-annulus storm cluster —
-    # what the generator would attach as pass.sprite on a night pass there.
+    # Exercise the same limb-annulus lookup as a night pass.
     print()
     print("Sprite annulus scan (strongest storm in the 900-3200km limb ring):")
     for lat, lon, name in [
