@@ -6585,6 +6585,9 @@ function planOpacityOn(layer, zoom) {
   return value !== 0;
 }
 function planShownText(field, properties) {
+  if (field && typeof field === 'object' && Array.isArray(field.sections)) {
+    return field.sections.map((section) => (section && typeof section.text === 'string' ? section.text : '')).join('');
+  }
   if (typeof field === 'string') return field;
   if (Array.isArray(field) && field[0] === 'get' && typeof field[1] === 'string') {
     const value = properties ? properties[field[1]] : undefined;
@@ -6594,6 +6597,7 @@ function planShownText(field, properties) {
 }
 function planColorAlpha(color) {
   if (color == null) return 1;
+  if (typeof color === 'object' && typeof color.a === 'number') return color.a;
   if (typeof color !== 'string') return 0;
   const text = color.trim().toLowerCase();
   if (text === 'transparent') return 0;
@@ -6623,10 +6627,11 @@ function planSymbolNames(map) {
     const name = feature.properties && feature.properties.name;
     if (typeof name !== 'string' || !name) continue;
     const layer = feature.layer || {};
+    if (layer.layout && layer.layout.visibility === 'none') continue;
     if (!planOpacityOn(layer, zoom)) continue;
     if (planColorAlpha(layer.paint && layer.paint['text-color']) <= 0) continue;
     if (planShownText(layer.layout && layer.layout['text-field'], feature.properties) !== name) continue;
-    if (!names.includes(name)) names.push(name);
+    names.push(name);
   }
   return names;
 }

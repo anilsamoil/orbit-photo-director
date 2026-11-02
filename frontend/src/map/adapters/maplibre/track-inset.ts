@@ -260,7 +260,7 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
       sources: {
         'inset-basemap': { type: 'raster', tiles: ESRI_DARK_TILES, tileSize: 256, maxzoom: 20 },
         'inset-night': { type: 'geojson', data: EMPTY },
-        'inset-labels': { type: 'raster', tiles: ESRI_LABEL_TILES, tileSize: 256, maxzoom: 19 },
+        'inset-labels': { type: 'raster', tiles: ESRI_LABEL_TILES, tileSize: 256, maxzoom: COUNTRY_RASTER_LEVELS.through },
         'inset-countries': { type: 'geojson', data: COUNTRY_CENTROIDS },
         'inset-track': { type: 'geojson', data: EMPTY },
       },

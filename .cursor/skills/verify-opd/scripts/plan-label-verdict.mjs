@@ -67,7 +67,7 @@ export function rasterPainted(words, country) {
 }
 
 export function countrySweepZooms(levels = loadCountryRasterLevels()) {
-  const zooms = new Set([-1.1497862143712645, -0.23372503287116042, 5]);
+  const zooms = new Set([-1.1497862143712645, -0.23372503287116042, 5, 5.5, 6.5, 6.51, 8]);
   for (let step = -50; step <= 310; step += 5) zooms.add(step / 100);
   for (let tile = 1; tile <= levels.through; tile += 1) {
     const edge = tile - 1.5;
@@ -254,6 +254,7 @@ export function planLabelVerdict(sample) {
   }
   function colorAlpha(colorValue) {
     if (colorValue == null) return 1;
+    if (typeof colorValue === 'object' && typeof colorValue.a === 'number') return colorValue.a;
     if (typeof colorValue !== 'string') return 0;
     const text = colorValue.trim().toLowerCase();
     if (text === 'transparent') return 0;
@@ -269,6 +270,9 @@ export function planLabelVerdict(sample) {
     return Number.isFinite(alpha) ? alpha : 0;
   }
   function shownText(field, properties) {
+    if (field && typeof field === 'object' && Array.isArray(field.sections)) {
+      return field.sections.map((section) => (section && typeof section.text === 'string' ? section.text : '')).join('');
+    }
     if (typeof field === 'string') return field;
     if (Array.isArray(field) && field[0] === 'get' && typeof field[1] === 'string') {
       const value = properties ? properties[field[1]] : undefined;
@@ -303,13 +307,14 @@ export function planLabelVerdict(sample) {
     const field = feature && feature.textField != null ? feature.textField : sample.textField;
     const featureOpacity = feature && feature.textOpacity != null ? resolvedOpacity(feature.textOpacity) : opacity;
     const featureAlpha = feature && feature.textColor != null ? colorAlpha(feature.textColor) : alpha;
+    if (feature && feature.visibility === 'none') continue;
     if (!(featureOpacity > 0) || !(featureAlpha > 0)) continue;
     const text = shownText(field, feature && feature.properties);
     const propertyName = feature && feature.properties && feature.properties.name;
     if (typeof propertyName === 'string' && text !== propertyName) continue;
     if (text.length < 2 || !catalog.includes(text)) continue;
     if (!(feature.x >= 8 && feature.y >= 8 && feature.x <= width - 8 && feature.y <= height - 8)) continue;
-    if (!names.includes(text)) names.push(text);
+    names.push(text);
   }
   if (glyphs < 10000) return { ok: false, step: 'labels', reason: 'glyphs', glyphs, names, opacity };
   if (names.length < 4) return { ok: false, step: 'labels', reason: 'names', glyphs, names, opacity };
@@ -357,7 +362,18 @@ function readPlanLabels(orbit, glyphs, width, height) {
     const geometry = feature && feature.geometry;
     if (!geometry || geometry.type !== 'Point' || !geometry.coordinates) continue;
     const point = orbit.project(geometry.coordinates);
-    rendered.push({ properties: feature.properties || {}, x: point.x, y: point.y });
+    const layer = feature.layer || {};
+    const layout = layer.layout || {};
+    const paint = layer.paint || {};
+    rendered.push({
+      properties: feature.properties || {},
+      x: point.x,
+      y: point.y,
+      textField: layout['text-field'],
+      textColor: paint['text-color'],
+      textOpacity: paint['text-opacity'],
+      visibility: layout.visibility,
+    });
   }
   return planLabelVerdict({
     glyphs: glyphs,
