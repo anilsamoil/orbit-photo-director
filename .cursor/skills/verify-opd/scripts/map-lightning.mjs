@@ -30,6 +30,29 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
     let mode = 'observed';
     let requests = 0;
     let observationEnd;
+    let heldEnd;
+    const sectorCells = (count, lon, lat) => Array.from({ length: count }, (_, index) => [
+      Math.round((lon + (index % 16) * 0.02) * 1e3) / 1e3,
+      Math.round((lat + Math.floor(index / 16) * 0.02) * 1e3) / 1e3,
+      (index % 299) + 1,
+      1,
+    ]);
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const nextPoll = async (key) => {
+      phase = key;
+      const seen = requests;
+      const deadline = Date.now() + 130_000;
+      while (requests <= seen) {
+        if (Date.now() > deadline) throw new Error(`poll did not fire (${key}, seen ${seen})`);
+        await wait(200);
+      }
+      await wait(400);
+    };
+    const flashCoords = () => page.evaluate(() => {
+      const data = window.__opdMap.getSource('lightning')._data;
+      const geojson = data.geojson || data;
+      return geojson.features.map((feature) => feature.geometry.coordinates);
+    });
     let releaseLoading;
     let loadingStarted;
     let loadingFinished;
@@ -47,16 +70,29 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
       }
       if (mode === 'missing') return route.fulfill({ status: 404, body: '' });
       const age = mode === 'expiry' ? 475_000 : (mode === 'stale' ? 9 : 2) * 60_000;
-      const end = Date.now() + startOffset - age;
+      const end = mode === 'held' ? heldEnd : Date.now() + startOffset - age;
       observationEnd = end;
       const utc = ms => new Date(ms).toISOString();
+      const east = mode === 'overlap'
+        ? [[reef.lon, reef.lat, 290, 7]]
+        : mode === 'overcap'
+          ? sectorCells(513, -75, 10)
+          : mode === 'full'
+            ? sectorCells(512, -75, 10)
+            : [[-75, 10, 290, 7], [-75.5, 10, 10, 2]];
+      const west = mode === 'partial' ? null : mode === 'full' ? sectorCells(512, -137, 5) : [];
+      const sectors = mode === 'duplicate'
+        ? [
+            { satellite: 'GOES-19', center_lon: -75.2, cells: [[-75, 10, 10, 1]] },
+            { satellite: 'GOES-19', center_lon: -75.2, cells: [[-80, 4, 10, 1]] },
+          ]
+        : [
+            { satellite: 'GOES-19', center_lon: -75.2, cells: east },
+            { satellite: 'GOES-18', center_lon: -137, cells: west },
+          ];
       await route.fulfill({ json: {
         schema: 1, start: utc(end - 300_000), end: utc(end), generated_at: utc(end + 30_000),
-        radius_km: 5500, sectors: [
-          { satellite: 'GOES-19', center_lon: -75.2, cells: mode === 'overlap'
-            ? [[reef.lon, reef.lat, 290, 7]] : [[-75, 10, 290, 7], [-75.5, 10, 10, 2]] },
-          { satellite: 'GOES-18', center_lon: -137, cells: mode === 'partial' ? null : [] },
-        ],
+        radius_km: 5500, sectors,
       } });
     });
     await page.goto(`${baseUrl}/?e2e`, { waitUntil: 'domcontentloaded' });
@@ -196,6 +232,61 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
     evidence.targetOpened = 'Verify Reef';
     await page.locator('.maplibregl-popup-close-button').first().click();
     await pan(-75, 10);
+    heldEnd = observationEnd;
+    if (!Number.isFinite(heldEnd)) throw new Error('map-lightning held window missing');
+    mode = 'held';
+    phase = 'forward-jump';
+    const pageNow = await page.evaluate(() => Date.now());
+    await page.evaluate((jumped) => {
+      globalThis.__opdLightningNow = Date.now;
+      Date.now = () => jumped;
+      window.__opdMap.fire('moveend');
+    }, pageNow + 3_600_000);
+    await expectLabel('forwardJump', 'stale');
+    assert.equal(await page.evaluate(() => window.__opdMap.getLayoutProperty('lightning-layer', 'visibility')), 'none');
+    const pollsAtJump = requests;
+    await nextPoll('forwardPoll');
+    evidence.clockJump = { pollsAtJump, pollsWhileJumped: requests };
+    assert.ok(requests > pollsAtJump);
+    await expectLabel('forwardPolled', 'stale');
+    assert.equal(await page.evaluate(() => window.__opdMap.getLayoutProperty('lightning-layer', 'visibility')), 'none');
+    mode = 'observed';
+    await page.evaluate(() => {
+      Date.now = globalThis.__opdLightningNow;
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    const pollsAtRestore = requests;
+    await nextPoll('resumePoll');
+    evidence.clockJump.pollsAfterRestore = requests;
+    assert.ok(requests > pollsAtRestore);
+    phase = 'resumed';
+    await page.waitForFunction(() => {
+      const text = document.querySelector('#lightning-status')?.textContent ?? '';
+      return /feed [0-3]m old/.test(text) && !text.includes('stale') && !text.includes('ahead of clock');
+    });
+    evidence.labels.resumed = await readout.innerText();
+    assert.equal(await page.evaluate(() => window.__opdMap.getLayoutProperty('lightning-layer', 'visibility')), 'visible');
+    const kept = await flashCoords();
+    assert.ok(kept.length > 0);
+    mode = 'overcap';
+    await nextPoll('overcap');
+    await expectLabel('overcap', 'refresh unavailable');
+    assert.deepEqual(await flashCoords(), kept);
+    mode = 'duplicate';
+    await nextPoll('duplicate');
+    await expectLabel('duplicate', 'refresh unavailable');
+    assert.deepEqual(await flashCoords(), kept);
+    evidence.rejection = { kept: kept.length, overcap: 513, duplicate: 'GOES-19' };
+    mode = 'full';
+    await pan(-75, 10);
+    await nextPoll('full');
+    await expectLabel('full', '512 observed flashes');
+    const accepted = await flashCoords();
+    assert.equal(accepted.length, 1024);
+    evidence.cap = { perSatellite: 512, accepted: accepted.length };
+    assert.equal(await page.evaluate(() => window.__opdMap.getLayoutProperty('lightning-layer', 'visibility')), 'visible');
+    assert.equal((await readout.innerText()).includes('refresh unavailable'), false);
+    await page.screenshot({ path: join(evidenceDir, `map-lightning-cap-${size}.png`) });
     await toggle.tap();
     mode = 'expiry';
     phase = 'expiry-visible';
@@ -215,7 +306,7 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
     await toggle.tap();
     assert.equal(await readout.isVisible(), false);
     await writeFile(join(evidenceDir, `map-lightning-${size}.json`), JSON.stringify(evidence, null, 2));
-    return `map-lightning WebKit ${size} created-at-size: IR, circles, order, clock, zero, stale, unavailable, coverage passed`;
+    return `map-lightning WebKit ${size} created-at-size: IR, circles, order, clock, jump, cap, dedupe, zero, stale, unavailable, coverage passed`;
   } catch (error) {
     const state = page ? await page.evaluate(() => ({
       label: document.getElementById('lightning-status')?.textContent,
