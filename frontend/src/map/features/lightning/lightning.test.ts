@@ -118,6 +118,45 @@ it('expires at the observation deadline between periodic ticks', async () => {
   expect(status.textContent).toContain('stale');
 });
 
+it('polls within the next two minutes after a forward clock jump and correction', async () => {
+  const { button, vendor, status, fetcher } = mountFeed();
+  vendor.setCenter([-80, 4]);
+  fetcher.mockImplementation(() => Promise.resolve(Response.json(raw)));
+  button.click();
+  await vi.advanceTimersByTimeAsync(1);
+  vi.setSystemTime(now + 3_600_000);
+  await vi.advanceTimersByTimeAsync(120_000);
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  expect(status.textContent).toContain('stale');
+
+  vi.setSystemTime(now + 120_000);
+  document.dispatchEvent(new Event('visibilitychange'));
+  window.dispatchEvent(new Event('pageshow'));
+  fetcher.mockResolvedValueOnce(Response.json({
+    ...raw, start: '2026-10-26T11:59:00Z', end: '2026-10-26T12:04:00Z', generated_at: '2026-10-26T12:05:00Z',
+  }));
+  await vi.advanceTimersByTimeAsync(120_000);
+  expect(fetcher).toHaveBeenCalledTimes(3);
+  expect(status.textContent).toContain('11:59–12:04 UTC · feed 2m old');
+  expect(vendor.visibilityOf('lightning-layer')).toBe('visible');
+});
+
+it('keeps future observations hidden without overflowing browser timers after a 30-day rollback', async () => {
+  const { button, vendor, status } = mountFeed();
+  button.click();
+  await vi.advanceTimersByTimeAsync(1);
+  vi.setSystemTime(now - 30 * 86_400_000);
+  const timer = vi.spyOn(globalThis, 'setTimeout');
+  try {
+    vendor.fire('moveend', undefined);
+    expect(status.textContent).toContain('ahead of clock');
+    expect(vendor.visibilityOf('lightning-layer')).toBe('none');
+    expect(timer.mock.calls.map(([, delay]) => delay).filter(delay => Number(delay) > 2_147_483_647)).toEqual([]);
+  } finally {
+    timer.mockRestore();
+  }
+});
+
 it.each(['visibilitychange', 'pageshow'])('rechecks cached expiry on %s after a suspended page resumes', async event => {
   const { button, vendor } = mountFeed();
   button.click();
@@ -148,6 +187,7 @@ it('does not upload data or replace unchanged status on camera moves within an a
 
 it.each([404, 200])('ignores a prior loading request returning HTTP %s after off and back on', async code => {
   const { button, vendor, status, fetcher } = mountFeed();
+  vendor.setCenter([-80, 4]);
   const oldRequest = Promise.withResolvers<Response>();
   const newRequest = Promise.withResolvers<Response>();
   fetcher.mockReset().mockReturnValueOnce(oldRequest.promise).mockReturnValueOnce(newRequest.promise);
@@ -160,12 +200,16 @@ it.each([404, 200])('ignores a prior loading request returning HTTP %s after off
   await vi.advanceTimersByTimeAsync(1);
   expect(vendor.visibilityOf('lightning-layer')).toBe('visible');
   const accepted = status.textContent;
+  expect(accepted).toContain('GOES-19 sector · 3 observed flashes');
+  const acceptedSource = vendor.sources.get('lightning');
+  expect(acceptedSource).toMatchObject({ data: { features: [{ geometry: { coordinates: [-80, 4] } }] } });
   oldRequest.resolve(code === 404 ? new Response('', { status: 404 }) : Response.json({
-    ...raw, sectors: [{ ...raw.sectors[0], cells: [[-80, 4, 200, 100]] }, raw.sectors[1]],
+    ...raw, sectors: [{ ...raw.sectors[0], cells: [[-85, 9, 200, 100]] }, raw.sectors[1]],
   }));
   await vi.advanceTimersByTimeAsync(1);
   vendor.fire('moveend', undefined);
-  expect(status.textContent).toBe(accepted);
+  expect.soft(status.textContent).toBe(accepted);
+  expect(vendor.sources.get('lightning')).toEqual(acceptedSource);
   expect(vendor.visibilityOf('lightning-layer')).toBe('visible');
   expect(fetcher).toHaveBeenCalledTimes(2);
 });

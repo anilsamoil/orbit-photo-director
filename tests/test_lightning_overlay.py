@@ -147,6 +147,7 @@ def test_refresh_atomically_replaces_a_prior_feed_and_refuses_a_second_owner(tmp
     published.write_text("prior")
     with (folder / ".publisher.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        monkeypatch.setattr("generator.lightning_overlay._glm_granule_urls", lambda *_: [])
         with pytest.raises(BlockingIOError):
             refresh(tmp_path)
         assert published.read_text() == "prior"
@@ -204,12 +205,12 @@ def test_killed_publisher_releases_lock_for_next_process(tmp_path, monkeypatch):
     try:
         assert receive.poll(10), "publisher did not acquire its lock"
         assert receive.recv() == "locked"
+        monkeypatch.setattr("generator.lightning_overlay._glm_granule_urls", lambda *_: [])
         with pytest.raises(BlockingIOError):
             refresh(tmp_path)
         child.kill()
         child.join(timeout=10)
         assert child.exitcode is not None
-        monkeypatch.setattr("generator.lightning_overlay._glm_granule_urls", lambda *_: [])
         artifact = refresh(tmp_path)
         assert all(sector["cells"] is None for sector in artifact["sectors"])
     finally:
