@@ -27,6 +27,7 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
     const toggle = page.getByRole('button', { name: 'Lightning', exact: true });
     let mode = 'observed';
     let requests = 0;
+    let observationEnd;
     let releaseLoading;
     let loadingStarted;
     let loadingFinished;
@@ -43,7 +44,9 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
         return;
       }
       if (mode === 'missing') return route.fulfill({ status: 404, body: '' });
-      const end = Date.now() + startOffset - (mode === 'stale' ? 9 : 2) * 60_000;
+      const age = mode === 'expiry' ? 475_000 : (mode === 'stale' ? 9 : 2) * 60_000;
+      const end = Date.now() + startOffset - age;
+      observationEnd = end;
       const utc = ms => new Date(ms).toISOString();
       await route.fulfill({ json: {
         schema: 1, start: utc(end - 300_000), end: utc(end), generated_at: utc(end + 30_000),
@@ -119,6 +122,21 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
     await page.waitForFunction(() => window.__opdMap.getLayoutProperty('geo-ir-layer', 'visibility') === 'visible');
     evidence.ir = await page.locator('.map-imagery-date').innerText();
     assert.match(evidence.ir, /GOES-East.*(frame \d\d:\d\d UTC|feed unavailable)/);
+    evidence.rollback = await page.evaluate(end => {
+      const original = Date.now;
+      Date.now = () => end - 1;
+      window.__opdMap.fire('moveend');
+      const result = {
+        visibility: window.__opdMap.getLayoutProperty('lightning-layer', 'visibility'),
+        text: document.getElementById('lightning-status').textContent,
+      };
+      Date.now = original;
+      document.dispatchEvent(new Event('visibilitychange'));
+      return result;
+    }, observationEnd);
+    assert.equal(evidence.rollback.visibility, 'none');
+    assert.match(evidence.rollback.text, /ahead of clock/);
+    await page.waitForFunction(() => window.__opdMap.getLayoutProperty('lightning-layer', 'visibility') === 'visible');
     await page.screenshot({ path: join(evidenceDir, `map-lightning-${size}.png`) });
     await page.locator('#time-fwd-45').tap();
     await expectLabel('scrubbed', 'hidden at scrubbed time');
@@ -166,6 +184,13 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
     evidence.targetOpened = 'Verify Reef';
     await page.locator('.maplibregl-popup-close-button').first().click();
     await pan(-75, 10);
+    await toggle.tap();
+    mode = 'expiry';
+    await toggle.tap();
+    await page.waitForFunction(() => window.__opdMap.getLayoutProperty('lightning-layer', 'visibility') === 'visible');
+    await page.waitForFunction(() => window.__opdMap.getLayoutProperty('lightning-layer', 'visibility') === 'none', null, { timeout: 8_000 });
+    await expectLabel('exactExpiry', 'stale');
+    evidence.expiration = { deadline: observationEnd + 480_000, hiddenAt: Date.now() + startOffset };
     for (const [state, text] of [['stale', 'stale'], ['missing', 'Feed unavailable']]) {
       await toggle.tap();
       mode = state;
