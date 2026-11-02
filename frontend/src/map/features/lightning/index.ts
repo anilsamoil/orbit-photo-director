@@ -14,19 +14,30 @@ export const lightning: MapFeature = {
     let refreshFailed = false;
     let stopTick: (() => void) | undefined;
     let nextPoll = 0;
+    let expiry: ReturnType<typeof setTimeout> | null = null;
+    let rendered: { feed: LightningFeed; ageBucket: number } | null = null;
+
+    function cancelExpiry() {
+      if (expiry !== null) clearTimeout(expiry);
+      expiry = null;
+    }
 
     function paint() {
       if (!enabled || !status) return;
       const now = core.clock.now();
       const scrubbed = core.clock.isScrubbed();
-      const label = feed ? observationLabel(feed, now, core.center())
+      const future = feed !== null && now < feed.end;
+      const label = future ? 'Observations ahead of clock · hidden'
+        : feed ? observationLabel(feed, now, core.center())
         : request ? 'Loading observations…' : 'Feed unavailable';
-      status.textContent = 'NOAA GLM · ' + label
+      const text = 'NOAA GLM · ' + label
         + (feed && refreshFailed ? ' · refresh unavailable' : '')
         + (scrubbed ? ' · hidden at scrubbed time' : '');
-      const visible = feed && !scrubbed && now - feed.end < STALE_MS;
-      if (feed && visible) {
-        core.setGeoJson('lightning', flashFeatures(feed, now));
+      if (status.textContent !== text) status.textContent = text;
+      const visible = feed && !future && !scrubbed && now - feed.end < STALE_MS;
+      const ageBucket = feed ? Math.floor((now - feed.end) / 30_000) : 0;
+      if (feed && visible && (rendered?.feed !== feed || rendered.ageBucket !== ageBucket)) {
+        core.setGeoJson('lightning', flashFeatures(feed, feed.end + ageBucket * 30_000));
         core.ensureLayer({
           id: 'lightning-layer', source: 'lightning', type: 'circle',
           paint: {
@@ -35,8 +46,13 @@ export const lightning: MapFeature = {
             'circle-opacity': ['interpolate', ['linear'], ['get', 'ageSeconds'], 0, 1, 300, 0.7, 780, 0.14],
           },
         });
+        rendered = { feed, ageBucket };
       }
       core.setVisibility('lightning-layer', visible ? 'visible' : 'none');
+      cancelExpiry();
+      if (feed && feed.end + STALE_MS > now) {
+        expiry = setTimeout(paint, feed.end + STALE_MS - now);
+      }
     }
 
     async function poll() {
@@ -78,14 +94,18 @@ export const lightning: MapFeature = {
         });
       } else {
         stopTick?.();
+        cancelExpiry();
         request?.abort();
         request = null;
         feed = null;
+        rendered = null;
         refreshFailed = false;
         core.setVisibility('lightning-layer', 'none');
       }
     });
     core.clock.onViewTime(paint);
     core.on('moveend', paint);
+    document.addEventListener('visibilitychange', paint);
+    window.addEventListener('pageshow', paint);
   },
 };

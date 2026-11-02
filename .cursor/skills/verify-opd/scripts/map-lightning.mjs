@@ -27,15 +27,29 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
     const toggle = page.getByRole('button', { name: 'Lightning', exact: true });
     let mode = 'observed';
     let requests = 0;
+    let releaseLoading;
+    let loadingStarted;
+    let loadingFinished;
+    const loading = new Promise(resolve => { loadingStarted = resolve; });
+    const resumeLoading = new Promise(resolve => { releaseLoading = resolve; });
+    const completedLoading = new Promise(resolve => { loadingFinished = resolve; });
     await page.route('**/lightning/latest.json', async route => {
       requests += 1;
+      if (mode === 'loading') {
+        loadingStarted();
+        await resumeLoading;
+        await route.fulfill({ status: 404, body: '' }).catch(() => {});
+        loadingFinished();
+        return;
+      }
       if (mode === 'missing') return route.fulfill({ status: 404, body: '' });
       const end = Date.now() + startOffset - (mode === 'stale' ? 9 : 2) * 60_000;
       const utc = ms => new Date(ms).toISOString();
       await route.fulfill({ json: {
         schema: 1, start: utc(end - 300_000), end: utc(end), generated_at: utc(end + 30_000),
         radius_km: 5500, sectors: [
-          { satellite: 'GOES-19', center_lon: -75.2, cells: [[-75, 10, 290, 7], [-75.5, 10, 10, 2]] },
+          { satellite: 'GOES-19', center_lon: -75.2, cells: mode === 'overlap'
+            ? [[reef.lon, reef.lat, 290, 7]] : [[-75, 10, 290, 7], [-75.5, 10, 10, 2]] },
           { satellite: 'GOES-18', center_lon: -137, cells: mode === 'partial' ? null : [] },
         ],
       } });
@@ -61,6 +75,36 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
       .sort((a, b) => a.age - b.age));
     const newer = evidence.flashPaint[0], older = evidence.flashPaint.at(-1);
     assert.ok(newer.age < older.age && newer.opacity > older.opacity && older.opacity > 0);
+    evidence.movement = await page.evaluate(() => {
+      const map = window.__opdMap;
+      const source = map.getSource('lightning');
+      const original = source.setData;
+      let uploads = 0;
+      source.setData = function (...args) { uploads += 1; return original.apply(this, args); };
+      const status = document.getElementById('lightning-status');
+      const observer = new MutationObserver(() => {});
+      observer.observe(status, { childList: true });
+      for (let i = 0; i < 60; i++) map.fire('moveend');
+      const statusWrites = observer.takeRecords().length;
+      observer.disconnect();
+      source.setData = original;
+      return { moves: 60, uploads, statusWrites };
+    });
+    assert.equal(evidence.movement.uploads, 0);
+    assert.equal(evidence.movement.statusWrites, 0);
+    await toggle.tap();
+    mode = 'loading';
+    await toggle.tap();
+    await loading;
+    await expectLabel('loading', 'Loading observations');
+    await toggle.tap();
+    mode = 'observed';
+    await toggle.tap();
+    await expectLabel('newRequest', '9 observed flashes');
+    releaseLoading();
+    await completedLoading;
+    await expectLabel('afterCancelledRequest', '9 observed flashes');
+    evidence.loadingToggle = { requests, retainedNewFeed: true };
     evidence.order = await page.evaluate(() => window.__opdMap.getStyle().layers.map(layer => layer.id));
     for (const above of ['targets-layer', 'iss-track-layer']) {
       assert.ok(evidence.order.indexOf('lightning-layer') < evidence.order.indexOf(above));
@@ -75,6 +119,14 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
     await expectLabel('scrubbed', 'hidden at scrubbed time');
     assert.equal(await page.evaluate(() => window.__opdMap.getLayoutProperty('lightning-layer', 'visibility')), 'none');
     await page.locator('#time-now').tap();
+    for (const [key, lon, owner] of [
+      ['boundaryWest', -106.101, 'GOES-18'],
+      ['boundaryTie', -106.1, 'GOES-19'],
+      ['boundaryEast', -106.099, 'GOES-19'],
+    ]) {
+      await pan(lon, 0);
+      await expectLabel(key, `${owner} sector`);
+    }
     await pan(-137, 5);
     await expectLabel('west', '0 observed flashes');
     await toggle.tap();
@@ -85,16 +137,25 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
     await expectLabel('eastStillAvailable', '9 observed flashes');
     await pan(20, 15);
     await expectLabel('outside', 'outside GLM coverage');
+    await toggle.tap();
+    mode = 'overlap';
+    await toggle.tap();
     await pan(reef.lon, reef.lat);
     const pin = await page.waitForFunction(({ lon, lat }) => {
       const map = window.__opdMap;
       const point = map.project([lon, lat]);
       const hits = map.queryRenderedFeatures(point, { layers: ['targets-layer'] });
       if (!hits.some(hit => hit.properties.target_id === 'verify-reef')) return null;
+      const flashes = map.queryRenderedFeatures(point, { layers: ['lightning-layer'] });
+      if (!flashes.some(hit => Math.abs(hit.geometry.coordinates[0] - lon) < 1e-6
+          && Math.abs(hit.geometry.coordinates[1] - lat) < 1e-6)) return null;
       const rect = map.getCanvas().getBoundingClientRect();
-      return [point.x + rect.left, point.y + rect.top];
+      return { touch: [point.x + rect.left, point.y + rect.top],
+        pin: [lon, lat], dot: flashes[0].geometry.coordinates };
     }, reef);
-    const [x, y] = await pin.jsonValue();
+    evidence.overlap = await pin.jsonValue();
+    const [x, y] = evidence.overlap.touch;
+    await page.screenshot({ path: join(evidenceDir, `map-lightning-overlap-${size}.png`) });
     await page.touchscreen.tap(x, y);
     await page.locator('.maplibregl-popup').filter({ hasText: 'Verify Reef' }).waitFor();
     evidence.targetOpened = 'Verify Reef';

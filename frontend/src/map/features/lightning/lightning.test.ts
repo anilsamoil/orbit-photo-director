@@ -102,7 +102,7 @@ it.each([false, true])('hides cached observations after a backward clock change,
   await vi.advanceTimersByTimeAsync(1);
   if (expired) await vi.advanceTimersByTimeAsync(390_000);
   vi.setSystemTime(Date.parse(raw.end) - 60_000);
-  vendor.fire('moveend', {});
+  vendor.fire('moveend', undefined);
   expect(vendor.visibilityOf('lightning-layer')).toBe('none');
   expect(status.textContent).toContain('ahead of clock');
   expect(status.textContent).not.toContain('feed -');
@@ -134,11 +134,11 @@ it('does not upload data or replace unchanged status on camera moves within an a
   const setData = vi.spyOn(vendor, 'setGeoJson');
   const observer = new MutationObserver(() => {});
   observer.observe(status, { childList: true });
-  for (let i = 0; i < 60; i++) vendor.fire('moveend', {});
+  for (let i = 0; i < 60; i++) vendor.fire('moveend', undefined);
   expect(setData).toHaveBeenCalledTimes(0);
   expect(observer.takeRecords()).toHaveLength(0);
   vendor.setCenter([-140, 0]);
-  vendor.fire('moveend', {});
+  vendor.fire('moveend', undefined);
   expect(status.textContent).toContain('GOES-18 sector · 0 observed flashes');
   expect(setData).toHaveBeenCalledTimes(0);
   await vi.advanceTimersByTimeAsync(30_000);

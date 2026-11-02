@@ -1,8 +1,8 @@
+import multiprocessing
+import os
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-import selectors
-import subprocess
-import sys
 
 import pytest
 
@@ -11,6 +11,36 @@ from generator.lightning_overlay import WINDOW, _cells, build_overlay
 
 END = datetime(2026, 10, 26, 17, tzinfo=UTC)
 START = END - WINDOW
+
+
+def _interrupted_publisher(output):
+    import generator.lightning_overlay as overlay
+
+    overlay._glm_granule_urls = lambda *_: []
+    original = Path.write_text
+
+    def interrupted(path, text, *args, **kwargs):
+        if path.name not in {".latest.tmp", "latest.json"}:
+            return original(path, text, *args, **kwargs)
+        with path.open("w") as stream:
+            stream.write(text[:len(text) // 2])
+            stream.flush()
+            os._exit(17)
+
+    Path.write_text = interrupted
+    overlay.refresh(output)
+
+
+def _lock_holder(output, ready):
+    import generator.lightning_overlay as overlay
+
+    def hold(*_):
+        ready.send("locked")
+        threading.Event().wait()
+        return []
+
+    overlay._glm_granule_urls = hold
+    overlay.refresh(output)
 
 
 def slots():
@@ -43,6 +73,17 @@ def test_sector_mosaic_duplicate_file_and_boundary_flash():
     sectors = build_overlay(END, END, files)["sectors"]
     assert [s["cells"] for s in sectors] == [[[-95, 0, 299, 1]], [[-115, 0, 299, 1]]]
     assert build_overlay(END, END, reversed(files))["sectors"] == sectors
+
+
+def test_ownership_meridian_assigns_east_west_and_tie_once():
+    files = slots()
+    flashes = [_GLMFlash(0, lon, END - timedelta(seconds=1))
+               for lon in [-106.101, -106.1, -106.099]]
+    for index in [15, 31]:
+        satellite, granule = files[index]
+        files[index] = satellite, _GLMGranule(granule.start, flashes)
+    sectors = build_overlay(END, END, files)["sectors"]
+    assert [sum(cell[3] for cell in sector["cells"]) for sector in sectors] == [2, 1]
 
 
 def test_expanding_grid_preserves_every_count_and_uses_real_positions():
@@ -119,24 +160,16 @@ def test_process_crash_mid_write_preserves_published_bytes(tmp_path):
     folder.mkdir()
     published = folder / "latest.json"
     published.write_bytes(b"previous complete artifact")
-    result = subprocess.run([sys.executable, "-c", """
-import os
-import sys
-from pathlib import Path
-import generator.lightning_overlay as overlay
-overlay._glm_granule_urls = lambda *_: []
-original = Path.write_text
-def interrupted(path, text, *args, **kwargs):
-    if path.name not in {'.latest.tmp', 'latest.json'}:
-        return original(path, text, *args, **kwargs)
-    with path.open('w') as output:
-        output.write(text[:len(text) // 2])
-        output.flush()
-        os._exit(17)
-Path.write_text = interrupted
-overlay.refresh(Path(sys.argv[1]))
-""", str(tmp_path)], capture_output=True, timeout=15)
-    assert result.returncode == 17, result.stderr.decode()
+    child = multiprocessing.get_context("spawn").Process(target=_interrupted_publisher, args=(tmp_path,))
+    child.start()
+    try:
+        child.join(timeout=15)
+        assert child.exitcode == 17
+    finally:
+        if child.is_alive():
+            child.kill()
+            child.join(timeout=10)
+        child.close()
     assert published.read_bytes() == b"previous complete artifact"
 
 
@@ -164,33 +197,25 @@ def test_failure_before_rename_preserves_published_bytes(tmp_path, monkeypatch):
 def test_killed_publisher_releases_lock_for_next_process(tmp_path, monkeypatch):
     from generator.lightning_overlay import refresh
 
-    child = subprocess.Popen([sys.executable, "-c", """
-import sys
-from pathlib import Path
-import generator.lightning_overlay as overlay
-def hold(*_):
-    print('locked', flush=True)
-    sys.stdin.buffer.read(1)
-    return []
-overlay._glm_granule_urls = hold
-overlay.refresh(Path(sys.argv[1]))
-""", str(tmp_path)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    context = multiprocessing.get_context("spawn")
+    receive, send = context.Pipe(duplex=False)
+    child = context.Process(target=_lock_holder, args=(tmp_path, send))
+    child.start()
     try:
-        with selectors.DefaultSelector() as selector:
-            selector.register(child.stdout, selectors.EVENT_READ)
-            assert selector.select(10), "publisher did not acquire its lock"
-        assert child.stdout.readline() == b"locked\n"
+        assert receive.poll(10), "publisher did not acquire its lock"
+        assert receive.recv() == "locked"
         with pytest.raises(BlockingIOError):
             refresh(tmp_path)
         child.kill()
-        child.wait(timeout=10)
+        child.join(timeout=10)
+        assert child.exitcode is not None
         monkeypatch.setattr("generator.lightning_overlay._glm_granule_urls", lambda *_: [])
         artifact = refresh(tmp_path)
         assert all(sector["cells"] is None for sector in artifact["sectors"])
     finally:
-        if child.poll() is None:
+        if child.is_alive():
             child.kill()
-            child.wait(timeout=10)
-        for stream in [child.stdin, child.stdout, child.stderr]:
-            if stream:
-                stream.close()
+            child.join(timeout=10)
+        child.close()
+        receive.close()
+        send.close()

@@ -34,18 +34,18 @@ def _cells(flashes: list[_GLMFlash], start: datetime) -> list[list[float | int]]
     """One actual centroid per occupied cell. Coarsen until every cell fits."""
     size = 0.25
     while True:
-        cells: dict[tuple[int, int], tuple[int, tuple[int, float, float]]] = {}
+        cells: dict[tuple[int, int], tuple[int, tuple[datetime, float, float]]] = {}
         for flash in flashes:
             key = (math.floor(flash.lat / size), math.floor(flash.lon / size))
-            sample = (int((flash.t - start).total_seconds()), flash.lon, flash.lat)
+            sample = (flash.t, flash.lon, flash.lat)
             previous = cells.get(key)
             cells[key] = (1, sample) if previous is None else (
                 previous[0] + 1, max(previous[1], sample)
             )
         if len(cells) <= MAX_CELLS_PER_SECTOR:
             return [
-                [round(lon, 3), round(lat, 3), offset, count]
-                for _, (count, (offset, lon, lat)) in sorted(cells.items())
+                [round(lon, 3), round(lat, 3), int((time - start).total_seconds()), count]
+                for _, (count, (time, lon, lat)) in sorted(cells.items())
             ]
         size *= 2
 
