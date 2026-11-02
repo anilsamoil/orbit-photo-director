@@ -46,8 +46,26 @@ const MUTATIONS = [
   {
     contract: 'recent lightning disappears on a scrub',
     file: 'src/map/features/lightning/index.ts',
-    find: 'feed && !scrubbed && now - feed.end < STALE_MS',
-    replace: 'feed && now - feed.end < STALE_MS',
+    find: 'feed && !future && !scrubbed && now - feed.end < STALE_MS',
+    replace: 'feed && !future && now - feed.end < STALE_MS',
+  },
+  {
+    contract: 'cached lightning stays hidden when the wall clock moves before its observation end',
+    file: 'src/map/features/lightning/index.ts',
+    find: 'feed && !future && !scrubbed && now - feed.end < STALE_MS',
+    replace: 'feed && !scrubbed && now - feed.end < STALE_MS',
+  },
+  {
+    contract: 'lightning expires between periodic repaint ticks',
+    file: 'src/map/features/lightning/index.ts',
+    find: 'expiry = setTimeout(paint, feed.end + STALE_MS - now);',
+    replace: 'expiry = null;',
+  },
+  {
+    contract: 'camera movement leaves unchanged lightning data alone',
+    file: 'src/map/features/lightning/index.ts',
+    find: 'if (feed && visible && (rendered?.feed !== feed || rendered.ageBucket !== ageBucket))',
+    replace: 'if (feed && visible)',
   },
   {
     contract: 'night overlays stay below the ISS ground track',
