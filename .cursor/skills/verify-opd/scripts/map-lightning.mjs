@@ -15,13 +15,15 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
   const viewport = { width, height };
   const { reef } = JSON.parse(await readFile(join(fixtureDir, 'meta.json'), 'utf8'));
   const browser = await launchWebkit();
+  let page;
+  let phase = 'boot';
   try {
     const context = await createDeviceContext(browser, {
       ...deviceDescriptor({ name: phone ? 'iPhone 17 Pro' : 'iPad Pro 11' }),
       viewport, screen: viewport, deviceScaleFactor: phone ? 3 : 2,
     }, { baseUrl, token: fixtureToken, startOffset });
     await context.addInitScript(() => localStorage.setItem('opd-map-chrome', 'shown'));
-    const page = await context.newPage();
+    page = await context.newPage();
     const evidence = { viewport, labels: {} };
     const readout = page.locator('#lightning-status');
     const toggle = page.getByRole('button', { name: 'Lightning', exact: true });
@@ -64,6 +66,7 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
     if (await follow.getAttribute('aria-pressed') === 'true') await follow.tap();
     const pan = async (lon, lat) => page.evaluate(center => window.__opdMap.jumpTo({ center, zoom: 4 }), [lon, lat]);
     const expectLabel = async (key, text) => {
+      phase = key;
       await page.waitForFunction(part => document.querySelector('#lightning-status')?.textContent.includes(part), text);
       evidence.labels[key] = await readout.innerText();
     };
@@ -164,17 +167,26 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
     mode = 'overlap';
     await toggle.tap();
     await pan(reef.lon, reef.lat);
+    phase = 'pin-overlap';
     const pin = await page.waitForFunction(({ lon, lat }) => {
       const map = window.__opdMap;
       const point = map.project([lon, lat]);
       const hits = map.queryRenderedFeatures(point, { layers: ['targets-layer'] });
       if (!hits.some(hit => hit.properties.target_id === 'verify-reef')) return null;
       const flashes = map.queryRenderedFeatures(point, { layers: ['lightning-layer'] });
-      if (!flashes.some(hit => Math.abs(hit.geometry.coordinates[0] - lon) < 1e-6
-          && Math.abs(hit.geometry.coordinates[1] - lat) < 1e-6)) return null;
+      const overlap = flashes.map(hit => {
+        const dot = map.project(hit.geometry.coordinates);
+        return {
+          coordinates: hit.geometry.coordinates,
+          pixelDistance: Math.hypot(dot.x - point.x, dot.y - point.y),
+          radius: hit.layer.paint['circle-radius'],
+          opacity: hit.layer.paint['circle-opacity'],
+        };
+      }).find(dot => dot.opacity > 0 && dot.pixelDistance <= dot.radius);
+      if (!overlap) return null;
       const rect = map.getCanvas().getBoundingClientRect();
       return { touch: [point.x + rect.left, point.y + rect.top],
-        pin: [lon, lat], dot: flashes[0].geometry.coordinates };
+        pin: [lon, lat], dot: overlap };
     }, reef);
     evidence.overlap = await pin.jsonValue();
     const [x, y] = evidence.overlap.touch;
@@ -186,8 +198,10 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
     await pan(-75, 10);
     await toggle.tap();
     mode = 'expiry';
+    phase = 'expiry-visible';
     await toggle.tap();
     await page.waitForFunction(() => window.__opdMap.getLayoutProperty('lightning-layer', 'visibility') === 'visible');
+    phase = 'expiry-hidden';
     await page.waitForFunction(() => window.__opdMap.getLayoutProperty('lightning-layer', 'visibility') === 'none', null, { timeout: 8_000 });
     await expectLabel('exactExpiry', 'stale');
     evidence.expiration = { deadline: observationEnd + 480_000, hiddenAt: Date.now() + startOffset };
@@ -202,6 +216,15 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
     assert.equal(await readout.isVisible(), false);
     await writeFile(join(evidenceDir, `map-lightning-${size}.json`), JSON.stringify(evidence, null, 2));
     return `map-lightning WebKit ${size} created-at-size: IR, circles, order, clock, zero, stale, unavailable, coverage passed`;
+  } catch (error) {
+    const state = page ? await page.evaluate(() => ({
+      label: document.getElementById('lightning-status')?.textContent,
+      center: window.__opdMap?.getCenter(),
+      visibility: window.__opdMap?.getLayoutProperty('lightning-layer', 'visibility'),
+      dots: window.__opdMap?.queryRenderedFeatures({ layers: ['lightning-layer'] }).map(f => f.geometry),
+    })).catch(() => null) : null;
+    if (page) await page.screenshot({ path: join(evidenceDir, `map-lightning-failed-${size}.png`) }).catch(() => {});
+    throw new Error(`map-lightning ${phase}: ${error.message}; state ${JSON.stringify(state)}`, { cause: error });
   } finally {
     await browser.close();
   }
