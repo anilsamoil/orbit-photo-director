@@ -77,6 +77,10 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
     assert.ok(newer.age < older.age && newer.opacity > older.opacity && older.opacity > 0);
     evidence.movement = await page.evaluate(() => {
       const map = window.__opdMap;
+      const originalNow = Date.now;
+      const heldNow = Date.now();
+      Date.now = () => heldNow;
+      map.fire('moveend');
       const source = map.getSource('lightning');
       const original = source.setData;
       let uploads = 0;
@@ -88,7 +92,8 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
       const statusWrites = observer.takeRecords().length;
       observer.disconnect();
       source.setData = original;
-      return { moves: 60, uploads, statusWrites };
+      Date.now = originalNow;
+      return { moves: 60, atMs: heldNow, uploads, statusWrites };
     });
     assert.equal(evidence.movement.uploads, 0);
     assert.equal(evidence.movement.statusWrites, 0);
