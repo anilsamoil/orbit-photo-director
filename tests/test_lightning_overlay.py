@@ -1,4 +1,8 @@
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+import selectors
+import subprocess
+import sys
 
 import pytest
 
@@ -51,6 +55,13 @@ def test_expanding_grid_preserves_every_count_and_uses_real_positions():
     assert all((lat, lon) in positions for lon, lat, _, _ in rows)
 
 
+def test_newest_centroid_uses_subsecond_time_before_serializing():
+    older = _GLMFlash(10.20, -80.01, START + timedelta(seconds=17.027927))
+    newer = _GLMFlash(10.10, -80.10, START + timedelta(seconds=17.773331))
+    assert _cells([older, newer], START) == [[-80.1, 10.1, 17, 2]]
+    assert _cells([newer, older], START) == [[-80.1, 10.1, 17, 2]]
+
+
 def test_quality_platform_and_complete_granule_required(tmp_path):
     import netCDF4
 
@@ -101,3 +112,85 @@ def test_refresh_atomically_replaces_a_prior_feed_and_refuses_a_second_owner(tmp
     artifact = refresh(tmp_path)
     assert json.loads(published.read_text()) == artifact
     assert all(s["cells"] is None for s in artifact["sectors"])
+
+
+def test_process_crash_mid_write_preserves_published_bytes(tmp_path):
+    folder = tmp_path / "lightning"
+    folder.mkdir()
+    published = folder / "latest.json"
+    published.write_bytes(b"previous complete artifact")
+    result = subprocess.run([sys.executable, "-c", """
+import os
+import sys
+from pathlib import Path
+import generator.lightning_overlay as overlay
+overlay._glm_granule_urls = lambda *_: []
+original = Path.write_text
+def interrupted(path, text, *args, **kwargs):
+    if path.name not in {'.latest.tmp', 'latest.json'}:
+        return original(path, text, *args, **kwargs)
+    with path.open('w') as output:
+        output.write(text[:len(text) // 2])
+        output.flush()
+        os._exit(17)
+Path.write_text = interrupted
+overlay.refresh(Path(sys.argv[1]))
+""", str(tmp_path)], capture_output=True, timeout=15)
+    assert result.returncode == 17, result.stderr.decode()
+    assert published.read_bytes() == b"previous complete artifact"
+
+
+def test_failure_before_rename_preserves_published_bytes(tmp_path, monkeypatch):
+    from generator.lightning_overlay import refresh
+
+    folder = tmp_path / "lightning"
+    folder.mkdir()
+    published = folder / "latest.json"
+    published.write_bytes(b"previous complete artifact")
+    monkeypatch.setattr("generator.lightning_overlay._glm_granule_urls", lambda *_: [])
+    original = Path.replace
+
+    def interrupted(path, target):
+        if path.name == ".latest.tmp":
+            raise OSError("crash before rename")
+        return original(path, target)
+
+    monkeypatch.setattr(Path, "replace", interrupted)
+    with pytest.raises(OSError, match="crash before rename"):
+        refresh(tmp_path)
+    assert published.read_bytes() == b"previous complete artifact"
+
+
+def test_killed_publisher_releases_lock_for_next_process(tmp_path, monkeypatch):
+    from generator.lightning_overlay import refresh
+
+    child = subprocess.Popen([sys.executable, "-c", """
+import sys
+from pathlib import Path
+import generator.lightning_overlay as overlay
+def hold(*_):
+    print('locked', flush=True)
+    sys.stdin.buffer.read(1)
+    return []
+overlay._glm_granule_urls = hold
+overlay.refresh(Path(sys.argv[1]))
+""", str(tmp_path)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(child.stdout, selectors.EVENT_READ)
+            assert selector.select(10), "publisher did not acquire its lock"
+        assert child.stdout.readline() == b"locked\n"
+        with pytest.raises(BlockingIOError):
+            refresh(tmp_path)
+        child.kill()
+        child.wait(timeout=10)
+        monkeypatch.setattr("generator.lightning_overlay._glm_granule_urls", lambda *_: [])
+        artifact = refresh(tmp_path)
+        assert all(sector["cells"] is None for sector in artifact["sectors"])
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=10)
+        for stream in [child.stdin, child.stdout, child.stderr]:
+            if stream:
+                stream.close()

@@ -15,7 +15,23 @@ const raw = {
   ],
 };
 
-afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+function mountFeed(at = now) {
+  vi.useFakeTimers();
+  vi.setSystemTime(at);
+  const fetcher = vi.fn().mockResolvedValue(Response.json(raw));
+  vi.stubGlobal('fetch', fetcher);
+  document.body.innerHTML = '<button id="toggle-lightning"></button><div id="lightning-status" hidden></div>';
+  const vendor = createVendorDouble({});
+  const clock = createClock();
+  lightning.mount(createMapCore(vendor, clock));
+  return {
+    vendor, clock, fetcher,
+    button: document.getElementById('toggle-lightning')!,
+    status: document.getElementById('lightning-status')!,
+  };
+}
 
 it('labels each sector, outside coverage, and a fresh or stale interval', () => {
   const feed = parseLightningFeed(raw, now);
@@ -78,4 +94,75 @@ it('shows an unavailable feed when the publisher has never run', async () => {
   document.getElementById('toggle-lightning')!.click();
   await vi.advanceTimersByTimeAsync(1);
   expect(document.getElementById('lightning-status')?.textContent).toContain('Feed unavailable');
+});
+
+it.each([false, true])('hides cached observations after a backward clock change, previously expired %s', async expired => {
+  const { button, vendor, status } = mountFeed();
+  button.click();
+  await vi.advanceTimersByTimeAsync(1);
+  if (expired) await vi.advanceTimersByTimeAsync(390_000);
+  vi.setSystemTime(Date.parse(raw.end) - 60_000);
+  vendor.fire('moveend', {});
+  expect(vendor.visibilityOf('lightning-layer')).toBe('none');
+  expect(status.textContent).toContain('ahead of clock');
+  expect(status.textContent).not.toContain('feed -');
+});
+
+it('expires at the observation deadline between periodic ticks', async () => {
+  const { button, vendor, status } = mountFeed(Date.parse(raw.end) + 479_000);
+  button.click();
+  await vi.advanceTimersByTimeAsync(999);
+  expect(vendor.visibilityOf('lightning-layer')).toBe('visible');
+  await vi.advanceTimersByTimeAsync(1);
+  expect(vendor.visibilityOf('lightning-layer')).toBe('none');
+  expect(status.textContent).toContain('stale');
+});
+
+it.each(['visibilitychange', 'pageshow'])('rechecks cached expiry on %s after a suspended page resumes', async event => {
+  const { button, vendor } = mountFeed();
+  button.click();
+  await vi.advanceTimersByTimeAsync(1);
+  vi.setSystemTime(Date.parse(raw.end) + 480_000);
+  (event === 'visibilitychange' ? document : window).dispatchEvent(new Event(event));
+  expect(vendor.visibilityOf('lightning-layer')).toBe('none');
+});
+
+it('does not upload data or replace unchanged status on camera moves within an age bucket', async () => {
+  const { button, vendor, status } = mountFeed();
+  button.click();
+  await vi.advanceTimersByTimeAsync(1);
+  const setData = vi.spyOn(vendor, 'setGeoJson');
+  const observer = new MutationObserver(() => {});
+  observer.observe(status, { childList: true });
+  for (let i = 0; i < 60; i++) vendor.fire('moveend', {});
+  expect(setData).toHaveBeenCalledTimes(0);
+  expect(observer.takeRecords()).toHaveLength(0);
+  vendor.setCenter([-140, 0]);
+  vendor.fire('moveend', {});
+  expect(status.textContent).toContain('GOES-18 sector · 0 observed flashes');
+  expect(setData).toHaveBeenCalledTimes(0);
+  await vi.advanceTimersByTimeAsync(30_000);
+  expect(setData).toHaveBeenCalledTimes(1);
+  observer.disconnect();
+});
+
+it('ignores a prior loading request after the overlay is toggled off and back on', async () => {
+  const { button, vendor, status, fetcher } = mountFeed();
+  const oldRequest = Promise.withResolvers<Response>();
+  const newRequest = Promise.withResolvers<Response>();
+  fetcher.mockReset().mockReturnValueOnce(oldRequest.promise).mockReturnValueOnce(newRequest.promise);
+  button.click();
+  const oldSignal = fetcher.mock.calls[0]?.[1]?.signal;
+  button.click();
+  expect(oldSignal.aborted).toBe(true);
+  button.click();
+  newRequest.resolve(Response.json(raw));
+  await vi.advanceTimersByTimeAsync(1);
+  expect(vendor.visibilityOf('lightning-layer')).toBe('visible');
+  const accepted = status.textContent;
+  oldRequest.resolve(new Response('', { status: 404 }));
+  await vi.advanceTimersByTimeAsync(1);
+  expect(status.textContent).toBe(accepted);
+  expect(vendor.visibilityOf('lightning-layer')).toBe('visible');
+  expect(fetcher).toHaveBeenCalledTimes(2);
 });
