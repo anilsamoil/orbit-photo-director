@@ -44,6 +44,24 @@ const PIN_FILES = [
 
 const MUTATIONS = [
   {
+    contract: 'lightning polling survives wall clock correction',
+    file: 'src/map/features/lightning/index.ts',
+    find: '        stopPoll = core.clock.every(120_000, () => void poll());',
+    replace: '        stopPoll = () => {};',
+  },
+  {
+    contract: 'future lightning does not schedule an overflowing expiry',
+    file: 'src/map/features/lightning/index.ts',
+    find: 'if (feed && !future && feed.end + STALE_MS > now)',
+    replace: 'if (feed && feed.end + STALE_MS > now)',
+  },
+  {
+    contract: 'late lightning success cannot replace a newer request',
+    file: 'src/map/features/lightning/index.ts',
+    find: '        if (request !== controller) return;',
+    replace: '',
+  },
+  {
     contract: 'recent lightning disappears on a scrub',
     file: 'src/map/features/lightning/index.ts',
     find: 'feed && !future && !scrubbed && now - feed.end < STALE_MS',

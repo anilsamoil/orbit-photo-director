@@ -13,7 +13,7 @@ export const lightning: MapFeature = {
     let request: AbortController | null = null;
     let refreshFailed = false;
     let stopTick: (() => void) | undefined;
-    let nextPoll = 0;
+    let stopPoll: (() => void) | undefined;
     let expiry: ReturnType<typeof setTimeout> | null = null;
     let rendered: { feed: LightningFeed; ageBucket: number } | null = null;
 
@@ -50,7 +50,7 @@ export const lightning: MapFeature = {
       }
       core.setVisibility('lightning-layer', visible ? 'visible' : 'none');
       cancelExpiry();
-      if (feed && feed.end + STALE_MS > now) {
+      if (feed && !future && feed.end + STALE_MS > now) {
         expiry = setTimeout(paint, feed.end + STALE_MS - now);
       }
     }
@@ -59,7 +59,6 @@ export const lightning: MapFeature = {
       if (request) return;
       const controller = new AbortController();
       request = controller;
-      nextPoll = core.clock.now() + 120_000;
       const timeout = setTimeout(() => controller.abort(), 15_000);
       try {
         const response = await fetch('/lightning/latest.json', { cache: 'no-store', signal: controller.signal });
@@ -88,12 +87,11 @@ export const lightning: MapFeature = {
         showMapLegend();
         void poll();
         paint();
-        stopTick = core.clock.every(30_000, now => {
-          paint();
-          if (now >= nextPoll) void poll();
-        });
+        stopTick = core.clock.every(30_000, paint);
+        stopPoll = core.clock.every(120_000, () => void poll());
       } else {
         stopTick?.();
+        stopPoll?.();
         cancelExpiry();
         request?.abort();
         request = null;

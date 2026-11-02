@@ -137,6 +137,7 @@ it('polls within the next two minutes after a forward clock jump and correction'
   }));
   await vi.advanceTimersByTimeAsync(120_000);
   expect(fetcher).toHaveBeenCalledTimes(3);
+  window.dispatchEvent(new Event('pageshow'));
   expect(status.textContent).toContain('11:59–12:04 UTC · feed 2m old');
   expect(vendor.visibilityOf('lightning-layer')).toBe('visible');
 });
