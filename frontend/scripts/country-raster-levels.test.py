@@ -30,6 +30,19 @@ class CountryRasterTruth(unittest.TestCase):
         left, top, right, bottom = boxes[0]
         self.assertTrue(445 < left < 450 and 334 < top < 338 and 548 <= right < 552 and 348 <= bottom < 353, boxes)
 
+    def test_split_uppercase_tokens_agree_in_the_word_check_and_the_glyph_boxes(self):
+        self.assertTrue(GENERATOR.raster_painted("AUS TRALIA", "Australia"))
+        boxes = GENERATOR.name_boxes([[
+            {"text": "AUS", "box": [10, 20, 30, 28]},
+            {"text": "TRALIA", "box": [32, 20, 70, 28]},
+        ]], "Australia")
+        self.assertEqual(len(boxes), 1, boxes)
+        self.assertFalse(GENERATOR.raster_painted("Aus Tralia", "Australia"))
+        self.assertEqual(GENERATOR.name_boxes([[
+            {"text": "Aus", "box": [0, 0, 8, 8]},
+            {"text": "Tralia", "box": [10, 0, 30, 8]},
+        ]], "Australia"), [])
+
     def test_generated_levels_match_independent_fresh_tile_audit(self):
         payload = json.loads(GENERATOR.OUT.read_text())
         self.assertEqual(payload["through"], 6)

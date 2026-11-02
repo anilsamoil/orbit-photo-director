@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   AUDITED_RASTER_LEVELS, auditRasterLevels, countryStyleVerdict, countrySweepZooms,
-  loadCountryRasterLevels, loadCountrySymbolLayers, oneNameSource, rasterPainted,
+  loadCountryRasterLevels, loadCountrySymbolLayers, oneNameSource, planLabelVerdict, rasterPainted,
 } from './plan-label-verdict.mjs';
 
 test('an exact sovereign name is not vetoed by an unrelated adjective', () => {
@@ -49,4 +52,53 @@ test('whole-tile words cannot override clipped or occluded composed-viewport evi
   assert.equal(oneNameSource(row).reason, 'gap');
   assert.equal(oneNameSource({ ...row, names: ['Canada'] }).ok, true);
   assert.equal(oneNameSource({ ...row, names: ['Canada'], rasterReadable: true }).reason, 'duplicate');
+});
+
+test('a transparent or mismatched label is not a painted country name', () => {
+  const placed = (name, extra = {}) => ({ properties: { name }, x: 40, y: 40, ...extra });
+  const sample = {
+    glyphs: 12000,
+    layerPresent: true,
+    visibility: 'visible',
+    textOpacity: 1,
+    textColor: '#f7f4ea',
+    textField: ['get', 'name'],
+    width: 320,
+    height: 240,
+    catalog: ['Canada', 'Mexico', 'Brazil', 'Japan', 'France'],
+    rendered: [
+      placed('Canada'),
+      placed('Mexico'),
+      placed('Brazil'),
+      placed('Japan'),
+      placed('France', { textField: 'X', textColor: 'transparent', textOpacity: 0 }),
+    ],
+  };
+  const verdict = planLabelVerdict(sample);
+  assert.equal(verdict.names.includes('France'), false);
+  assert.deepEqual(verdict.names, ['Canada', 'Mexico', 'Brazil', 'Japan']);
+  const mismatched = planLabelVerdict({
+    ...sample,
+    rendered: [placed('France', { textField: 'X' })],
+  });
+  assert.equal(mismatched.ok, false);
+  assert.equal((mismatched.names || []).includes('France'), false);
+  const transparent = planLabelVerdict({
+    ...sample,
+    rendered: [placed('France', { textColor: 'transparent' })],
+  });
+  assert.equal((transparent.names || []).includes('France'), false);
+});
+
+test('the plan-inset docs name the level-6 clamp at zoom 5.5', () => {
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
+  const iss = readFileSync(resolve(root, '.cursor/skills/verify-opd/features/iss.md'), 'utf8');
+  const skill = readFileSync(resolve(root, '.cursor/skills/verify-opd/SKILL.md'), 'utf8');
+  assert.equal(iss.includes('vector name layer below zoom 3'), false);
+  assert.equal(skill.includes('From zoom 3 the reference raster is the only place-name layer'), false);
+  assert.equal(iss.includes(', The fitted orbit'), false);
+  assert.match(iss, /view zoom 5\.5/);
+  assert.match(skill, /view zoom 5\.5/);
+  assert.match(iss, /tile level 6/);
+  assert.match(skill, /tile level 6/);
 });

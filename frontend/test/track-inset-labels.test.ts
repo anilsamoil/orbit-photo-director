@@ -315,6 +315,35 @@ describe('plan inset labels', () => {
     }
   });
 
+  it('uses the level-6 lettering at zoom 5.5 and above, and restores France only when that lettering is clipped', () => {
+    const names = () => {
+      const filter = created.options?.style.layers.find((layer) => layer.id === 'inset-countries-viewport')?.filter as [string, unknown, [string, string[]]];
+      return filter[2][1];
+    };
+    for (const zoom of [5.5, 6.5, 8]) {
+      created.zoom = zoom;
+      created.center = [2, 46];
+      created.size = [1600, 1600];
+      const frame = document.createElement('div');
+      Object.defineProperty(frame, 'clientWidth', { value: 1600 });
+      Object.defineProperty(frame, 'clientHeight', { value: 1600 });
+      const inset = createTrackInset(frame, document.createElement('div'));
+      created.events.render?.();
+      expect(names(), `France @ ${zoom}`).not.toContain('France');
+      inset.destroy();
+    }
+    created.zoom = 5.5;
+    created.center = [2, 46];
+    created.size = [40, 40];
+    const clipped = document.createElement('div');
+    Object.defineProperty(clipped, 'clientWidth', { value: 40 });
+    Object.defineProperty(clipped, 'clientHeight', { value: 40 });
+    const inset = createTrackInset(clipped, document.createElement('div'));
+    created.events.render?.();
+    expect(names()).toContain('France');
+    inset.destroy();
+  });
+
   it('keeps a pinch or a pan, recenters on a double click, and moves the night with the clock', () => {
     created.fitCount = 0;
     created.sources.clear();
