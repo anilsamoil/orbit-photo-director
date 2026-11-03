@@ -3,8 +3,8 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { dirname, resolve } from 'node:path';
 import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
 import { earthAfterResizeReaders } from './earth-after-resize.mjs';
-import { auditRasterLevels, auditedNameCandidates, loadCountryRasterLevels, countrySweepZooms, keptCountrySymbol, oneNameSource, PLAN_COUNTRIES, planLabelReaders, rasterNameEvidence } from './plan-label-verdict.mjs';
-import { checkRasterOcr, clearRasterOcrRun, countryRasterUrls, rasterWords, rasterOcrStats, readableRasterName } from './raster-ocr.mjs';
+import { auditRasterLevels, auditedNameCandidates, completeNameCount, loadCountryRasterLevels, countrySweepZooms, keptCountrySymbol, oneNameSource, PLAN_COUNTRIES, planLabelReaders, rasterNameEvidence } from './plan-label-verdict.mjs';
+import { checkRasterOcr, clearRasterOcrRun, countryRasterUrls, rasterWords, rasterOcrStats, readableRasterName, sovereignScreenBoxes } from './raster-ocr.mjs';
 import { pinFixtureCookie } from './fixture-session.mjs';
 import { BOSTON_NADIR_EPOCH_MS, effectiveNowMs, refreshLaunchClock } from './fixtures.mjs';
 import { freezeFixtureClock, restoreFixtureClock } from './fixture-clock.mjs';
@@ -6935,6 +6935,10 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
       { country: 'Australia', center: [132.723, -25], zooms: [5.5], once: true },
       { country: 'Argentina', center: [-63.36, -34], zooms: [6.5], once: true },
       { country: 'India', center: [79, 22], zooms: [6.5, 6.51], once: true },
+      { country: 'Nigeria', center: [8.6386, 10], zooms: [6.5, 6.51], once: true, counted: true },
+      { country: 'Kenya', center: [38.3, 1], zooms: [6.5, 6.51], once: true, counted: true },
+      { country: 'Kenya', center: [38.15, 1.15], zooms: [6.5, 6.51], once: true, counted: true },
+      { country: 'Kenya', center: [37.99, 0.95], zooms: [6.5, 6.51], once: true, counted: true },
     ];
     for (const camera of offCentroid) {
       for (const zoom of camera.zooms) {
@@ -6971,10 +6975,13 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
         }
         const centroid = PLAN_COUNTRIES.find((point) => point.name === camera.country);
         const pack = await rasterWords(countryRasterUrls(row.urls || [], centroid));
+        const boxes = PLAN_COUNTRIES.flatMap((entry) => sovereignScreenBoxes(pack, row, entry.name));
+        const rasterCount = completeNameCount(boxes, row.viewport, row.masks || []);
         const raster = rasterNameEvidence(readableRasterName(pack, row, camera.country).boxes, auditedNameCandidates(camera.country, row.zoom, row.viewport), row.masks || []);
         const symbols = (row.names || []).filter((name) => name === camera.country).length;
-        if (camera.once && symbols + (raster ? 1 : 0) !== 1) {
-          throw new Error(`plan label off-centroid ${JSON.stringify({ country: camera.country, zoom, symbols, raster, names: row.names })}`);
+        const sources = camera.counted ? symbols + rasterCount : symbols + (raster ? 1 : 0);
+        if (camera.once && sources !== 1) {
+          throw new Error(`plan label off-centroid ${JSON.stringify({ country: camera.country, zoom, symbols, rasterCount, raster, names: row.names })}`);
         }
         sweepNotes.push(`${camera.country}@${zoom}`);
         console.log(`plan labels off-centroid ${camera.country} ${zoom} OCR:${rasterOcrStats.calls}`);

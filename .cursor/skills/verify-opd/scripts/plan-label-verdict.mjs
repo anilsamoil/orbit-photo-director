@@ -273,8 +273,10 @@ export function oneNameSource(row) {
   const names = nameList(row.names);
   const count = names.filter((name) => name === row.country).length;
   if (count > 1) return { ok: false, reason: 'symbol', country: row.country, zoom, count, names };
-  const painted = typeof row.rasterReadable === 'boolean' ? row.rasterReadable : rasterPainted(row.words, row.country);
-  const sources = (count === 1 ? 1 : 0) + (painted ? 1 : 0);
+  const rasterCount = Number.isFinite(Number(row.rasterCount))
+    ? Number(row.rasterCount)
+    : (typeof row.rasterReadable === 'boolean' ? (row.rasterReadable ? 1 : 0) : (rasterPainted(row.words, row.country) ? 1 : 0));
+  const sources = count + rasterCount;
   if (sources !== 1) {
     return {
       ok: false,
@@ -282,10 +284,23 @@ export function oneNameSource(row) {
       country: row.country,
       zoom,
       count,
-      raster: painted,
+      raster: rasterCount,
     };
   }
-  return { ok: true, country: row.country, zoom, count, raster: painted };
+  return { ok: true, country: row.country, zoom, count, raster: rasterCount };
+}
+
+/** Every fully visible name, including a small border name the size floor would drop. */
+export function completeNameCount(screenBoxes, viewport, masks = []) {
+  const width = viewport && viewport.width;
+  const height = viewport && viewport.height;
+  const overlaps = (box, mask) => box[0] < mask.right && box[2] > mask.left && box[1] < mask.bottom && box[3] > mask.top;
+  return (screenBoxes || []).filter((item) => {
+    const box = item.box || item;
+    if (!(box[0] >= 0 && box[1] >= 0 && box[2] <= width && box[3] <= height)) return false;
+    if ((viewport.occlusions || []).some((rect) => box[0] < rect[2] && box[2] > rect[0] && box[1] < rect[3] && box[3] > rect[1])) return false;
+    return !(masks || []).some((mask) => overlaps(box, mask));
+  }).length;
 }
 
 function sweepRows(levels, symbolCount) {

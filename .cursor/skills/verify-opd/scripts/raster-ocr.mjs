@@ -163,6 +163,7 @@ export function sovereignScreenBoxes(pack, row, country) {
       boxes.push({
         service: mosaic.service,
         text: word.text,
+        scale,
         box: [(x1 + world) * scale + origin.x, y1 * scale + origin.y, (x2 + world) * scale + origin.x, y2 * scale + origin.y],
       });
     }
@@ -170,14 +171,22 @@ export function sovereignScreenBoxes(pack, row, country) {
   return boxes;
 }
 
+/** sovereignBoxes grows each glyph by one tile pixel so split tokens merge. That pad is not ink. */
+function glyphInk(word) {
+  const box = word.box;
+  const pad = Number.isFinite(word.scale) && word.scale > 0 ? word.scale : 0;
+  return [box[0] + pad, box[1] + pad, box[2] - pad, box[3] - pad];
+}
+
 export function readableRasterName(pack, row, country) {
   const { width, height, occlusions } = row.viewport;
   const zoom = Number(row.zoom);
   const boxes = sovereignScreenBoxes(pack, row, country).filter((word) => {
-    const box = word.box;
-    if (box[0] < 0 || box[1] < 0 || box[2] > width || box[3] > height) return false;
-    if (Number.isFinite(zoom) && !countryLabelCountsScreen(box, zoom)) return false;
-    if ((occlusions || []).some(rect => box[0] < rect[2] && box[2] > rect[0] && box[1] < rect[3] && box[3] > rect[1])) return false;
+    const ink = glyphInk(word);
+    if (!(ink[2] > ink[0] && ink[3] > ink[1])) return false;
+    if (ink[0] < 0 || ink[1] < 0 || ink[2] > width || ink[3] > height) return false;
+    if (Number.isFinite(zoom) && !countryLabelCountsScreen(word.box, zoom)) return false;
+    if ((occlusions || []).some(rect => ink[0] < rect[2] && ink[2] > rect[0] && ink[1] < rect[3] && ink[3] > rect[1])) return false;
     return true;
   });
   return { readable: boxes.length > 0, boxes };

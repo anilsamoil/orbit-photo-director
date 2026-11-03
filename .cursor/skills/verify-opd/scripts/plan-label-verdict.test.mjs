@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { readableRasterName } from './raster-ocr.mjs';
 import {
   AUDITED_RASTER_LEVELS, auditRasterLevels, countryStyleVerdict, countrySweepZooms,
-  auditedNameReadable, clippedRasterRemnant, loadCountryRasterLevels, loadCountrySymbolLayers, oneNameSource, planLabelReaders, planLabelVerdict, rasterNameEvidence, rasterPainted,
+  auditedNameCandidates, auditedNameReadable, clippedRasterRemnant, completeNameCount, loadCountryRasterLevels, loadCountrySymbolLayers, oneNameSource, planLabelReaders, planLabelVerdict, rasterNameEvidence, rasterPainted,
 } from './plan-label-verdict.mjs';
 
 test('an exact sovereign name is not vetoed by an unrelated adjective', () => {
@@ -97,6 +97,38 @@ test('the map and the verifier import one lettering-size rule', () => {
   const ocr = readFileSync(resolve(root, '.cursor/skills/verify-opd/scripts/raster-ocr.mjs'), 'utf8');
   assert.match(map, /countryLabelCounts/);
   assert.match(ocr, /countryLabelCounts/);
+});
+
+test('Australia at z6.5 on a 492 by 690 plan keeps the painted name when only the merge pad crosses the edge', () => {
+  const zoom = 6.5;
+  const tileZ = 6;
+  const world = 512 * (2 ** zoom);
+  const center = [134, -25];
+  const mercatorX = (center[0] + 180) / 360;
+  const mercatorY = (1 - Math.asinh(Math.tan(center[1] * Math.PI / 180)) / Math.PI) / 2;
+  const viewport = { width: 492, height: 690, occlusions: [], origin: { x: 246 - mercatorX * world, y: 345 - mercatorY * world } };
+  const tile = 256 * (2 ** tileZ);
+  const ink = [0.86907959, 0.572692871, 0.877502441, 0.573547363].map((value) => value * tile);
+  const word = { text: 'AUSTRALIA', uppercase: true, box: ink };
+  const pack = { mosaics: [{ z: tileZ, service: 'reference', lines: [[word]], words: [word] }] };
+  const row = { zoom, viewport };
+  const raster = readableRasterName(pack, row, 'Australia');
+  assert.equal(raster.readable, true);
+  const evidence = rasterNameEvidence(raster.boxes, auditedNameCandidates('Australia', zoom, viewport));
+  assert.equal(evidence, true);
+  assert.equal(oneNameSource({
+    tilesOk: true, zoom, tileZ, country: 'Australia', names: [], words: 'AUSTRALIA', rasterReadable: evidence,
+  }).ok, true);
+  const crossed = { ...word, box: [ink[0], ink[1], ink[2] + 20, ink[3]] };
+  const clippedPack = { mosaics: [{ z: tileZ, service: 'reference', lines: [[crossed]], words: [crossed] }] };
+  assert.equal(readableRasterName(clippedPack, row, 'Australia').readable, false);
+  assert.equal(rasterNameEvidence([], auditedNameCandidates('Australia', zoom, viewport)), false);
+  assert.equal(oneNameSource({
+    tilesOk: true, zoom, tileZ, country: 'Australia', names: [], words: 'AUSTRALIA', rasterReadable: false,
+  }).reason, 'gap');
+  assert.equal(oneNameSource({
+    tilesOk: true, zoom, tileZ, country: 'Australia', names: ['Australia'], words: 'AUSTRALIA', rasterReadable: true,
+  }).reason, 'duplicate');
 });
 
 test('whole-tile words cannot override clipped or occluded composed-viewport evidence', () => {
@@ -201,7 +233,10 @@ test('the name sweep includes the off-centroid cameras and rejects a clipped rem
   assert.match(sweep, /-63\.36,\s*-34/);
   assert.match(sweep, /country: 'India'/);
   assert.match(sweep, /\[\s*79,\s*22\s*\]/);
-  const mainInset = execFileSync('git', ['show', 'origin/main:frontend/src/map/adapters/maplibre/track-inset.ts'], { encoding: 'utf8' });
+  assert.doesNotMatch(readFileSync(new URL('./plan-label-verdict.test.mjs', import.meta.url), 'utf8'), /origin\/main:frontend/);
+  const mainBaseline = '671f6e5cea4d8666421870c6fd220beebb8d47cc';
+  const mainInset = execFileSync('git', ['show', `${mainBaseline}:frontend/src/map/adapters/maplibre/track-inset.ts`], { encoding: 'utf8' });
+  assert.equal(mainBaseline, '671f6e5cea4d8666421870c6fd220beebb8d47cc');
   assert.match(mainInset, /nameLayer\('inset-countries', 'inset-countries', undefined, PLAN_RASTER_NAME_ZOOM\)/);
   assert.doesNotMatch(mainInset, /inset-countries-viewport/);
   assert.match(sweep, /inset-label-mask/);
@@ -211,6 +246,20 @@ test('the name sweep includes the off-centroid cameras and rejects a clipped rem
   assert.equal(rasterNameEvidence([{ box: [80, 80, 100, 90] }], [{ box: [10, 10, 40, 20] }]), false);
   assert.equal(rasterNameEvidence([{ box: [12, 12, 36, 18] }], [{ box: [10, 10, 40, 20] }], [{ left: 0, top: 0, right: 50, bottom: 30 }]), false);
   assert.doesNotMatch(drive.slice(drive.indexOf('export async function assertOneNameSource'), drive.indexOf('export async function proveFractionalPlanLabels')), /\|\| auditedNameReadable/);
+  const border = oneNameSource({
+    tilesOk: true, zoom: 6.5, tileZ: 6, country: 'Nigeria', names: [], rasterReadable: true, rasterCount: 3,
+  });
+  assert.equal(border.ok, false);
+  assert.equal(border.reason, 'duplicate');
+  assert.equal(border.raster, 3);
+  assert.match(sweep, /8\.6386,\s*10/);
+  assert.match(sweep, /38\.3,\s*1/);
+  assert.match(sweep, /38\.15,\s*1\.15/);
+  assert.match(sweep, /37\.99,\s*0\.95/);
+  assert.equal(completeNameCount(
+    [{ box: [10, 10, 14, 13] }, { box: [20, 20, 80, 40] }, { box: [90, 90, 120, 100] }],
+    { width: 100, height: 100, occlusions: [] },
+  ), 2);
   const open = oneNameSource({
     tilesOk: true, zoom: 5.5, tileZ: 6, country: 'France', names: ['France'], rasterReadable: true,
   });

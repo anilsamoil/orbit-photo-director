@@ -182,6 +182,8 @@ type ScreenBox = { left: number; top: number; right: number; bottom: number };
 
 /** Same edge as the verifier: a letter that crosses the canvas is not a complete raster name. */
 const RASTER_INK_EDGE_PX = 0;
+/** The audited letter box is wider than the ink by the anti-aliased edge. France's false pad is 1.5px. */
+const LETTER_BOX_SLACK_PX = 2;
 
 /** Matches the dark-gray land under a letter that crosses the canvas edge. */
 const CLIPPED_LABEL_COVER = '#414143';
@@ -221,6 +223,17 @@ function drawnTile(zoom: number, maxzoom: number): number {
   return Math.min(maxzoom, Math.max(0, Math.round(zoom + 1)));
 }
 
+/** Keep one complete name. Smaller border names and every clipped or occluded scrap are masked. */
+export function keptLettering(entries: readonly { complete: boolean; area: number }[]): { keep: number; mask: number[] } {
+  const complete = entries.map((entry, index) => ({ ...entry, index })).filter((entry) => entry.complete);
+  if (complete.length > 1) {
+    const ranked = [...complete].sort((left, right) => right.area - left.area || left.index - right.index);
+    const keep = ranked[0]?.index ?? -1;
+    return { keep, mask: entries.map((_, index) => index).filter((index) => index !== keep) };
+  }
+  return { keep: complete[0]?.index ?? -1, mask: entries.flatMap((entry, index) => entry.complete ? [] : [index]) };
+}
+
 function viewportFallbacks(map: MapLibreMap, frame: HTMLElement): { names: string[]; covers: ScreenBox[] } {
   const zoom = map.getZoom();
   const frameBox = frame.getBoundingClientRect();
@@ -236,24 +249,47 @@ function viewportFallbacks(map: MapLibreMap, frame: HTMLElement): { names: strin
     if (feature.geometry.type !== 'Point') return [];
     const name = String(feature.properties?.name);
     const painted = COUNTRY_RASTER_LEVELS.countries[name] ?? [];
-    const sources = RASTER_SOURCES
-      .map((source) => ({ service: source.service, tile: drawnTile(zoom, source.maxzoom) }))
-      .filter((source) => painted.includes(source.tile));
+    const sources = RASTER_SOURCES.flatMap((source) => {
+      const drawn = drawnTile(zoom, source.maxzoom);
+      const audited = painted.filter((level) => level <= drawn);
+      const tile = audited.includes(drawn) ? drawn : audited[audited.length - 1];
+      return tile == null ? [] : [{ service: source.service, tile, stale: !painted.includes(drawn) }];
+    });
     if (sources.length === 0) return [];
-    const readable = sources.some((source) => (COUNTRY_RASTER_LEVELS.bounds?.[name]?.[source.tile] ?? []).some((entry) => {
-      if (entry.service !== source.service) return false;
-      const box = entry.box;
-      if (!countryLabelCounts({ width: box[2]! - box[0]!, height: box[3]! - box[1]! })) return false;
-      const glyph = entry.ink ?? box;
-      const start = map.project(mercatorLngLat(glyph[0]!, glyph[1]!));
-      const end = map.project(mercatorLngLat(glyph[2]!, glyph[3]!));
-      const screen = { left: start.x, top: start.y, right: end.x, bottom: end.y };
-      const cover = suppressedLettering(screen, viewport, occlusions);
-      if (cover) covers.push(cover);
-      return readableCountryName(screen, viewport, occlusions);
-    }));
+    const glyphs: { screen: ScreenBox; complete: boolean; area: number }[] = [];
+    for (const source of sources) {
+      for (const entry of COUNTRY_RASTER_LEVELS.bounds?.[name]?.[source.tile] ?? []) {
+        if (entry.service !== source.service) continue;
+        const projectBounds = (bounds: readonly number[]): ScreenBox => {
+          const start = map.project(mercatorLngLat(bounds[0]!, bounds[1]!));
+          const end = map.project(mercatorLngLat(bounds[2]!, bounds[3]!));
+          return { left: Math.min(start.x, end.x), top: Math.min(start.y, end.y), right: Math.max(start.x, end.x), bottom: Math.max(start.y, end.y) };
+        };
+        const glyph = entry.ink ?? entry.box;
+        const ink = projectBounds(glyph);
+        const extent = projectBounds(entry.box);
+        const boxOverflow = Math.max(viewport.left - extent.left, viewport.top - extent.top, extent.right - viewport.right, extent.bottom - viewport.bottom);
+        const counted = countryLabelCounts({ width: glyph[2]! - glyph[0]!, height: glyph[3]! - glyph[1]! });
+        const screen = boxOverflow > LETTER_BOX_SLACK_PX ? extent : ink;
+        const visible = readableCountryName(ink, viewport, occlusions) && counted && boxOverflow <= LETTER_BOX_SLACK_PX;
+        glyphs.push({ screen, complete: visible && !source.stale, area: Math.abs(ink.right - ink.left) * Math.abs(ink.bottom - ink.top) });
+      }
+    }
+    const decision = keptLettering(glyphs);
+    const kept = decision.keep >= 0 ? glyphs[decision.keep]!.screen : null;
+    for (const index of decision.mask) {
+      const screen = glyphs[index]!.screen;
+      if (kept && screen.left < kept.right && screen.right > kept.left && screen.top < kept.bottom && screen.bottom > kept.top) continue;
+      const cover = suppressedLettering(screen, viewport, occlusions) ?? {
+        left: Math.max(screen.left, viewport.left),
+        top: Math.max(screen.top, viewport.top),
+        right: Math.min(screen.right, viewport.right),
+        bottom: Math.min(screen.bottom, viewport.bottom),
+      };
+      if (cover.right - cover.left >= 1 && cover.bottom - cover.top >= 1) covers.push(cover);
+    }
     const anchor = map.project(feature.geometry.coordinates as [number, number]);
-    if (readable || anchor.x < 0 || anchor.y < 0 || anchor.x > viewport.right || anchor.y > viewport.bottom) return [];
+    if (decision.keep >= 0 || anchor.x < 0 || anchor.y < 0 || anchor.x > viewport.right || anchor.y > viewport.bottom) return [];
     return [name];
   });
   return { names, covers };
@@ -394,6 +430,7 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
     map.setFilter('inset-countries-viewport', ['in', ['get', 'name'], ['literal', state.names]]);
   };
   map.on('render', syncCountryLabels);
+  map.on('move', syncCountryLabels);
   let paintedWidth = -1;
   let paintedHeight = -1;
   let paintedRatio = -1;

@@ -101,7 +101,10 @@ vi.mock('maplibre-gl', () => {
       const scale = 512 * 2 ** created.zoom;
       return { x: created.size[0] / 2 + (lon - created.center[0]) / 360 * scale, y: created.size[1] / 2 + (y(lat) - y(created.center[1])) * scale };
     }
-    unproject({ x, y }: { x: number; y: number }): { lng: number; lat: number } {
+    unproject(point: { x: number; y: number } | readonly number[]): { lng: number; lat: number } {
+      const pair: readonly number[] = 'x' in point ? [point.x, point.y] : point;
+      const x = pair[0]!;
+      const y = pair[1]!;
       const yOf = (latitude: number) => (1 - Math.asinh(Math.tan(latitude * Math.PI / 180)) / Math.PI) / 2;
       const latOf = (mercatorY: number) => Math.atan(Math.sinh(Math.PI * (1 - 2 * mercatorY))) * 180 / Math.PI;
       const scale = 512 * 2 ** created.zoom;
@@ -142,7 +145,7 @@ vi.mock('maplibre-gl', () => {
 });
 
 import countryRasterLevels from '../src/map/adapters/maplibre/country-raster-levels.json' with { type: 'json' };
-import { createTrackInset, letterboxCamera, PLAN_WHEEL_RESIZE_CAP_MS, readableCountryName } from '../src/map/adapters/maplibre/track-inset';
+import { createTrackInset, keptLettering, letterboxCamera, PLAN_WHEEL_RESIZE_CAP_MS, readableCountryName } from '../src/map/adapters/maplibre/track-inset';
 
 describe('plan inset labels', () => {
   it('draws the Esri reference raster above the basemap and lets a tighter track zoom past 2', () => {
@@ -398,7 +401,11 @@ describe('plan inset labels', () => {
       const australia = mount(5.5, [center[0], center[1]], [size[0], size[1]]);
       expect(names(), `Australia ${size.join('x')}`).toEqual(['Australia']);
       assertStack(australia.frame, `Australia ${size.join('x')}`);
-      expect((created.sources.get('inset-label-mask') as { features?: unknown[] } | undefined)?.features?.length, `Australia ${size.join('x')}`).toBeGreaterThan(0);
+      const mask = created.sources.get('inset-label-mask') as { features?: { geometry: { coordinates: number[][][] } }[] } | undefined;
+      expect(mask?.features?.length, `Australia ${size.join('x')}`).toBeGreaterThan(0);
+      const ring = mask?.features?.[0]?.geometry.coordinates[0] ?? [];
+      expect(ring.length, `Australia ${size.join('x')} ring`).toBeGreaterThan(3);
+      expect(ring.every((pair) => pair.every((value) => Number.isFinite(value))), `Australia ${size.join('x')} coords`).toBe(true);
       australia.inset.destroy();
     }
     for (const zoom of [6.5, 6.51] as const) {
@@ -429,6 +436,53 @@ describe('plan inset labels', () => {
     assertStack(argentina.frame, 'Argentina');
     expect(argentina.marker.isConnected || argentina.frame.contains(argentina.marker), 'Argentina marker').toBe(true);
     argentina.inset.destroy();
+  });
+
+  it('masks the dark-raster name when the reference name is already on the narrow plan', () => {
+    created.zoom = 6.5;
+    created.center = [8.6386, 10];
+    created.size = [274, 984];
+    const frame = document.createElement('div');
+    Object.defineProperty(frame, 'clientWidth', { value: 274 });
+    Object.defineProperty(frame, 'clientHeight', { value: 984 });
+    const inset = createTrackInset(frame, document.createElement('div'));
+    created.events.render?.();
+    const names = (created.options?.style.layers.find((layer) => layer.id === 'inset-countries-viewport')?.filter as [string, unknown, [string, string[]]])[2][1];
+    expect(names).not.toContain('Nigeria');
+    expect(names.filter((entry) => entry === 'Nigeria')).toHaveLength(0);
+    inset.destroy();
+  });
+
+  it('keeps one complete name and masks the smaller border names', () => {
+    const decision = keptLettering([
+      { complete: true, area: 10 },
+      { complete: true, area: 40 },
+      { complete: true, area: 4 },
+    ]);
+    expect(decision.keep).toBe(1);
+    expect(decision.mask).toEqual([0, 2]);
+  });
+
+  it('recomputes the label mask when the camera pans', () => {
+    created.zoom = 6.5;
+    created.center = [-63.36, -34];
+    created.size = [478, 690];
+    const frame = document.createElement('div');
+    Object.defineProperty(frame, 'clientWidth', { value: 478 });
+    Object.defineProperty(frame, 'clientHeight', { value: 690 });
+    const inset = createTrackInset(frame, document.createElement('div'));
+    created.events.render?.();
+    const before = JSON.stringify(created.sources.get('inset-label-mask'));
+    created.center = [-63.6, -34];
+    const move = created.handlers.move?.at(-1);
+    expect(typeof move).toBe('function');
+    move?.({} as Event);
+    const after = JSON.stringify(created.sources.get('inset-label-mask'));
+    const left = (raw: string) => (JSON.parse(raw) as { features: { geometry: { coordinates: number[][][] } }[] }).features[0]?.geometry.coordinates[0]?.[0]?.[0];
+    expect(Number.isFinite(left(before))).toBe(true);
+    expect(Number.isFinite(left(after))).toBe(true);
+    expect(left(after)).not.toBe(left(before));
+    inset.destroy();
   });
 
   it('restores Kenya and Nigeria at zoom 6.5 when only a stale dark z6 box is inside the canvas', () => {
