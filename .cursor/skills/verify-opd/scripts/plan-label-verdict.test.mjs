@@ -9,8 +9,9 @@ import { readableRasterName } from './raster-ocr.mjs';
 import { letteringOccluded } from '../../../../frontend/src/map/adapters/maplibre/country-label-size.ts';
 import {
   AUDITED_RASTER_LEVELS, auditRasterLevels, countryStyleVerdict, countrySweepZooms,
-  anchorOnPlan, auditedNameCandidates, auditedNameReadable, clippedRasterRemnant, completeNameCount, labelTile, loadCountryRasterLevels, loadCountrySymbolLayers, nameCountOk, oneNameSource, planLabelReaders, planLabelVerdict, rasterNameEvidence, rasterPainted, symbolCrossesEdge,
+  anchorOnPlan, auditedNameCandidates, auditedNameReadable, clippedRasterRemnant, completeNameCount, KENYA_WEST_RASTER_COUNT, labelTile, loadCountryRasterLevels, loadCountrySymbolLayers, nameCountOk, oneNameSource, pairedRasterNames, planLabelReaders, planLabelVerdict, rasterNameEvidence, rasterPainted, symbolCrossesEdge,
 } from './plan-label-verdict.mjs';
+import { assertPlanLabelChecks } from './drive.mjs';
 
 test('an exact sovereign name is not vetoed by an unrelated adjective', () => {
   assert.equal(rasterPainted('AUSTRALIA\nGreat Australian Bight', 'Australia'), true);
@@ -359,7 +360,117 @@ test('glyph ink, not the padded OCR box, meets the shared one-pixel clock rule',
   assert.equal(symbolCrossesEdge({ left: 8, top: 10, right: 60, bottom: 26 }, 274, 984), false);
   const drive = readFileSync(new URL('./drive.mjs', import.meta.url), 'utf8');
   const off = drive.slice(drive.indexOf('const offCentroid'), drive.indexOf('const france = await readPlanLabelZoom'));
-  assert.match(off, /assertPlanLabelChecks\(row\)/);
-  assert.match(off, /rasterExpectation/);
+  const check = drive.slice(drive.indexOf('export function assertPlanLabelChecks'), drive.indexOf('export async function proveFractionalPlanLabels'));
+  assert.match(off, /assertPlanLabelChecks\(/);
+  assert.match(off, /KENYA_WEST_RASTER_COUNT/);
+  assert.match(check, /pairedRasterNames\(/);
+  assert.match(check, /occurrenceCount\(row\.rasterCount, KENYA_WEST_RASTER_COUNT\)/);
   assert.doesNotMatch(off, /countryGlyphBoxes|clippedRasterRemnant|peekingGlyphInk/);
+  assert.doesNotMatch(check, /countryGlyphBoxes/);
+});
+
+function rasterFrame(width, height, paint) {
+  const data = new Uint8Array(width * height * 4);
+  for (let index = 0; index < data.length; index += 4) {
+    data[index] = 24;
+    data[index + 1] = 26;
+    data[index + 2] = 28;
+    data[index + 3] = 255;
+  }
+  paint(data, width, height);
+  return { width, height, data };
+}
+
+function paintWord(data, width, height, x, y, wordWidth, wordHeight) {
+  for (let row = y; row < y + wordHeight; row += 1) {
+    for (let column = x; column < x + wordWidth; column += 1) {
+      if (column < 0 || row < 0 || column >= width || row >= height) continue;
+      const index = (row * width + column) * 4;
+      data[index] = 236;
+      data[index + 1] = 232;
+      data[index + 2] = 220;
+    }
+  }
+}
+
+test('paired screenshots reject a blank France, the wrong country, a third Kenya, a clipped NYA, and a name under the buttons', () => {
+  const frames = [];
+  for (let copy = 0; copy < 4; copy += 1) {
+    const shift = copy * 3;
+    frames.push([
+      'blank France z6.5',
+      rasterFrame(96, 64, (data, width, height) => paintWord(data, width, height, 30 + shift, 28, 28, 8)),
+      rasterFrame(96, 64, () => {}),
+      0,
+    ]);
+    frames.push([
+      'EGYPT shown instead of KENYA',
+      rasterFrame(96, 64, (data, width, height) => paintWord(data, width, height, 20 + shift, 24, 30, 8)),
+      rasterFrame(96, 64, (data, width, height) => paintWord(data, width, height, 60, 40, 22, 8)),
+      1,
+    ]);
+    frames.push([
+      'three KENYAs',
+      rasterFrame(96, 64, (data, width, height) => {
+        paintWord(data, width, height, 8, 20, 16, 6);
+        paintWord(data, width, height, 40, 20, 16, 6);
+      }),
+      rasterFrame(96, 64, (data, width, height) => {
+        paintWord(data, width, height, 8, 20, 16, 6);
+        paintWord(data, width, height, 40, 20, 16, 6);
+        paintWord(data, width, height, 70, 40, 16, 6);
+      }),
+      2,
+    ]);
+    frames.push([
+      'clipped NYA',
+      rasterFrame(96, 64, (data, width, height) => paintWord(data, width, height, 24, 26, 28, 8)),
+      rasterFrame(96, 64, (data, width, height) => paintWord(data, width, height, 0, 26, 8, 8)),
+      1,
+    ]);
+    frames.push([
+      'name under the buttons',
+      rasterFrame(96, 64, (data, width, height) => paintWord(data, width, height, 36, 30, 22, 8)),
+      rasterFrame(96, 64, (data, width, height) => paintWord(data, width, height, 2, 2, 22, 8)),
+      1,
+    ]);
+  }
+  assert.equal(frames.length, 20);
+  const missed = [];
+  for (const [label, main, head, count] of frames) {
+    const verdict = pairedRasterNames(head, main, count);
+    if (verdict.ok !== false || verdict.reason !== 'pixels') missed.push(`${label} ${verdict.reason || 'passed'}`);
+    const same = pairedRasterNames(main, main, count);
+    if (same.ok !== true || same.count !== count) missed.push(`${label} matching pair`);
+  }
+  assert.deepEqual(missed, []);
+});
+
+test('Kenya west asserts the raster count of 2 on the paired main frame', () => {
+  const shot = rasterFrame(96, 64, (data, width, height) => {
+    paintWord(data, width, height, 8, 22, 18, 6);
+    paintWord(data, width, height, 46, 22, 18, 6);
+  });
+  const blank = rasterFrame(96, 64, () => {});
+  const row = {
+    tilesOk: true,
+    zoom: 6.5,
+    tileZ: labelTile(6.5),
+    country: 'Kenya',
+    names: [],
+    kenyaWest: true,
+    rasterCount: KENYA_WEST_RASTER_COUNT,
+    headShot: shot,
+    mainShot: shot,
+  };
+  assert.equal(KENYA_WEST_RASTER_COUNT, 2);
+  assert.equal(pairedRasterNames(shot, shot, 2, { kenyaWest: true }).ok, true);
+  assert.equal(pairedRasterNames(shot, shot, 1, { kenyaWest: true }).reason, 'count');
+  assert.equal(pairedRasterNames(shot, shot, 3, { kenyaWest: true }).ok, false);
+  assert.doesNotThrow(() => assertPlanLabelChecks(row));
+  assert.throws(() => assertPlanLabelChecks({ ...row, rasterCount: 0 }), /plan label count/);
+  assert.throws(() => assertPlanLabelChecks({ ...row, headShot: blank }), /plan label raster/);
+  assert.throws(() => assertPlanLabelChecks({
+    tilesOk: true, zoom: 6.5, tileZ: labelTile(6.5), country: 'France', names: [], rasterCount: 0, headShot: blank, mainShot: shot,
+  }), /plan label raster/);
 });

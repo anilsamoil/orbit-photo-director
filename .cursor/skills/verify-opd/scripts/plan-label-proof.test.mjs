@@ -32,24 +32,43 @@ function loadedManager(zoom) {
   };
 }
 
-function waitingMap({ idle, unloadAfterRepaint }) {
+function waitingMap({ idle, unloadAfterRepaint, idleAfterMs = 0, center = { lng: 2, lat: 46 } }) {
   let loaded = true;
-  const zoom = 2;
-  const manager = loadedManager(zoom);
+  const zoom = center.lng === 37 ? 6.5 : 2;
+  const z = Math.max(0, Math.round(zoom + 1));
+  const n = 2 ** z;
+  const x = Math.max(0, Math.min(n - 1, Math.floor(((center.lng + 180) / 360) * n)));
+  const rad = center.lat * Math.PI / 180;
+  const yRaw = Math.floor((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2 * n);
+  const y = Math.max(0, Math.min(n - 1, yRaw));
+  const coord = { canonical: { z, x, y } };
+  const manager = { getVisibleCoordinates: () => [coord], getTile: () => ({ state: loaded ? 'loaded' : 'loading' }) };
+  let pending = null;
+  let listeners = 0;
   return {
     getZoom: () => zoom,
-    getCenter: () => ({ lng: 2, lat: 46 }),
+    getCenter: () => center,
     areTilesLoaded: () => loaded,
     getCanvas: () => ({ clientWidth: 400, clientHeight: 300, getBoundingClientRect: () => ({ left: 0, top: 0, right: 400, bottom: 300, width: 400, height: 300 }) }),
     getStyle: () => ({ sources: {}, layers: [] }),
     project: () => ({ x: 10, y: 10 }),
     style: { tileManagers: { 'inset-labels': manager, 'inset-basemap': manager } },
-    once(event, callback) {
-      if (event === 'idle' && idle) {
-        queueMicrotask(() => {
-          if (unloadAfterRepaint) loaded = false;
-          callback();
-        });
+    listeners() { return listeners; },
+    on(event, callback) {
+      if (event !== 'idle') return;
+      listeners += 1;
+      if (!idle) return;
+      pending = setTimeout(() => {
+        pending = null;
+        if (unloadAfterRepaint) loaded = false;
+        callback();
+      }, idleAfterMs);
+    },
+    off() {
+      listeners = Math.max(0, listeners - 1);
+      if (pending) {
+        clearTimeout(pending);
+        pending = null;
       }
     },
     triggerRepaint() {},
@@ -98,9 +117,10 @@ function cappedFranceMap(zoom) {
         'inset-basemap': manager(baseZ),
       },
     },
-    once(event, callback) {
+    on(event, callback) {
       if (event === 'idle') queueMicrotask(callback);
     },
+    off() {},
     triggerRepaint() {},
   };
 }
@@ -123,10 +143,25 @@ test('France at 5.49, 5.5, 6.5, and 8 counts each source at the tile it draws', 
   }
 });
 
-test('a 400ms repaint timeout is a tile failure', async () => {
+test('a repaint that never goes idle is still a tile failure, and the listener is removed', async () => {
   const { planWaitTiles } = loadHelpers();
-  const timedOut = await planWaitTiles(waitingMap({ idle: false }));
+  const map = waitingMap({ idle: false });
+  const timedOut = await planWaitTiles(map);
   assert.equal(timedOut.tilesOk, false);
+  assert.equal(map.listeners(), 0);
+  assert.match(PLAN_TILE_HELPERS, /PLAN_REPAINT_IDLE_MS = 1500/);
+});
+
+test('Kenya west settles inside the repaint idle limit and drops the listener', async () => {
+  const { planWaitTiles } = loadHelpers();
+  const map = waitingMap({ idle: true, idleAfterMs: 1000, center: { lng: 37, lat: 1 } });
+  const started = Date.now();
+  const waited = await planWaitTiles(map);
+  const elapsed = Date.now() - started;
+  assert.equal(waited.tilesOk, true, JSON.stringify(waited.detail));
+  assert.ok(elapsed >= 900 && elapsed < 1500, elapsed);
+  assert.equal(map.listeners(), 0);
+  assert.ok(waited.repaintMs >= 900 && waited.repaintMs < 1500, waited.repaintMs);
 });
 
 test('tiles are read again after the repaint idle', async () => {

@@ -211,6 +211,48 @@ export function matchesMain(actual, mainNames) {
 /** Kenya west keeps main's two raster names. The symbol layer adds none. */
 export const KENYA_WEST_RASTER_COUNT = 2;
 
+/** Share of sampled pixels that may differ between a head frame and main's frame of the same camera. */
+export const RASTER_PAIR_TOLERANCE = 0.0012;
+
+function rectContains(rect, x, y) {
+  return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
+}
+
+/** Raster names are the pixels main paints. A blank frame, the wrong country, an extra copy, a clipped word, or ink under the buttons does not match. */
+export function pairedRasterNames(head, main, knownCount, options = {}) {
+  if (!head || !main || !head.data || !main.data || head.width !== main.width || head.height !== main.height || head.width < 2 || head.height < 2) {
+    return { ok: false, check: 'raster', reason: 'pair', count: knownCount };
+  }
+  if (!Number.isInteger(knownCount) || knownCount < 0) {
+    return { ok: false, check: 'raster', reason: 'count', count: knownCount };
+  }
+  if (options.kenyaWest) {
+    const count = occurrenceCount(knownCount, KENYA_WEST_RASTER_COUNT);
+    if (!count.ok) return { ok: false, check: 'count', reason: 'count', count: knownCount, expected: KENYA_WEST_RASTER_COUNT };
+  }
+  const ignore = options.ignoreRects || [];
+  let seen = 0;
+  let differ = 0;
+  const step = 2;
+  for (let y = 0; y < head.height; y += step) {
+    for (let x = 0; x < head.width; x += step) {
+      if (ignore.some((rect) => rectContains(rect, x, y))) continue;
+      seen += 1;
+      const index = (y * head.width + x) * 4;
+      const delta = Math.abs(head.data[index] - main.data[index])
+        + Math.abs(head.data[index + 1] - main.data[index + 1])
+        + Math.abs(head.data[index + 2] - main.data[index + 2]);
+      if (delta > 48) differ += 1;
+    }
+  }
+  const ratio = seen ? differ / seen : 1;
+  const tolerance = Number.isFinite(options.tolerance) ? options.tolerance : RASTER_PAIR_TOLERANCE;
+  if (!(ratio <= tolerance)) {
+    return { ok: false, check: 'raster', reason: 'pixels', ratio, differ, seen, count: knownCount };
+  }
+  return { ok: true, check: 'raster', reason: undefined, ratio, differ, seen, count: knownCount };
+}
+
 /** The plan label source uses main's tile cap, not the audit cap. Overzooming z6 turns border lettering into a second name. */
 export const LABEL_SOURCE_MAX_ZOOM = 19;
 

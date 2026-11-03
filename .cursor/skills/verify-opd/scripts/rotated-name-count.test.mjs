@@ -73,7 +73,7 @@ test('the off-centroid verdict counts screenshot ink, including the regressed ca
   assert.match(loop, /8\.5,\s*11/);
   assert.match(loop, /37\.5,\s*2/);
   assert.match(loop, /\[\s*9,\s*10\s*\]/);
-  assert.match(loop, /assertPlanLabelChecks\(row\)/);
+  assert.match(loop, /assertPlanLabelChecks\(/);
   assert.match(loop, /KENYA_WEST_RASTER_COUNT/);
   assert.doesNotMatch(loop, /countryGlyphBoxes|countCountryGlyphs|hasLabelInk|nameCountOk\(/);
 });
