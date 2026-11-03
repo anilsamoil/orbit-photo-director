@@ -4,27 +4,65 @@ import { join } from 'node:path';
 import { createDeviceContext } from './fixture-session.mjs';
 import { deviceDescriptor, launchWebkit } from './webkit-devices.mjs';
 
-export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixtureToken, startOffset }) {
-  const surface = process.env.OPD_VERIFY_SURFACE;
-  const size = process.env.OPD_VERIFY_VIEWPORT;
-  const phone = surface === 'iphone-17-pro' && size === '402x874';
-  if (!phone && !(surface === 'ipad-pro-11' && ['1210x834', '820x1180'].includes(size))) {
-    throw new Error('map-lightning expects ipad-pro-11 1210x834 or 820x1180, or iphone-17-pro 402x874');
+export const MAP_LIGHTNING_SURFACES = [
+  { id: 'webkit-iphone-17-pro-402x874', surface: 'iphone-17-pro', width: 402, height: 874, scale: 3, desktop: false, device: 'iPhone 17 Pro' },
+  { id: 'webkit-iphone-17-pro-874x402', surface: 'iphone-17-pro', width: 874, height: 402, scale: 3, desktop: false, device: 'iPhone 17 Pro' },
+  { id: 'webkit-ipad-m4-834x1210', surface: 'ipad-pro-11', width: 834, height: 1210, scale: 2, desktop: false, device: 'iPad Pro 11' },
+  { id: 'webkit-ipad-m4-1210x834', surface: 'ipad-pro-11', width: 1210, height: 834, scale: 2, desktop: false, device: 'iPad Pro 11' },
+  { id: 'webkit-ipad-m4-820x1180', surface: 'ipad-pro-11', width: 820, height: 1180, scale: 2, desktop: false, device: 'iPad Pro 11' },
+  { id: 'webkit-ipad-3-768x1024', surface: 'ipad-3', width: 768, height: 1024, scale: 2, desktop: false, device: 'iPad (3rd generation)', deviceBase: 'iPad (gen 5)' },
+  { id: 'webkit-desktop-1440x900', surface: 'desktop', width: 1440, height: 900, scale: 1, desktop: true },
+];
+
+const HELP = 'drive map-lightning is one WebKit process per surface. Set OPD_VERIFY_SURFACE and OPD_VERIFY_VIEWPORT to iphone-17-pro 402x874 or 874x402, ipad-pro-11 834x1210, 1210x834, or 820x1180, ipad-3 768x1024, or desktop 1440x900. The context is created at that size. drive map and drive all leave this probe out.';
+
+export function mapLightningPlan(surface, viewport) {
+  const name = String(surface || '').trim();
+  const text = String(viewport || '').trim();
+  const match = /^(\d+)x(\d+)$/.exec(text);
+  if (!name || !match) throw new Error(HELP);
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  const plan = MAP_LIGHTNING_SURFACES.find((entry) => entry.surface === name && entry.width === width && entry.height === height);
+  if (!plan) throw new Error(HELP);
+  return plan;
+}
+
+function contextOptions(plan) {
+  const viewport = { width: plan.width, height: plan.height };
+  if (plan.desktop) {
+    return {
+      viewport,
+      screen: viewport,
+      deviceScaleFactor: plan.scale,
+      isMobile: false,
+      hasTouch: false,
+    };
   }
-  const [width, height] = size.split('x').map(Number);
-  const viewport = { width, height };
+  const spec = { name: plan.device, viewport, deviceScaleFactor: plan.scale };
+  if (plan.deviceBase) spec.deviceBase = plan.deviceBase;
+  return {
+    ...deviceDescriptor(spec),
+    viewport,
+    screen: viewport,
+    deviceScaleFactor: plan.scale,
+  };
+}
+
+export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixtureToken, startOffset }) {
+  const plan = mapLightningPlan(process.env.OPD_VERIFY_SURFACE, process.env.OPD_VERIFY_VIEWPORT);
+  const size = `${plan.width}x${plan.height}`;
+  const { width, height } = plan;
   const { reef } = JSON.parse(await readFile(join(fixtureDir, 'meta.json'), 'utf8'));
   const browser = await launchWebkit();
   let page;
   let phase = 'boot';
   try {
-    const context = await createDeviceContext(browser, {
-      ...deviceDescriptor({ name: phone ? 'iPhone 17 Pro' : 'iPad Pro 11' }),
-      viewport, screen: viewport, deviceScaleFactor: phone ? 3 : 2,
-    }, { baseUrl, token: fixtureToken, startOffset });
+    const context = await createDeviceContext(browser, contextOptions(plan), { baseUrl, token: fixtureToken, startOffset });
     await context.addInitScript(() => localStorage.setItem('opd-map-chrome', 'shown'));
     page = await context.newPage();
-    const evidence = { viewport, labels: {} };
+    const press = (locator) => (plan.desktop ? locator.click() : locator.tap());
+    const evidence = { viewport: { width, height }, labels: {} };
     const readout = page.locator('#lightning-status');
     const toggle = page.getByRole('button', { name: 'Lightning', exact: true });
     let mode = 'observed';
@@ -99,7 +137,7 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
     await page.waitForFunction(() => !!window.__opdMap?.getLayer('targets-layer'));
     assert.deepEqual(await page.evaluate(() => [innerWidth, innerHeight]), [width, height]);
     const follow = page.locator('#toggle-follow-iss');
-    if (await follow.getAttribute('aria-pressed') === 'true') await follow.tap();
+    if (await follow.getAttribute('aria-pressed') === 'true') await press(follow);
     const pan = async (lon, lat) => page.evaluate(center => window.__opdMap.jumpTo({ center, zoom: 4 }), [lon, lat]);
     const expectLabel = async (key, text) => {
       phase = key;
@@ -108,11 +146,39 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
     };
     assert.equal(requests, 0);
     await pan(-75, 10);
-    await toggle.tap();
+    await press(toggle);
     await expectLabel('east', '9 observed flashes');
-    assert.equal(await page.locator('#map-legend-toggle').getAttribute('aria-expanded'), 'false');
+    const legendExpanded = await page.locator('#map-legend-toggle').getAttribute('aria-expanded');
+    assert.equal(legendExpanded, 'false');
     assert.equal(await readout.isVisible(), false);
-    await page.waitForFunction(() => window.__opdMap.queryRenderedFeatures({ layers: ['lightning-layer'] }).length >= 2);
+    evidence.legendClosed = { ariaExpanded: legendExpanded, statusVisible: false };
+    await page.waitForFunction(() => {
+      const map = window.__opdMap;
+      const canvas = map?.getCanvas();
+      if (!canvas || canvas.tagName !== 'CANVAS') return false;
+      const rect = canvas.getBoundingClientRect();
+      if (!(rect.width > 0) || !(rect.height > 0)) return false;
+      const features = map.queryRenderedFeatures({ layers: ['lightning-layer'] });
+      const onCanvas = features.filter((feature) => {
+        const point = map.project(feature.geometry.coordinates);
+        return point.x >= 0 && point.y >= 0 && point.x <= rect.width && point.y <= rect.height;
+      });
+      return onCanvas.length >= 2;
+    });
+    evidence.canvasPaint = await page.evaluate(() => {
+      const map = window.__opdMap;
+      const canvas = map.getCanvas();
+      const rect = canvas.getBoundingClientRect();
+      const features = map.queryRenderedFeatures({ layers: ['lightning-layer'] });
+      const onCanvas = features.filter((feature) => {
+        const point = map.project(feature.geometry.coordinates);
+        return point.x >= 0 && point.y >= 0 && point.x <= rect.width && point.y <= rect.height;
+      });
+      return { tag: canvas.tagName, width: rect.width, height: rect.height, rendered: features.length, onCanvas: onCanvas.length };
+    });
+    assert.equal(evidence.canvasPaint.tag, 'CANVAS');
+    assert.ok(evidence.canvasPaint.onCanvas >= 2);
+    await page.screenshot({ path: join(evidenceDir, `map-lightning-legend-closed-${size}.png`) });
     evidence.flashPaint = await page.evaluate(() => window.__opdMap.queryRenderedFeatures({ layers: ['lightning-layer'] })
       .map(f => ({ age: f.properties.ageSeconds, opacity: f.layer.paint['circle-opacity'] }))
       .sort((a, b) => a.age - b.age));
@@ -140,14 +206,14 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
     });
     assert.equal(evidence.movement.uploads, 0);
     assert.equal(evidence.movement.statusWrites, 0);
-    await toggle.tap();
+    await press(toggle);
     mode = 'loading';
-    await toggle.tap();
+    await press(toggle);
     await loading;
     await expectLabel('loading', 'Loading observations');
-    await toggle.tap();
+    await press(toggle);
     mode = 'observed';
-    await toggle.tap();
+    await press(toggle);
     await expectLabel('newRequest', '9 observed flashes');
     releaseLoading();
     await completedLoading;
@@ -158,7 +224,7 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
       assert.ok(evidence.order.indexOf('lightning-layer') < evidence.order.indexOf(above));
     }
     assert.ok(evidence.order.indexOf('geo-ir-layer') < evidence.order.indexOf('lightning-layer'));
-    await page.locator('#toggle-ir').tap();
+    await press(page.locator('#toggle-ir'));
     await page.waitForFunction(() => window.__opdMap.getLayoutProperty('geo-ir-layer', 'visibility') === 'visible');
     evidence.ir = await page.locator('.map-imagery-date').textContent();
     assert.match(evidence.ir, /GOES-East.*(frame \d\d:\d\d UTC|feed unavailable)/);
@@ -178,10 +244,10 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
     assert.match(evidence.rollback.text, /ahead of clock/);
     await page.waitForFunction(() => window.__opdMap.getLayoutProperty('lightning-layer', 'visibility') === 'visible');
     await page.screenshot({ path: join(evidenceDir, `map-lightning-${size}.png`) });
-    await page.locator('#time-fwd-45').tap();
+    await press(page.locator('#time-fwd-45'));
     await expectLabel('scrubbed', 'hidden at scrubbed time');
     assert.equal(await page.evaluate(() => window.__opdMap.getLayoutProperty('lightning-layer', 'visibility')), 'none');
-    await page.locator('#time-now').tap();
+    await press(page.locator('#time-now'));
     for (const [key, lon, owner] of [
       ['boundaryWest', -106.101, 'GOES-18'],
       ['boundaryTie', -106.1, 'GOES-19'],
@@ -192,17 +258,17 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
     }
     await pan(-137, 5);
     await expectLabel('west', '0 observed flashes');
-    await toggle.tap();
+    await press(toggle);
     mode = 'partial';
-    await toggle.tap();
+    await press(toggle);
     await expectLabel('westIncomplete', 'GOES-18 sector · unavailable');
     await pan(-75, 10);
     await expectLabel('eastStillAvailable', '9 observed flashes');
     await pan(20, 15);
     await expectLabel('outside', 'outside GLM coverage');
-    await toggle.tap();
+    await press(toggle);
     mode = 'overlap';
-    await toggle.tap();
+    await press(toggle);
     await pan(reef.lon, reef.lat);
     phase = 'pin-overlap';
     const pin = await page.waitForFunction(({ lon, lat }) => {
@@ -228,7 +294,8 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
     evidence.overlap = await pin.jsonValue();
     const [x, y] = evidence.overlap.touch;
     await page.screenshot({ path: join(evidenceDir, `map-lightning-overlap-${size}.png`) });
-    await page.touchscreen.tap(x, y);
+    if (plan.desktop) await page.mouse.click(x, y);
+    else await page.touchscreen.tap(x, y);
     await page.locator('.maplibregl-popup').filter({ hasText: 'Verify Reef' }).waitFor();
     evidence.targetOpened = 'Verify Reef';
     await page.locator('.maplibregl-popup-close-button').first().click();
@@ -288,26 +355,26 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
     assert.equal(await page.evaluate(() => window.__opdMap.getLayoutProperty('lightning-layer', 'visibility')), 'visible');
     assert.equal((await readout.textContent() ?? '').includes('refresh unavailable'), false);
     await page.screenshot({ path: join(evidenceDir, `map-lightning-cap-${size}.png`) });
-    await toggle.tap();
+    await press(toggle);
     mode = 'expiry';
     phase = 'expiry-visible';
-    await toggle.tap();
+    await press(toggle);
     await page.waitForFunction(() => window.__opdMap.getLayoutProperty('lightning-layer', 'visibility') === 'visible');
     phase = 'expiry-hidden';
     await page.waitForFunction(() => window.__opdMap.getLayoutProperty('lightning-layer', 'visibility') === 'none', null, { timeout: 8_000 });
     await expectLabel('exactExpiry', 'stale');
     evidence.expiration = { deadline: observationEnd + 480_000, hiddenAt: Date.now() + startOffset };
     for (const [state, text] of [['stale', 'stale'], ['missing', 'Feed unavailable']]) {
-      await toggle.tap();
+      await press(toggle);
       mode = state;
-      await toggle.tap();
+      await press(toggle);
       await expectLabel(state, text);
       assert.equal(await page.evaluate(() => window.__opdMap.getLayoutProperty('lightning-layer', 'visibility')), 'none');
     }
-    await toggle.tap();
+    await press(toggle);
     assert.equal(await readout.isVisible(), false);
     await writeFile(join(evidenceDir, `map-lightning-${size}.json`), JSON.stringify(evidence, null, 2));
-    return `map-lightning WebKit ${size} created-at-size: IR, circles, order, clock, jump, cap, dedupe, zero, stale, unavailable, coverage passed`;
+    return `map-lightning WebKit ${size} created-at-size: legend aria-expanded=false, canvas ${evidence.canvasPaint.onCanvas}, IR, circles, order, clock, jump, cap, dedupe, zero, stale, unavailable, coverage passed`;
   } catch (error) {
     const state = page ? await page.evaluate(() => ({
       label: document.getElementById('lightning-status')?.textContent,
