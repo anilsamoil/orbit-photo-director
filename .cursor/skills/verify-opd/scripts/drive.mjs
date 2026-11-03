@@ -4902,9 +4902,46 @@ export function planRasterSymbolActive(layer, zoom) {
   return true;
 }
 
+export async function planRasterNameSamples(orbit) {
+  const samples = [];
+  for (const zoom of [3.1, 8]) {
+    if (orbit.stop) orbit.stop();
+    orbit.jumpTo({ center: [-73, 41], zoom, bearing: 0, pitch: 0 });
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, 1200);
+      orbit.once('idle', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+    const style = orbit.getStyle() || {};
+    const symbolLayers = (style.layers || []).filter((layer) => layer.type === 'symbol');
+    const symbolIds = symbolLayers.map((layer) => layer.id);
+    const active = symbolLayers.filter((layer) => planRasterSymbolActive(layer, zoom)).map((layer) => layer.id);
+    let features = [];
+    try {
+      features = symbolIds.length ? orbit.queryRenderedFeatures(undefined, { layers: symbolIds }) : [];
+    } catch (error) {
+      return { ok: false, reason: 'query', zoom, error: String(error), samples };
+    }
+    const names = [];
+    for (const feature of features) {
+      const name = feature && feature.properties && feature.properties.name;
+      if (typeof name === 'string' && !names.includes(name)) names.push(name);
+    }
+    const stacked = names.filter((name) => name === 'Washington D.C.' || name === 'New York' || name === 'Washington');
+    samples.push({ zoom: orbit.getZoom(), stacked, names, active });
+    if (stacked.length || active.length || Math.abs(orbit.getZoom() - zoom) > 0.05) {
+      return { ok: false, reason: stacked.length ? 'stacked' : active.length ? 'vector' : 'zoom', samples };
+    }
+  }
+  return { ok: true, samples };
+}
+
 async function provePlanRasterNames(send) {
   const laid = await evaluate(send, `(async () => {
     const planRasterSymbolActive = ${planRasterSymbolActive.toString()};
+    const planRasterNameSamples = ${planRasterNameSamples.toString()};
     const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
     const canvas = frame?.querySelector('canvas');
     const orbit = frame?.__opdTrackInset;
@@ -4914,38 +4951,9 @@ async function provePlanRasterNames(send) {
     const raster = orbit.getLayer('inset-labels');
     const opacity = orbit.getPaintProperty('inset-labels', 'raster-opacity');
     if (!raster || !(opacity > 0)) return { ok: false, reason: 'raster', opacity: opacity == null ? null : opacity };
-    const symbolLayers = (orbit.getStyle().layers || []).filter((layer) => layer.type === 'symbol');
-    const symbolIds = symbolLayers.map((layer) => layer.id);
-    const samples = [];
-    for (const zoom of [3.1, 8]) {
-      if (orbit.stop) orbit.stop();
-      orbit.jumpTo({ center: [-73, 41], zoom, bearing: 0, pitch: 0 });
-      await new Promise((resolve) => {
-        const timer = setTimeout(resolve, 1200);
-        orbit.once('idle', () => {
-          clearTimeout(timer);
-          resolve();
-        });
-      });
-      const active = symbolLayers.filter((layer) => planRasterSymbolActive(layer, zoom)).map((layer) => layer.id);
-      let features = [];
-      try {
-        features = symbolIds.length ? orbit.queryRenderedFeatures(undefined, { layers: symbolIds }) : [];
-      } catch (error) {
-        return { ok: false, reason: 'query', zoom, error: String(error) };
-      }
-      const names = [];
-      for (const feature of features) {
-        const name = feature && feature.properties && feature.properties.name;
-        if (typeof name === 'string' && !names.includes(name)) names.push(name);
-      }
-      const stacked = names.filter((name) => name === 'Washington D.C.' || name === 'New York' || name === 'Washington');
-      samples.push({ zoom: orbit.getZoom(), stacked, names, active });
-      if (stacked.length || active.length || Math.abs(orbit.getZoom() - zoom) > 0.05) {
-        return { ok: false, reason: stacked.length ? 'stacked' : active.length ? 'vector' : 'zoom', samples };
-      }
-    }
-    return { ok: true, samples, opacity };
+    const sampled = await planRasterNameSamples(orbit);
+    if (!sampled.ok) return sampled;
+    return { ok: true, samples: sampled.samples, opacity };
   })()`);
   if (!laid?.ok) throw new Error(`plan raster names ${JSON.stringify(laid)}`);
 }
