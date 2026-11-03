@@ -147,6 +147,14 @@ vi.mock('maplibre-gl', () => {
 import countryRasterLevels from '../src/map/adapters/maplibre/country-raster-levels.json' with { type: 'json' };
 import { createTrackInset, keptLettering, letterboxCamera, PLAN_WHEEL_RESIZE_CAP_MS, readableCountryName } from '../src/map/adapters/maplibre/track-inset';
 
+function unprojectCover(x: number, y: number): { lng: number; lat: number } {
+  const yOf = (latitude: number) => (1 - Math.asinh(Math.tan(latitude * Math.PI / 180)) / Math.PI) / 2;
+  const latOf = (mercatorY: number) => Math.atan(Math.sinh(Math.PI * (1 - 2 * mercatorY))) * 180 / Math.PI;
+  const scale = 512 * 2 ** created.zoom;
+  const mercatorY = yOf(created.center[1]) + (y - created.size[1] / 2) / scale;
+  return { lng: created.center[0] + (x - created.size[0] / 2) / scale * 360, lat: latOf(mercatorY) };
+}
+
 function maskArea(ring: number[][]): number {
   let sum = 0;
   for (let index = 0; index < ring.length - 1; index += 1) {
@@ -415,6 +423,11 @@ describe('plan inset labels', () => {
       expect(ring.length, `Australia ${size.join('x')} ring`).toBeGreaterThan(3);
       expect(ring.every((pair) => pair.every((value) => Number.isFinite(value))), `Australia ${size.join('x')} coords`).toBe(true);
       expect(maskArea(ring), `Australia ${size.join('x')} area`).toBeGreaterThan(0);
+      const cover = (australia.frame as HTMLElement & { __opdTrackInset?: { __opdLabelMasks?: { left: number; top: number; right: number; bottom: number }[] } }).__opdTrackInset?.__opdLabelMasks?.[0];
+      expect(cover, `Australia ${size.join('x')} cover`).toBeTruthy();
+      const corner = unprojectCover(cover!.left, cover!.top);
+      expect(Math.abs(ring[0]![0]! - corner.lng)).toBeLessThan(0.01);
+      expect(Math.abs(ring[0]![1]! - corner.lat)).toBeLessThan(0.01);
       australia.inset.destroy();
     }
     for (const zoom of [6.5, 6.51] as const) {

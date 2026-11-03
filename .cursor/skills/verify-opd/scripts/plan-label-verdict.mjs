@@ -291,6 +291,22 @@ export function oneNameSource(row) {
   return { ok: true, country: row.country, zoom, count, raster: rasterCount };
 }
 
+/** Projected anchor of a country, in plan pixels. Zero names are allowed only when this point is off the canvas. */
+export function anchorOnPlan(anchor, center, zoom, width, height) {
+  const scale = 512 * (2 ** zoom);
+  const yOf = (latitude) => (1 - Math.asinh(Math.tan(latitude * Math.PI / 180)) / Math.PI) / 2;
+  const x = width / 2 + (anchor[0] - center[0]) / 360 * scale;
+  const y = height / 2 + (yOf(anchor[1]) - yOf(center[1])) * scale;
+  return { x, y, inside: x >= 0 && y >= 0 && x <= width && y <= height };
+}
+
+/** One name, or none when the anchor is off the plan. Two or more is always a duplicate. */
+export function nameCountOk(total, anchorInside) {
+  if (total >= 2) return { ok: false, reason: 'duplicate', total };
+  if (total === 0) return { ok: !anchorInside, reason: anchorInside ? 'gap' : 'offscreen', total };
+  return { ok: true, total };
+}
+
 /** Fully visible names that clear the same lettering-size floor as the raster reader. */
 export function completeNameCount(screenBoxes, viewport, masks = []) {
   const width = viewport && viewport.width;

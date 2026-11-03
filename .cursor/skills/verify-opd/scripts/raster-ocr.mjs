@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { countryLabelCountsScreen } from '../../../../frontend/src/map/adapters/maplibre/country-label-size.ts';
+import { countryLabelCountsScreen, letteringOccluded } from '../../../../frontend/src/map/adapters/maplibre/country-label-size.ts';
 
 export function rasterHelperFrom(source) {
   const text = String(source);
@@ -186,8 +186,17 @@ export function readableRasterName(pack, row, country) {
     if (!(ink[2] > ink[0] && ink[3] > ink[1])) return false;
     if (ink[0] < 0 || ink[1] < 0 || ink[2] > width || ink[3] > height) return false;
     if (Number.isFinite(zoom) && !countryLabelCountsScreen(ink, zoom)) return false;
-    if ((occlusions || []).some(rect => ink[0] < rect[2] && ink[2] > rect[0] && ink[1] < rect[3] && ink[3] > rect[1])) return false;
+    if (letteringOccluded(ink, occlusions || [])) return false;
     return true;
   });
-  return { readable: boxes.length > 0, boxes };
+  const unique = [];
+  for (const word of boxes) {
+    const ink = glyphInk(word);
+    if (unique.some((kept) => {
+      const other = glyphInk(kept);
+      return ink[0] < other[2] && ink[2] > other[0] && ink[1] < other[3] && ink[3] > other[1];
+    })) continue;
+    unique.push(word);
+  }
+  return { readable: unique.length > 0, boxes: unique };
 }

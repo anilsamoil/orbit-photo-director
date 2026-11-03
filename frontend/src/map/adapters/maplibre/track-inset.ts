@@ -3,7 +3,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 
 import { insetTrackBounds, type LonLat } from '../../../insets/bounds';
 import { terminatorNightPolygonFeatures } from '../../../terminator';
-import { countryLabelCounts } from './country-label-size';
+import { countryLabelCounts, letteringOccluded } from './country-label-size';
 import countryRasterLevels from './country-raster-levels.json' with { type: 'json' };
 
 const ESRI_DARK_TILES = [
@@ -190,8 +190,7 @@ const CLIPPED_LABEL_COVER = '#414143';
 export function readableCountryName(box: ScreenBox, viewport: ScreenBox, occlusions: readonly ScreenBox[]): boolean {
   return box.left >= viewport.left - RASTER_INK_EDGE_PX && box.top >= viewport.top - RASTER_INK_EDGE_PX
     && box.right <= viewport.right + RASTER_INK_EDGE_PX && box.bottom <= viewport.bottom + RASTER_INK_EDGE_PX
-    && !occlusions.some((cover) => box.left < cover.right && box.right > cover.left
-      && box.top < cover.bottom && box.bottom > cover.top);
+    && !letteringOccluded(box, occlusions);
 }
 
 function mercatorLngLat(x: number, y: number): [number, number] {

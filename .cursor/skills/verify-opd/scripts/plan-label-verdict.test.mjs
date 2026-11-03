@@ -6,9 +6,10 @@ import vm from 'node:vm';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readableRasterName } from './raster-ocr.mjs';
+import { letteringOccluded } from '../../../../frontend/src/map/adapters/maplibre/country-label-size.ts';
 import {
   AUDITED_RASTER_LEVELS, auditRasterLevels, countryStyleVerdict, countrySweepZooms,
-  auditedNameCandidates, auditedNameReadable, clippedRasterRemnant, completeNameCount, loadCountryRasterLevels, loadCountrySymbolLayers, oneNameSource, planLabelReaders, planLabelVerdict, rasterNameEvidence, rasterPainted,
+  anchorOnPlan, auditedNameCandidates, auditedNameReadable, clippedRasterRemnant, completeNameCount, loadCountryRasterLevels, loadCountrySymbolLayers, nameCountOk, oneNameSource, planLabelReaders, planLabelVerdict, rasterNameEvidence, rasterPainted,
 } from './plan-label-verdict.mjs';
 
 test('an exact sovereign name is not vetoed by an unrelated adjective', () => {
@@ -253,11 +254,35 @@ test('the name sweep includes the off-centroid cameras and rejects a clipped rem
   assert.equal(border.reason, 'duplicate');
   assert.equal(border.raster, 3);
   assert.match(sweep, /\[\s*8,\s*10\s*\]/);
-  assert.match(sweep, /834x1210/);
-  assert.match(sweep, /820x1180/);
-  assert.match(sweep, /1210x834/);
+  assert.match(sweep, /\[\s*9,\s*10\s*\]/);
+  assert.match(sweep, /8\.5,\s*11/);
+  assert.match(sweep, /37\.5,\s*2/);
+  assert.match(sweep, /\[\s*37,\s*1\s*\]/);
   assert.doesNotMatch(sweep, /minWidth/);
+  assert.doesNotMatch(sweep, /allowEmpty/);
+  assert.doesNotMatch(sweep, /frames:/);
   assert.doesNotMatch(sweep, /raster \? 1 : 0/);
+  const franceNarrow = anchorOnPlan([2, 46], [-0.33, 46], 6.51, 435, 590);
+  assert.ok(Math.abs(franceNarrow.x - 519.5) < 1, franceNarrow.x);
+  assert.equal(franceNarrow.inside, false);
+  assert.equal(nameCountOk(0, franceNarrow.inside).ok, true);
+  assert.equal(anchorOnPlan([2, 46], [-0.33, 46], 5.5, 274, 984).inside, false);
+  assert.equal(anchorOnPlan([134, -25], [131.772, -25], 5.5, 274, 984).inside, false);
+  const argentina = anchorOnPlan([-64, -34], [-63.36, -34], 6.5, 478, 690);
+  assert.equal(argentina.inside, true);
+  assert.equal(nameCountOk(0, argentina.inside).ok, false);
+  assert.equal(nameCountOk(2, false).ok, false);
+  assert.equal(letteringOccluded([0, 0, 100, 20], [[99, 0, 140, 30]]), false);
+  assert.equal(letteringOccluded([0, 0, 100, 20], [[92, 0, 140, 30]]), true);
+  const canada = { text: 'CANADA', uppercase: true, box: [1000, 1000, 1200, 1080] };
+  const doubledServices = {
+    mosaics: [
+      { z: 6, service: 'reference', lines: [[canada]], words: [canada] },
+      { z: 6, service: 'dark', lines: [[canada]], words: [canada] },
+    ],
+  };
+  const canadaRow = { zoom: 1.5, viewport: { width: 8000, height: 8000, occlusions: [], origin: { x: 0, y: 0 } } };
+  assert.equal(readableRasterName(doubledServices, canadaRow, 'Canada').boxes.length, 1);
   const doubled = oneNameSource({
     tilesOk: true, zoom: 6.5, tileZ: 6, country: 'Nigeria', names: [], rasterReadable: true, rasterCount: 2,
   });
