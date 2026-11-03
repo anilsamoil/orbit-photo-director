@@ -100,6 +100,7 @@ describe('launch catalog store', () => {
     expect(tiers?.groups.watch.map((launch) => launch.eventId)).toEqual(['event-1']);
     expect(tiers?.pins).toEqual([]);
     expect(fetcher).toHaveBeenCalledWith(`/${packed.pointer.path}`, expect.objectContaining({ cache: 'force-cache' }));
+    expect(store.acceptedPath()).toBe(packed.pointer.path);
     expect(parseLaunchCatalogPointer(packed.pointer).path).toBe('launch/catalog/v/r1.json');
     expect(() => parseLaunchPointer(packed.pointer)).toThrow();
     expect(() => parseLaunchCatalogPointer({ ...packed.pointer, path: 'launch/v/r1.json' })).toThrow();
