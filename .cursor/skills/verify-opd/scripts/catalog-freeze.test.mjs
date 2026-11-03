@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { catalogFreezeTime } from './drive.mjs';
+import { catalogFreezeTime, settleCatalogFreeze } from './drive.mjs';
 
 test('a renewed catalog is the frozen clock after the original request leaves the 250 entry buffer', () => {
   const original = 'http://127.0.0.1:41731/launch/catalog/v/c1000-50.json';
@@ -18,4 +18,34 @@ test('a renewed catalog is the frozen clock after the original request leaves th
   const freeze = drive.slice(start, drive.indexOf('freezeFixtureClock.toString()', start));
   assert.match(freeze, /acceptedPath/);
   assert.doesNotMatch(freeze, /getEntriesByType/);
+  assert.match(freeze, /!pin/);
+});
+
+test('a delayed catalog response freezes the catalog that lands, not the one already held', async () => {
+  let path = 'launch/catalog/v/c1000-1.json';
+  let release = () => {};
+  const catalog = {
+    inFlight: new Promise((resolve) => {
+      release = () => {
+        path = 'launch/catalog/v/c2000-1.json';
+        catalog.inFlight = null;
+        resolve();
+      };
+    }),
+    acceptedPath: () => path,
+  };
+  const applied = [];
+  const pending = settleCatalogFreeze(catalog, (instant) => applied.push(instant));
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(applied.length, 0);
+  release();
+  const result = await pending;
+  assert.equal(result.ok, true);
+  assert.equal(result.frozen, 2000);
+  assert.deepEqual(applied, [2000]);
+  const drive = readFileSync(new URL('./drive.mjs', import.meta.url), 'utf8');
+  const start = drive.indexOf("'iss-all-launches'");
+  const region = drive.slice(start, drive.indexOf('iss all launches pin in frame', start));
+  assert.equal(region.split('settleCatalogFreeze').length - 1, 2);
+  assert.match(region, /!pin/);
 });

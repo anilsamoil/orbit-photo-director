@@ -126,3 +126,26 @@ test('no idle event is a timeout and does not read the stale filter', async () =
   assert.equal(reads, 0);
   assert.match(source, /stacked\.length \|\| active\.length/);
 });
+
+test('a timeout removes the idle listener', async () => {
+  const listeners = new Set();
+  const orbit = {
+    stop() {},
+    jumpTo() {},
+    getZoom() { return 3.1; },
+    once(event, callback) {
+      if (event === 'idle') listeners.add(callback);
+    },
+    off(event, callback) {
+      if (event === 'idle') listeners.delete(callback);
+    },
+    getStyle() {
+      throw new Error('style read after timeout');
+    },
+    queryRenderedFeatures() { return []; },
+  };
+  const result = await planRasterNameSamples(orbit);
+  assert.equal(result.reason, 'timeout');
+  assert.equal(listeners.size, 0);
+  assert.match(source, /stacked\.length \|\| active\.length/);
+});
