@@ -104,13 +104,14 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
     const expectLabel = async (key, text) => {
       phase = key;
       await page.waitForFunction(part => document.querySelector('#lightning-status')?.textContent.includes(part), text);
-      evidence.labels[key] = await readout.innerText();
+      evidence.labels[key] = await readout.textContent();
     };
     assert.equal(requests, 0);
     await pan(-75, 10);
     await toggle.tap();
     await expectLabel('east', '9 observed flashes');
-    assert.equal(await readout.isVisible(), true);
+    assert.equal(await page.locator('#map-legend-toggle').getAttribute('aria-expanded'), 'false');
+    assert.equal(await readout.isVisible(), false);
     await page.waitForFunction(() => window.__opdMap.queryRenderedFeatures({ layers: ['lightning-layer'] }).length >= 2);
     evidence.flashPaint = await page.evaluate(() => window.__opdMap.queryRenderedFeatures({ layers: ['lightning-layer'] })
       .map(f => ({ age: f.properties.ageSeconds, opacity: f.layer.paint['circle-opacity'] }))
@@ -159,7 +160,7 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
     assert.ok(evidence.order.indexOf('geo-ir-layer') < evidence.order.indexOf('lightning-layer'));
     await page.locator('#toggle-ir').tap();
     await page.waitForFunction(() => window.__opdMap.getLayoutProperty('geo-ir-layer', 'visibility') === 'visible');
-    evidence.ir = await page.locator('.map-imagery-date').innerText();
+    evidence.ir = await page.locator('.map-imagery-date').textContent();
     assert.match(evidence.ir, /GOES-East.*(frame \d\d:\d\d UTC|feed unavailable)/);
     evidence.rollback = await page.evaluate(end => {
       const original = Date.now;
@@ -264,7 +265,7 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
       const text = document.querySelector('#lightning-status')?.textContent ?? '';
       return /feed [0-3]m old/.test(text) && !text.includes('stale') && !text.includes('ahead of clock');
     });
-    evidence.labels.resumed = await readout.innerText();
+    evidence.labels.resumed = await readout.textContent();
     assert.equal(await page.evaluate(() => window.__opdMap.getLayoutProperty('lightning-layer', 'visibility')), 'visible');
     const kept = await flashCoords();
     assert.ok(kept.length > 0);
@@ -285,7 +286,7 @@ export async function driveMapLightning({ baseUrl, evidenceDir, fixtureDir, fixt
     assert.equal(accepted.length, 1024);
     evidence.cap = { perSatellite: 512, accepted: accepted.length };
     assert.equal(await page.evaluate(() => window.__opdMap.getLayoutProperty('lightning-layer', 'visibility')), 'visible');
-    assert.equal((await readout.innerText()).includes('refresh unavailable'), false);
+    assert.equal((await readout.textContent() ?? '').includes('refresh unavailable'), false);
     await page.screenshot({ path: join(evidenceDir, `map-lightning-cap-${size}.png`) });
     await toggle.tap();
     mode = 'expiry';
