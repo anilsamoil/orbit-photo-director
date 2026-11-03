@@ -43,6 +43,11 @@ export class LaunchCatalogStore {
 
   constructor(private fetcher: typeof fetch = (...args) => fetch(...args)) {}
 
+  acceptedPath(): string | null {
+    const path = this.held?.pointer.path;
+    return typeof path === 'string' && path.length > 0 ? path : null;
+  }
+
   read(now: number): TierCatalog | null {
     if (!this.held) return null;
     if (this.seen && !samePointer(this.seen, this.held.pointer)) return null;

@@ -4907,13 +4907,21 @@ export async function planRasterNameSamples(orbit) {
   for (const zoom of [3.1, 8]) {
     if (orbit.stop) orbit.stop();
     orbit.jumpTo({ center: [-73, 41], zoom, bearing: 0, pitch: 0 });
-    await new Promise((resolve) => {
-      const timer = setTimeout(resolve, 1200);
+    const settled = await new Promise((resolve) => {
+      let done = false;
+      const timer = setTimeout(() => {
+        if (done) return;
+        done = true;
+        resolve(false);
+      }, 4000);
       orbit.once('idle', () => {
+        if (done) return;
+        done = true;
         clearTimeout(timer);
-        resolve();
+        resolve(true);
       });
     });
+    if (!settled) return { ok: false, reason: 'timeout', zoom, samples };
     const style = orbit.getStyle() || {};
     const symbolLayers = (style.layers || []).filter((layer) => layer.type === 'symbol');
     const symbolIds = symbolLayers.map((layer) => layer.id);
@@ -7595,6 +7603,13 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
   return `${held.join(', ')}; restored ${restored.stage}x${restored.frame} scroll ${restored.scrollHeight}/${restored.clientHeight} controls ${restored.controlsBottom} scene ${restored.sceneBottom}`;
 }
 
+export function catalogFreezeTime(_entries, acceptedPath) {
+  const match = String(acceptedPath || '').match(/(?:^|\/)launch\/catalog\/v\/c(\d+)/);
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
 export function fixtureInstant(evidenceDir, fixtureDir) {
   if (fixtureDir) {
     for (const [name, key] of [['catalog-clock.json', 'anchor'], ['meta.json', 'now']]) {
@@ -7894,15 +7909,12 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
     15000,
   );
   await shot(send, evidenceDir, 'iss-all-launches');
-  const loadedAnchor = await evaluate(send, `(() => {
-    const entries = performance.getEntriesByType('resource');
-    let anchor = 0;
-    for (const entry of entries) {
-      const match = String(entry.name).match(/\\/launch\\/catalog\\/v\\/c(\\d+)/);
-      if (match) anchor = Number(match[1]);
-    }
-    return anchor > 0 ? anchor : null;
+  const acceptedPath = await evaluate(send, `(async () => {
+    const { launchCatalog } = await import('/src/launch-catalog.ts');
+    const path = typeof launchCatalog.acceptedPath === 'function' ? launchCatalog.acceptedPath() : '';
+    return typeof path === 'string' ? path : '';
   })()`);
+  const loadedAnchor = catalogFreezeTime([], acceptedPath);
   const frozen = loadedAnchor || fixtureInstant(evidenceDir, send.fixtureDir);
   await evaluate(send, `(${freezeFixtureClock.toString()})(${frozen})`);
   try {

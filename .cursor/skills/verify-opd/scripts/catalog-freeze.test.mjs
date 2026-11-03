@@ -14,7 +14,8 @@ test('a renewed catalog is the frozen clock after the original request leaves th
   assert.equal(capped.some((entry) => entry.name.includes('c1500')), true);
   assert.equal(catalogFreezeTime(capped, accepted), 2000);
   const drive = readFileSync(new URL('./drive.mjs', import.meta.url), 'utf8');
-  const freeze = drive.slice(drive.indexOf("'iss-all-launches'"), drive.indexOf('freezeFixtureClock.toString()'));
+  const start = drive.indexOf("'iss-all-launches'");
+  const freeze = drive.slice(start, drive.indexOf('freezeFixtureClock.toString()', start));
   assert.match(freeze, /acceptedPath/);
   assert.doesNotMatch(freeze, /getEntriesByType/);
 });
