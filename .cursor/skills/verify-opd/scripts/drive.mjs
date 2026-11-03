@@ -7664,6 +7664,34 @@ export async function settleCatalogFreeze(catalog, freeze) {
   return { ok: true, path, frozen };
 }
 
+export function nextPinFreeze(lastPath, path) {
+  const frozen = catalogFreezeTime(null, path);
+  if (!(frozen > 0)) return { ok: false, reason: 'catalog', path: path || '' };
+  return { ok: true, path, frozen, refroze: path !== lastPath };
+}
+
+export async function pollPinnedCatalog({ readStep, sleep, now, deadlineMs }) {
+  const started = now();
+  let lastPath = '';
+  let last = null;
+  while (now() - started < deadlineMs) {
+    const step = await readStep(lastPath);
+    if (!step || step.ok === false || !(step.frozen > 0)) {
+      return { ok: false, reason: 'catalog', path: step && step.path || '' };
+    }
+    if (step.path !== lastPath) {
+      if (step.refroze !== true) return { ok: false, reason: 'stale', path: step.path };
+      lastPath = step.path;
+    }
+    last = step.pin;
+    if (last && last.ok === true) return last;
+    const remaining = deadlineMs - (now() - started);
+    if (remaining <= 0) break;
+    await sleep(Math.min(250, remaining));
+  }
+  throw new Error(`iss all launches pin in frame timed out. Last value: ${JSON.stringify(last)}`);
+}
+
 export function catalogFreezeTime(_entries, acceptedPath) {
   const match = String(acceptedPath || '').match(/(?:^|\/)launch\/catalog\/v\/c(\d+)/);
   if (!match) return null;
@@ -7986,25 +8014,38 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
   await click(send, '[data-iss-preset="nadir"]');
   const pinFreeze = await freezeAccepted();
   if (!pinFreeze?.ok) throw new Error(`iss catalog freeze ${JSON.stringify(pinFreeze)}`);
-  await waitFor(
-    send,
-    `(() => {
-      const pressed = document.querySelector('[data-iss-preset="nadir"]')?.getAttribute('aria-pressed') === 'true';
-      const card = document.querySelector('[data-iss-launch-card]');
-      const name = card?.querySelector('[data-iss-launch-name]')?.textContent ?? null;
-      const visibility = card?.querySelector('[data-iss-launch-visibility]')?.textContent ?? null;
-      const pin = !!document.querySelector('.iss-launch-pin');
-      const edge = !!document.querySelector('[data-iss-launch-edge]');
-      const look = document.querySelector('[data-iss-launch-label]')?.textContent ?? null;
-      const status = document.querySelector('[data-iss-status]')?.textContent ?? null;
-      if (!pressed || name !== 'Verify Horizon' || !pin) {
-        return { pressed, name, visibility, pin, edge, look, status: status && status.slice(0, 180) };
-      }
-      return { ok: true };
-    })()`,
-    'iss all launches pin in frame',
-    15000,
-  );
+  const pinned = await pollPinnedCatalog({
+    now: () => Date.now(),
+    sleep,
+    deadlineMs: 15000,
+    readStep: (lastPath) => evaluate(send, `(async () => {
+      const { launchCatalog } = await import('/src/launch-catalog.ts');
+      const catalogFreezeTime = ${catalogFreezeTime.toString()};
+      const nextPinFreeze = ${nextPinFreeze.toString()};
+      const freezeFixtureClock = ${freezeFixtureClock.toString()};
+      const path = typeof launchCatalog.settledPath === 'function' ? ((await launchCatalog.settledPath()) || '') : '';
+      const decision = nextPinFreeze(${JSON.stringify(lastPath)}, path);
+      if (!decision.ok) return decision;
+      if (decision.refroze) freezeFixtureClock(decision.frozen);
+      const pin = (() => {
+        const pressed = document.querySelector('[data-iss-preset="nadir"]')?.getAttribute('aria-pressed') === 'true';
+        const card = document.querySelector('[data-iss-launch-card]');
+        const name = card?.querySelector('[data-iss-launch-name]')?.textContent ?? null;
+        const visibility = card?.querySelector('[data-iss-launch-visibility]')?.textContent ?? null;
+        const pin = !!document.querySelector('.iss-launch-pin');
+        const edge = !!document.querySelector('[data-iss-launch-edge]');
+        const look = document.querySelector('[data-iss-launch-label]')?.textContent ?? null;
+        const status = document.querySelector('[data-iss-status]')?.textContent ?? null;
+        if (!pressed || name !== 'Verify Horizon' || !pin) {
+          return { pressed, name, visibility, pin, edge, look, status: status && status.slice(0, 180) };
+        }
+        return { ok: true };
+      })();
+      return { path: decision.path, frozen: decision.frozen, refroze: decision.refroze, pin };
+    })()`),
+    label: 'iss all launches pin in frame',
+  });
+  if (!pinned?.ok) throw new Error(`iss catalog freeze ${JSON.stringify(pinned)}`);
   const aimBeforePin = await evaluate(send, `(() => {
     const center = window.__opdIss?.getCenter?.();
     return center ? { ok: true, lat: center.lat, lng: center.lng } : null;
