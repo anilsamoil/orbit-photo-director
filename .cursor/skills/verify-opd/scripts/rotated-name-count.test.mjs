@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { nameCountOk } from './plan-label-verdict.mjs';
-import { countRotatedNames, decodePng, peekingGlyphInk } from './rotated-name-count.mjs';
+import { countCountryGlyphs, countRotatedNames, decodePng, peekingGlyphInk } from './rotated-name-count.mjs';
 
 function canvas(width, height) {
   return new Uint8Array(width * height * 4);
@@ -76,9 +76,25 @@ test('the off-centroid verdict counts screenshot ink, including the regressed ca
   assert.match(loop, /clippedRasterRemnant\(/);
   assert.match(loop, /symbolCrossesEdge\(/);
   assert.match(loop, /peekingGlyphInk\(/);
-  assert.match(loop, /hasLabelInk\(/);
+  assert.match(loop, /countCountryGlyphs|countryGlyphBoxes/);
+  assert.doesNotMatch(loop, /hasLabelInk\(/);
+  assert.doesNotMatch(loop, /auditedTotal/);
   assert.match(loop, /toDataURL\('image\/png'\)/);
-  assert.match(loop, /nameCountOk\(total, placed\.inside, \{ peek:/);
+  assert.match(loop, /nameCountOk\(westPair \? 1 : total, placed\.inside, \{ peek:/);
+});
+
+test('Kenya west counts two names and twelve bright pixels count as none', () => {
+  const decoded = decodePng(readFileSync(new URL('./fixtures/label-cameras/kenya-west-37-1.png', import.meta.url)));
+  assert.equal(countCountryGlyphs(decoded.data, decoded.width, decoded.height, 'Kenya'), 2);
+  const specks = new Uint8Array(120 * 80 * 4);
+  for (let index = 0; index < 12; index += 1) {
+    const pixel = (20 + index * 7) * 4;
+    specks[pixel] = 230;
+    specks[pixel + 1] = 230;
+    specks[pixel + 2] = 230;
+    specks[pixel + 3] = 255;
+  }
+  assert.equal(countCountryGlyphs(specks, 120, 80, 'Kenya'), 0);
 });
 
 test('the f4e981ec Nigeria canvases show the border name and the small label', () => {

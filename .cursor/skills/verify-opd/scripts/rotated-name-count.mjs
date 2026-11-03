@@ -250,12 +250,16 @@ export function rotatedNameSpans(pixels, width, height) {
       return (dot.x - cx) ** 2 + (dot.y - cy) ** 2 < 96 ** 2;
     });
     if (nearDot) continue;
+    const spanX = Math.max(...xs) - Math.min(...xs);
+    const spanY = Math.max(...ys) - Math.min(...ys);
     spans.push({
       left: Math.min(...xs),
       top: Math.min(...ys),
       right: Math.max(...xs),
       bottom: Math.max(...ys),
       letters: group.length,
+      size: sizes[Math.floor(sizes.length / 2)],
+      angle: Math.abs(Math.atan2(spanY, spanX) * 180 / Math.PI),
     });
   }
   return { spans, dots, letters, bulky };
@@ -297,6 +301,25 @@ export function peekingGlyphInk(pixels, width, height, masks) {
     }
   }
   return hits >= 8;
+}
+
+/** Names of one country in a screenshot. Rotated border lettering counts. Scattered bright pixels do not. */
+export function countryGlyphBoxes(pixels, width, height, country) {
+  const found = rotatedNameSpans(pixels, width, height);
+  const spans = Array.isArray(found) ? [] : found.spans;
+  const letters = String(country || '').replace(/[^a-z]/gi, '').length;
+  return spans.filter((span) => {
+    const length = Math.hypot(span.right - span.left, span.bottom - span.top);
+    if (span.size < 5 || span.size > 20) return false;
+    if (length < 22 || length > 140) return false;
+    const horizontalName = span.angle < 12 && span.letters >= letters - 1 && span.letters <= letters + 1;
+    const borderName = span.angle >= 12 && span.letters >= Math.max(4, letters - 1) && span.letters <= letters + 6;
+    return horizontalName || borderName;
+  }).map((span) => [span.left, span.top, span.right, span.bottom]);
+}
+
+export function countCountryGlyphs(pixels, width, height, country) {
+  return countryGlyphBoxes(pixels, width, height, country).length;
 }
 
 /** How many complete country names the screenshot paints. */

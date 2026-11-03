@@ -123,7 +123,7 @@ const COUNTRY_TEXT_LAYOUT: SymbolLayerSpecification['layout'] = {
   'text-font': ['Open Sans Regular'],
   'text-size': 12,
   'text-variable-anchor-offset': ['match', ['get', 'name'], 'Kenya',
-    ['literal', ['top', [0, 1.5], 'bottom', [0, -1.5], ...countryPlacementCandidates()]],
+    ['literal', ['bottom', [0, -1.5], 'top', [0, 1.5], ...countryPlacementCandidates()]],
     ['literal', countryPlacementCandidates()]],
   'symbol-sort-key': ['match', ['get', 'name'], 'Nigeria', 0, 'Kenya', 1, 2],
 };
@@ -307,7 +307,7 @@ function viewportFallbacks(map: MapLibreMap, frame: HTMLElement): { names: strin
     if (feature.geometry.type !== 'Point') return [];
     const name = String(feature.properties?.name);
     const painted = COUNTRY_RASTER_LEVELS.countries[name] ?? [];
-    if (drawnTile(zoom, INSET_LABEL_MAX_ZOOM) > COUNTRY_RASTER_LEVELS.through) return [];
+    const liveTile = drawnTile(zoom, INSET_LABEL_MAX_ZOOM);
     const sources = RASTER_SOURCES.flatMap((source) => {
       const drawn = drawnTile(zoom, source.maxzoom);
       const audited = painted.filter((level) => level <= drawn);
@@ -315,7 +315,7 @@ function viewportFallbacks(map: MapLibreMap, frame: HTMLElement): { names: strin
       return tile == null ? [] : [{ service: source.service, tile, stale: !painted.includes(drawn) }];
     });
     if (sources.length === 0) return [];
-    const glyphs: { screen: ScreenBox; extent: ScreenBox; complete: boolean; area: number }[] = [];
+    const glyphs: { screen: ScreenBox; extent: ScreenBox; complete: boolean; area: number; onCanvas: boolean }[] = [];
     for (const source of sources) {
       for (const entry of COUNTRY_RASTER_LEVELS.bounds?.[name]?.[source.tile] ?? []) {
         if (entry.service !== source.service) continue;
@@ -328,13 +328,28 @@ function viewportFallbacks(map: MapLibreMap, frame: HTMLElement): { names: strin
         const ink = projectBounds(glyph);
         const extent = projectBounds(entry.box);
         const counted = countryLabelCounts({ width: glyph[2]! - glyph[0]!, height: glyph[3]! - glyph[1]! });
+        const onCanvas = counted && readableCountryName(ink, viewport, occlusions);
         glyphs.push({
           screen: ink,
           extent,
-          complete: !source.stale && counted && readableCountryName(ink, viewport, occlusions),
+          onCanvas,
+          complete: !source.stale && onCanvas,
           area: Math.abs(ink.right - ink.left) * Math.abs(ink.bottom - ink.top),
         });
       }
+    }
+    const onScreen = glyphs.some((glyph) => glyph.onCanvas);
+    if (liveTile > COUNTRY_RASTER_LEVELS.through) {
+      const anchor = map.project(feature.geometry.coordinates as [number, number]);
+      const dx = anchor.x - viewport.right / 2;
+      const dy = anchor.y - viewport.bottom / 2;
+      const centered = viewport.right >= 430 && dx * dx + dy * dy <= 24 * 24;
+      if (onScreen && liveTile < 8) return [];
+      if (!centered) return [];
+      const fitted = fittedSymbolAnchor(name, anchor, viewport);
+      if (!fitted) return [];
+      symbols.push({ name, anchor: { x: Math.round(fitted.x), y: Math.round(fitted.y) } });
+      return [name];
     }
     const decision = keptLettering(glyphs);
     const keptInk = decision.keep >= 0 ? glyphs[decision.keep]!.screen : null;
@@ -349,7 +364,7 @@ function viewportFallbacks(map: MapLibreMap, frame: HTMLElement): { names: strin
       covers.push(...remnantCovers(glyphs[index]!.extent, protect, viewport));
     }
     if (!fitted) return [];
-    symbols.push({ name, anchor: fitted });
+    symbols.push({ name, anchor: { x: Math.round(fitted.x), y: Math.round(fitted.y) } });
     return [name];
   });
   return { names, covers, rasterCount, symbols, kept };
@@ -465,20 +480,22 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
   let fittedHeight = -1;
   let viewportNames = '';
   let viewportCovers = '';
+  let symbolDataKey = '';
   const syncCountryLabels = (): void => {
     if (removed || !map.isStyleLoaded() || frame.clientWidth < 2 || frame.clientHeight < 2) return;
     const state = viewportFallbacks(map, frame);
     const features = state.covers.map((cover) => {
       const ring = [
-        map.unproject([cover.left, cover.top]),
-        map.unproject([cover.right, cover.top]),
-        map.unproject([cover.right, cover.bottom]),
-        map.unproject([cover.left, cover.bottom]),
+        map.unproject([Math.round(cover.left), Math.round(cover.top)]),
+        map.unproject([Math.round(cover.right), Math.round(cover.top)]),
+        map.unproject([Math.round(cover.right), Math.round(cover.bottom)]),
+        map.unproject([Math.round(cover.left), Math.round(cover.bottom)]),
       ].map((point) => [point.lng, point.lat] as [number, number]);
       ring.push(ring[0]!);
       return { type: 'Feature' as const, properties: {}, geometry: { type: 'Polygon' as const, coordinates: [ring] } };
     });
-    const coverKey = JSON.stringify(features);
+    const roundCoord = (value: number) => Math.round(value * 1e5) / 1e5;
+    const coverKey = JSON.stringify(features.map((feature) => feature.geometry.coordinates[0]?.map((pair) => [roundCoord(pair[0]!), roundCoord(pair[1]!)])));
     if (coverKey !== viewportCovers) {
       viewportCovers = coverKey;
       const source = map.getSource('inset-label-mask');
@@ -494,9 +511,13 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
         geometry: { type: 'Point' as const, coordinates: [point.lng, point.lat] as [number, number] },
       };
     });
-    const symbolSource = map.getSource('inset-country-fallbacks');
-    if (symbolSource && 'setData' in symbolSource && typeof symbolSource.setData === 'function') {
-      symbolSource.setData({ type: 'FeatureCollection', features: symbolFeatures });
+    const symbolKey = JSON.stringify(symbolFeatures.map((feature) => [feature.properties.name, roundCoord(feature.geometry.coordinates[0]), roundCoord(feature.geometry.coordinates[1])]));
+    if (symbolKey !== symbolDataKey) {
+      symbolDataKey = symbolKey;
+      const symbolSource = map.getSource('inset-country-fallbacks');
+      if (symbolSource && 'setData' in symbolSource && typeof symbolSource.setData === 'function') {
+        symbolSource.setData({ type: 'FeatureCollection', features: symbolFeatures });
+      }
     }
     Object.assign(map, {
       __opdLabelMasks: state.covers,

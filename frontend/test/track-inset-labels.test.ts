@@ -50,6 +50,7 @@ const created = vi.hoisted(() => ({
   zooming: false,
   staleDrag: false,
   sources: new Map<string, { features?: unknown[] }>(),
+  setDataCalls: [] as string[],
   handlers: {} as Record<string, ((event: { originalEvent?: Event; preventDefault?: () => void }) => void)[]>,
 }));
 
@@ -130,6 +131,7 @@ vi.mock('maplibre-gl', () => {
     getSource(id: string): { setData(data: { features?: unknown[] }): void } {
       return {
         setData(data) {
+          created.setDataCalls.push(id);
           created.sources.set(id, data);
         },
       };
@@ -208,9 +210,12 @@ describe('plan inset labels', () => {
     expect(countries?.layout?.['text-ignore-placement']).not.toBe(true);
     expect(countries?.layout?.['text-variable-anchor-offset']).toEqual([
       'match', ['get', 'name'], 'Kenya',
-      ['literal', expect.arrayContaining(['top', [0, 1.5], 'bottom', [0, -1.5]])],
+      ['literal', expect.arrayContaining(['bottom', [0, -1.5], 'top', [0, 1.5]])],
       ['literal', expect.arrayContaining(['left', 'right', 'top', 'bottom'])],
     ]);
+    const kenyaAnchors = (countries?.layout?.['text-variable-anchor-offset'] as [string, unknown, string, [string, string[]]])[3][1];
+    expect(kenyaAnchors[0]).toBe('bottom');
+    expect(kenyaAnchors[1]).toEqual([0, -1.5]);
     expect(countries?.layout?.['symbol-sort-key']).toEqual(['match', ['get', 'name'], 'Nigeria', 0, 'Kenya', 1, 2]);
     expect(style?.sources['inset-countries']?.data?.features?.some((feature) => feature.properties?.name === 'Brazil')).toBe(true);
     const glyphs = readFileSync(resolve(__dirname, '../public/glyphs/Open Sans Regular/0-255.pbf'));
@@ -347,7 +352,7 @@ describe('plan inset labels', () => {
     }
   });
 
-  it('uses the level-6 lettering at zoom 5.5 and above, and restores France only when that lettering is clipped', () => {
+  it('draws one France symbol on a centered high-zoom plan and none when the word cannot fit', () => {
     const names = () => {
       const filter = created.options?.style.layers.find((layer) => layer.id === 'inset-countries-viewport')?.filter as [string, unknown, [string, string[]]];
       return filter[2][1];
@@ -361,7 +366,7 @@ describe('plan inset labels', () => {
       Object.defineProperty(frame, 'clientHeight', { value: 1600 });
       const inset = createTrackInset(frame, document.createElement('div'));
       created.events.render?.();
-      expect(names(), `France @ ${zoom}`).not.toContain('France');
+      expect(names(), `France @ ${zoom}`).toEqual(zoom >= 6.5 ? ['France'] : []);
       inset.destroy();
     }
     created.zoom = 5;
@@ -440,7 +445,7 @@ describe('plan inset labels', () => {
       Object.defineProperty(frame, 'clientHeight', { value: 690 });
       const inset = createTrackInset(frame, document.createElement('div'));
       created.events.render?.();
-      expect(names().filter((name) => name === 'India'), `India ${zoom}`).toEqual([]);
+      expect(names().filter((name) => name === 'India'), `India ${zoom}`).toEqual(['India']);
       expect((created.sources.get('inset-label-mask') as { features?: unknown[] } | undefined)?.features ?? [], `India ${zoom}`).toEqual([]);
       inset.destroy();
     }
@@ -557,6 +562,39 @@ describe('plan inset labels', () => {
         inset.destroy();
       }
     }
+  });
+
+  it('reaches idle because a repeated render does not send the same label data', () => {
+    created.setDataCalls = [];
+    created.zoom = 6.51;
+    created.center = [2, 46];
+    created.size = [435, 590];
+    const frame = document.createElement('div');
+    Object.defineProperty(frame, 'clientWidth', { value: 435 });
+    Object.defineProperty(frame, 'clientHeight', { value: 590 });
+    const inset = createTrackInset(frame, document.createElement('div'));
+    const paint = () => {
+      const handlers = created.handlers.render ?? [];
+      handlers[handlers.length - 1]?.({} as Event);
+    };
+    let writes = 0;
+    let idle = false;
+    for (let frameIndex = 0; frameIndex < 8; frameIndex += 1) {
+      const before = created.setDataCalls.length;
+      paint();
+      if (created.setDataCalls.length === before) {
+        idle = true;
+        break;
+      }
+      writes += 1;
+    }
+    expect(idle).toBe(true);
+    expect(writes).toBe(1);
+    const fallbackWrites = created.setDataCalls.filter((id) => id === 'inset-country-fallbacks').length;
+    expect(fallbackWrites).toBe(1);
+    paint();
+    expect(created.setDataCalls.filter((id) => id === 'inset-country-fallbacks').length).toBe(1);
+    inset.destroy();
   });
 
   it('covers remnant halos and stays off the kept name', () => {

@@ -37,15 +37,12 @@ test('the dark basemap at zoom 6.5 draws z8, which has no audited lettering box'
   assert.equal(levels.bounds.Nigeria['8'], undefined);
 });
 
-test('the label source is capped where the renderer would otherwise fetch z7-z9', () => {
-  assert.match(product, /inset-labels': \{ type: 'raster', tiles: ESRI_LABEL_TILES, tileSize: 256, maxzoom: COUNTRY_RASTER_LEVELS\.through \}/);
+test('the label source uses main tile levels, including z7 and z8 above the audit', () => {
+  assert.match(product, /const INSET_LABEL_MAX_ZOOM = 19/);
+  assert.match(product, /inset-labels': \{ type: 'raster', tiles: ESRI_LABEL_TILES, tileSize: 256, maxzoom: INSET_LABEL_MAX_ZOOM \}/);
   for (const camera of cameras) {
-    const open = cover(camera.center, camera.zoom, 19);
-    const capped = cover(camera.center, camera.zoom, levels.through);
-    assert.ok(open.some((tile) => tile.canonical.z > levels.through), `${camera.zoom} should request a tile above the audit when uncapped`);
-    assert.ok(capped.length > 0, `${camera.zoom} cover`);
-    for (const tile of capped) {
-      assert.ok(tile.canonical.z <= levels.through, `${camera.zoom} canonical ${tile.canonical.z}`);
-    }
+    const labels = cover(camera.center, camera.zoom, 19);
+    assert.ok(labels.length > 0, `${camera.zoom} cover`);
+    assert.ok(labels.some((tile) => tile.canonical.z > levels.through), `${camera.zoom} drew ${labels.map((tile) => tile.canonical.z).join(',')}`);
   }
 });
