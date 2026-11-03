@@ -214,3 +214,48 @@ it.each([404, 200])('ignores a prior loading request returning HTTP %s after off
   expect(vendor.visibilityOf('lightning-layer')).toBe('visible');
   expect(fetcher).toHaveBeenCalledTimes(2);
 });
+
+it('keeps the legend closed while lightning turns on, off, and on again', async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(now);
+  vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve(Response.json(raw))));
+  const style = document.createElement('style');
+  style.textContent = '.map-legend-toggle:not([aria-expanded="true"]) + .map-legend-panel { display: none; }';
+  document.head.appendChild(style);
+  document.body.innerHTML = `
+    <button id="toggle-lightning" type="button" aria-pressed="false"></button>
+    <div id="map-legend" class="map-legend">
+      <button id="map-legend-toggle" class="map-legend-toggle" type="button" aria-expanded="false" aria-controls="map-legend-panel">Legend</button>
+      <div id="map-legend-panel" class="map-legend-panel">
+        <div id="lightning-status" role="status" hidden></div>
+      </div>
+    </div>`;
+  const vendor = createVendorDouble({});
+  lightning.mount(createMapCore(vendor, createClock()));
+  const toggle = document.getElementById('toggle-lightning')!;
+  const legend = document.getElementById('map-legend-toggle')!;
+  const panel = document.getElementById('map-legend-panel')!;
+
+  function expectLegendClosed() {
+    expect(legend.getAttribute('aria-expanded')).toBe('false');
+    expect(getComputedStyle(panel).display).toBe('none');
+  }
+
+  toggle.click();
+  await vi.advanceTimersByTimeAsync(1);
+  expectLegendClosed();
+  expect(vendor.paintedLayers()).toContain('lightning-layer');
+  expect(vendor.visibilityOf('lightning-layer')).toBe('visible');
+
+  toggle.click();
+  expectLegendClosed();
+  expect(vendor.paintedLayers()).toContain('lightning-layer');
+  expect(vendor.visibilityOf('lightning-layer')).toBe('none');
+
+  toggle.click();
+  await vi.advanceTimersByTimeAsync(1);
+  expectLegendClosed();
+  expect(vendor.paintedLayers()).toContain('lightning-layer');
+  expect(vendor.visibilityOf('lightning-layer')).toBe('visible');
+  style.remove();
+});
