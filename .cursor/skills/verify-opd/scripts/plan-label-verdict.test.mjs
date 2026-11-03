@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readableRasterName } from './raster-ocr.mjs';
 import {
   AUDITED_RASTER_LEVELS, auditRasterLevels, countryStyleVerdict, countrySweepZooms,
   loadCountryRasterLevels, loadCountrySymbolLayers, oneNameSource, planLabelReaders, planLabelVerdict, rasterPainted,
@@ -63,6 +64,38 @@ test('France at 5.49, 5.5, 6.5, and 8 is proved at the capped label tile', () =>
     assert.equal(verdict.ok, true, `${zoom} ${verdict.reason} expected ${verdict.expected}`);
     assert.equal(verdict.reason, undefined);
   }
+});
+
+test('Canada at zoom 6.5 does not count a 36 by 8 dark scrap as a second name', () => {
+  const zoom = 6.5;
+  const tileZ = 8;
+  const scale = (512 * (2 ** zoom)) / (256 * (2 ** tileZ));
+  const scrap = { text: 'CANADA', uppercase: true, box: [20, 20, 20 + (36 / scale), 20 + (8 / scale)] };
+  const pack = { mosaics: [{ z: tileZ, service: 'dark', lines: [[scrap]], words: [scrap] }] };
+  const row = {
+    tilesOk: true,
+    zoom,
+    tileZ: 6,
+    country: 'Canada',
+    names: ['Canada'],
+    words: 'CANADA',
+    viewport: { width: 800, height: 600, scale, origin: { x: 0, y: 0 }, occlusions: [] },
+  };
+  const raster = readableRasterName(pack, row, 'Canada');
+  assert.equal(raster.readable, false);
+  assert.equal(oneNameSource({ ...row, rasterReadable: raster.readable }).ok, true);
+  assert.equal(oneNameSource({ ...row, rasterReadable: true }).reason, 'duplicate');
+  const full = { text: 'CANADA', uppercase: true, box: [20, 20, 20 + (200 / scale), 20 + (48 / scale)] };
+  const fullPack = { mosaics: [{ z: tileZ, service: 'dark', lines: [[full]], words: [full] }] };
+  assert.equal(readableRasterName(fullPack, row, 'Canada').readable, true);
+});
+
+test('the map and the verifier import one lettering-size rule', () => {
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
+  const map = readFileSync(resolve(root, 'frontend/src/map/adapters/maplibre/track-inset.ts'), 'utf8');
+  const ocr = readFileSync(resolve(root, '.cursor/skills/verify-opd/scripts/raster-ocr.mjs'), 'utf8');
+  assert.match(map, /countryLabelCounts/);
+  assert.match(ocr, /countryLabelCounts/);
 });
 
 test('whole-tile words cannot override clipped or occluded composed-viewport evidence', () => {
