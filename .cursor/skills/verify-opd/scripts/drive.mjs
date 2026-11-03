@@ -3,8 +3,8 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { dirname, resolve } from 'node:path';
 import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
 import { earthAfterResizeReaders } from './earth-after-resize.mjs';
-import { auditRasterLevels, auditedNameReadable, clippedRasterRemnant, loadCountryRasterLevels, countrySweepZooms, keptCountrySymbol, oneNameSource, PLAN_COUNTRIES, planLabelReaders } from './plan-label-verdict.mjs';
-import { checkRasterOcr, clearRasterOcrRun, countryRasterUrls, rasterWords, rasterOcrStats, readableRasterName, sovereignScreenBoxes } from './raster-ocr.mjs';
+import { auditRasterLevels, auditedNameCandidates, loadCountryRasterLevels, countrySweepZooms, keptCountrySymbol, oneNameSource, PLAN_COUNTRIES, planLabelReaders, rasterNameEvidence } from './plan-label-verdict.mjs';
+import { checkRasterOcr, clearRasterOcrRun, countryRasterUrls, rasterWords, rasterOcrStats, readableRasterName } from './raster-ocr.mjs';
 import { pinFixtureCookie } from './fixture-session.mjs';
 import { BOSTON_NADIR_EPOCH_MS, effectiveNowMs, refreshLaunchClock } from './fixtures.mjs';
 import { freezeFixtureClock, restoreFixtureClock } from './fixture-clock.mjs';
@@ -5029,7 +5029,7 @@ async function beginPlanLayout(send) {
     if (!frame || !canvas || !orbit) return null;
     const width = frame.clientWidth;
     const height = frame.clientHeight;
-    window.__opdPlanLayout = { frame, canvas, orbit, style: frame.getAttribute('style'), dpr: Object.getOwnPropertyDescriptor(window, 'devicePixelRatio') };
+    window.__opdPlanLayout = { frame, canvas, orbit, style: frame.getAttribute('style'), dpr: Object.getOwnPropertyDescriptor(window, 'devicePixelRatio'), dprValue: window.devicePixelRatio };
     return { width, height, dpr: window.devicePixelRatio };
   })()`);
   if (!saved) throw new Error('plan layout fixture missing');
@@ -5065,7 +5065,7 @@ async function restorePlanLayout(send) {
     if (saved.style === null) saved.frame.removeAttribute('style');
     else saved.frame.setAttribute('style', saved.style);
     if (saved.dpr) Object.defineProperty(window, 'devicePixelRatio', saved.dpr);
-    else delete window.devicePixelRatio;
+    else if (Number.isFinite(saved.dprValue)) Object.defineProperty(window, 'devicePixelRatio', { configurable: true, get: () => saved.dprValue });
     delete window.__opdPlanLayout;
   })()`);
 }
@@ -5507,7 +5507,7 @@ async function provePlanMapLive(send, viewport) {
     await provePlanRotatingPinch(send);
     return `wheel ${zoom.toFixed(2)}; ${outside}`;
   } finally {
-    await evaluate(send, `(() => { delete window.devicePixelRatio; document.querySelector('[data-opd-blur]')?.remove(); return true; })()`);
+    await evaluate(send, `(() => { document.querySelector('[data-opd-blur]')?.remove(); return true; })()`);
     await setViewport(send, viewport.width, viewport.height, viewport.mobile);
   }
 }
@@ -6844,7 +6844,7 @@ export async function assertOneNameSource(row) {
   if (!centroid) throw new Error(`unknown plan country ${row.country}`);
   const pack = await rasterWords(countryRasterUrls(row.urls || [], centroid));
   const raster = readableRasterName(pack, row, row.country);
-  const verdict = oneNameSource({ ...row, words: pack.text, rasterReadable: raster.readable || auditedNameReadable(row.country, row.zoom, row.viewport) });
+  const verdict = oneNameSource({ ...row, words: pack.text, rasterReadable: rasterNameEvidence(raster.boxes, auditedNameCandidates(row.country, row.zoom, row.viewport)) });
   if (!verdict.ok) throw new Error(`plan label source ${JSON.stringify(verdict)}`);
   return verdict;
 }
@@ -6869,7 +6869,7 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
         country,
         names: fitted.names,
         words: fittedWords.text,
-        rasterReadable: readableRasterName(fittedWords, fitted, country).readable || auditedNameReadable(country, fitted.zoom, fitted.viewport),
+        rasterReadable: rasterNameEvidence(readableRasterName(fittedWords, fitted, country).boxes, auditedNameCandidates(country, fitted.zoom, fitted.viewport)),
       });
       if (!verdict.ok) throw new Error(`plan label fitted ${JSON.stringify(verdict)}`);
     }
@@ -6885,7 +6885,7 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
         const centroid = PLAN_COUNTRIES.find(point => point.name === country);
         if (!centroid) throw new Error(`unknown plan country ${country}`);
         const pack = await rasterWords(countryRasterUrls(row.urls, centroid));
-        const verdict = oneNameSource({ ...row, country, words: pack.text, rasterReadable: readableRasterName(pack, row, country).readable || auditedNameReadable(country, row.zoom, row.viewport) });
+        const verdict = oneNameSource({ ...row, country, words: pack.text, rasterReadable: rasterNameEvidence(readableRasterName(pack, row, country).boxes, auditedNameCandidates(country, row.zoom, row.viewport)) });
         if (!verdict.ok) throw new Error(`plan label fractional ${JSON.stringify(verdict)}`);
       }
     }
@@ -6931,6 +6931,9 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
       { country: 'France', center: [-0.33, 46], zooms: [5.5], once: true },
       { country: 'France', center: [-0.33, 46], zooms: [6.5, 6.51], once: false },
       { country: 'Australia', center: [134, -25], zooms: [6.5, 6.51], once: true },
+      { country: 'Australia', center: [131.772, -25], zooms: [5.5], once: true },
+      { country: 'Australia', center: [132.723, -25], zooms: [5.5], once: true },
+      { country: 'Argentina', center: [-63.36, -34], zooms: [6.5], once: true },
     ];
     for (const camera of offCentroid) {
       for (const zoom of camera.zooms) {
@@ -6942,12 +6945,10 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
           planHold(map);
           map.jumpTo({ center: [${camera.center[0]}, ${camera.center[1]}], zoom: ${zoom} });
           const waited = await planWaitTiles(map);
-          const covers = [...frame.querySelectorAll('[data-inset-label-cover]')].map((node) => ({
-            left: parseFloat(node.style.left) || 0,
-            top: parseFloat(node.style.top) || 0,
-            right: (parseFloat(node.style.left) || 0) + (parseFloat(node.style.width) || 0),
-            bottom: (parseFloat(node.style.top) || 0) + (parseFloat(node.style.height) || 0),
-          }));
+          const layerIds = ((map.getStyle() && map.getStyle().layers) || []).map((layer) => layer.id);
+          const maskAt = layerIds.indexOf('inset-label-mask');
+          const trackAt = layerIds.indexOf('inset-track');
+          const marker = frame.querySelector('.maplibregl-marker');
           return {
             ok: true,
             tilesOk: waited.tilesOk,
@@ -6957,21 +6958,22 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
             zoom: map.getZoom(),
             tileZ: waited.tileZ,
             names: planSymbolNames(map),
-            covers,
             country: ${JSON.stringify(camera.country)},
+            maskBelowTrack: maskAt >= 0 && trackAt > maskAt,
+            markerVisible: !!(marker && marker.getClientRects().length > 0),
+            masks: map.__opdLabelMasks || [],
           };
         })()`);
         if (!row || row.ok !== true || !row.tilesOk) throw new Error(`plan label off-centroid ${camera.country} ${zoom} ${JSON.stringify(row && row.detail || row)}`);
+        if (!row.maskBelowTrack || !row.markerVisible) {
+          throw new Error(`plan label stack ${camera.country} ${zoom} ${JSON.stringify({ maskBelowTrack: row.maskBelowTrack, markerVisible: row.markerVisible })}`);
+        }
         const centroid = PLAN_COUNTRIES.find((point) => point.name === camera.country);
         const pack = await rasterWords(countryRasterUrls(row.urls || [], centroid));
-        const inkInside = auditedNameReadable(camera.country, row.zoom, row.viewport);
+        const raster = rasterNameEvidence(readableRasterName(pack, row, camera.country).boxes, auditedNameCandidates(camera.country, row.zoom, row.viewport), row.masks || []);
         const symbols = (row.names || []).filter((name) => name === camera.country).length;
-        if (camera.once && symbols + (inkInside ? 1 : 0) !== 1) {
-          throw new Error(`plan label off-centroid ${JSON.stringify({ country: camera.country, zoom, symbols, inkInside, names: row.names })}`);
-        }
-        if (!inkInside) {
-          const remnant = clippedRasterRemnant(sovereignScreenBoxes(pack, row, camera.country), { width: row.viewport.width, height: row.viewport.height }, row.covers || []);
-          if (!remnant.covered) throw new Error(`plan label remnant ${camera.country} ${zoom} ${JSON.stringify(remnant.open)}`);
+        if (camera.once && symbols + (raster ? 1 : 0) !== 1) {
+          throw new Error(`plan label off-centroid ${JSON.stringify({ country: camera.country, zoom, symbols, raster, names: row.names })}`);
         }
         sweepNotes.push(`${camera.country}@${zoom}`);
         console.log(`plan labels off-centroid ${camera.country} ${zoom} OCR:${rasterOcrStats.calls}`);
@@ -7675,7 +7677,10 @@ export async function pollPinnedCatalog({ readStep, sleep, now, deadlineMs }) {
   let lastPath = '';
   let last = null;
   while (now() - started < deadlineMs) {
-    const step = await readStep(lastPath);
+    const remaining = deadlineMs - (now() - started);
+    if (remaining <= 0) break;
+    const step = await readStep(lastPath, remaining);
+    if (step?.expired || now() - started >= deadlineMs) break;
     if (!step || step.ok === false || !(step.frozen > 0)) {
       return { ok: false, reason: 'catalog', path: step && step.path || '' };
     }
@@ -7684,10 +7689,11 @@ export async function pollPinnedCatalog({ readStep, sleep, now, deadlineMs }) {
       lastPath = step.path;
     }
     last = step.pin;
+    if (now() - started >= deadlineMs) break;
     if (last && last.ok === true) return last;
-    const remaining = deadlineMs - (now() - started);
-    if (remaining <= 0) break;
-    await sleep(Math.min(250, remaining));
+    const left = deadlineMs - (now() - started);
+    if (left <= 0) break;
+    await sleep(Math.min(250, left));
   }
   throw new Error(`iss all launches pin in frame timed out. Last value: ${JSON.stringify(last)}`);
 }
@@ -8018,13 +8024,17 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
     now: () => Date.now(),
     sleep,
     deadlineMs: 15000,
-    readStep: (lastPath) => evaluate(send, `(async () => {
+    readStep: (lastPath, remaining) => evaluate(send, `(async () => {
       const { launchCatalog } = await import('/src/launch-catalog.ts');
       const catalogFreezeTime = ${catalogFreezeTime.toString()};
       const nextPinFreeze = ${nextPinFreeze.toString()};
       const freezeFixtureClock = ${freezeFixtureClock.toString()};
-      const path = typeof launchCatalog.settledPath === 'function' ? ((await launchCatalog.settledPath()) || '') : '';
-      const decision = nextPinFreeze(${JSON.stringify(lastPath)}, path);
+      const path = await Promise.race([
+        typeof launchCatalog.settledPath === 'function' ? launchCatalog.settledPath() : Promise.resolve(''),
+        new Promise((resolve) => setTimeout(() => resolve(null), ${Math.max(0, Number.isFinite(remaining) ? remaining : 0)})),
+      ]);
+      if (path == null) return { expired: true };
+      const decision = nextPinFreeze(${JSON.stringify(lastPath)}, path || '');
       if (!decision.ok) return decision;
       if (decision.refroze) freezeFixtureClock(decision.frozen);
       const pin = (() => {

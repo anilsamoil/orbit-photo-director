@@ -180,8 +180,8 @@ const COUNTRY_SYMBOL_LAYERS = countrySymbolLayers();
 
 type ScreenBox = { left: number; top: number; right: number; bottom: number };
 
-/** One screen pixel. Audited ink is whole tile pixels, and a fractional pixel is not a letter remnant. */
-const RASTER_INK_EDGE_PX = 1;
+/** Same edge as the verifier: a letter that crosses the canvas is not a complete raster name. */
+const RASTER_INK_EDGE_PX = 0;
 
 /** Matches the dark-gray land under a letter that crosses the canvas edge. */
 const CLIPPED_LABEL_COVER = '#414143';
@@ -300,6 +300,7 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
         'inset-basemap': { type: 'raster', tiles: ESRI_DARK_TILES, tileSize: 256, maxzoom: INSET_BASEMAP_MAX_ZOOM },
         'inset-night': { type: 'geojson', data: EMPTY },
         'inset-labels': { type: 'raster', tiles: ESRI_LABEL_TILES, tileSize: 256, maxzoom: COUNTRY_RASTER_LEVELS.through },
+        'inset-label-mask': { type: 'geojson', data: EMPTY },
         'inset-countries': { type: 'geojson', data: COUNTRY_CENTROIDS },
         'inset-track': { type: 'geojson', data: EMPTY },
       },
@@ -312,6 +313,7 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
           paint: { 'fill-color': '#000000', 'fill-opacity': 0.28 },
         },
         { id: 'inset-labels', type: 'raster', source: 'inset-labels', paint: { 'raster-opacity': 0.85 } },
+        { id: 'inset-label-mask', type: 'fill', source: 'inset-label-mask', paint: { 'fill-color': CLIPPED_LABEL_COVER, 'fill-opacity': 1 } },
         {
           id: 'inset-track',
           type: 'line',
@@ -358,22 +360,30 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
   let fittedHeight = -1;
   let viewportNames = '';
   let viewportCovers = '';
-  const labelCovers = document.createElement('div');
-  labelCovers.style.cssText = 'position:absolute;inset:0;pointer-events:none';
-  frame.append(labelCovers);
   const syncCountryLabels = (): void => {
     if (removed || !map.isStyleLoaded() || frame.clientWidth < 2 || frame.clientHeight < 2) return;
     const state = viewportFallbacks(map, frame);
     const coverKey = state.covers.map((cover) => `${cover.left.toFixed(1)},${cover.top.toFixed(1)},${cover.right.toFixed(1)},${cover.bottom.toFixed(1)}`).join('|');
     if (coverKey !== viewportCovers) {
       viewportCovers = coverKey;
-      labelCovers.replaceChildren(...state.covers.map((cover) => {
-        const patch = document.createElement('div');
-        patch.dataset.insetLabelCover = '';
-        patch.style.cssText = `position:absolute;left:${cover.left}px;top:${cover.top}px;width:${cover.right - cover.left}px;height:${cover.bottom - cover.top}px;background:${CLIPPED_LABEL_COVER};pointer-events:none`;
-        return patch;
-      }));
+      const source = map.getSource('inset-label-mask');
+      if (source && 'setData' in source && typeof source.setData === 'function') {
+        source.setData({
+          type: 'FeatureCollection',
+          features: state.covers.map((cover) => {
+            const ring = [
+              map.unproject([cover.left, cover.top]),
+              map.unproject([cover.right, cover.top]),
+              map.unproject([cover.right, cover.bottom]),
+              map.unproject([cover.left, cover.bottom]),
+            ].map((point) => [point.lng, point.lat] as [number, number]);
+            ring.push(ring[0]!);
+            return { type: 'Feature' as const, properties: {}, geometry: { type: 'Polygon' as const, coordinates: [ring] } };
+          }),
+        });
+      }
     }
+    Object.assign(map, { __opdLabelMasks: state.covers });
     const key = state.names.join('|');
     if (key === viewportNames) return;
     viewportNames = key;
@@ -599,7 +609,6 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
       window.removeEventListener('lostpointercapture', onPointerEnd, true);
       window.removeEventListener('blur', onWindowBlur);
       marker.remove();
-      labelCovers.remove();
       map.remove();
       delete insetFrame.__opdTrackInset;
     },

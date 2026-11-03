@@ -190,9 +190,48 @@ export function auditedNameReadable(country, zoom, viewport, levels = loadCountr
       viewport.origin.x + glyph[2] * world,
       viewport.origin.y + glyph[3] * world,
     ];
-    if (screen[0] < -1 || screen[1] < -1 || screen[2] > viewport.width + 1 || screen[3] > viewport.height + 1) return false;
+    if (screen[0] < 0 || screen[1] < 0 || screen[2] > viewport.width || screen[3] > viewport.height) return false;
     return !(viewport.occlusions || []).some((rect) => screen[0] < rect[2] && screen[2] > rect[0] && screen[1] < rect[3] && screen[3] > rect[1]);
   }));
+}
+
+/** Stored lettering boxes are candidates. A raster name still needs a pixel hit on one of them. */
+export function auditedNameCandidates(country, zoom, viewport, levels = loadCountryRasterLevels()) {
+  if (!viewport || !viewport.origin || !Number.isFinite(Number(zoom))) return [];
+  const painted = levels.countries?.[country] || [];
+  const world = 512 * (2 ** Number(zoom));
+  const sources = [
+    { service: 'reference', tile: Math.min(levels.through, Math.max(0, Math.round(Number(zoom) + 1))) },
+    { service: 'dark', tile: Math.min(20, Math.max(0, Math.round(Number(zoom) + 1))) },
+  ].filter((source) => painted.includes(source.tile));
+  const boxes = [];
+  for (const source of sources) {
+    for (const entry of levels.bounds?.[country]?.[String(source.tile)] || []) {
+      if (entry.service !== source.service) continue;
+      const box = entry.box;
+      if (!(box[2] - box[0] >= 0.0004 && box[3] - box[1] >= 0.0004)) continue;
+      const glyph = entry.ink || box;
+      boxes.push({
+        box: [
+          viewport.origin.x + glyph[0] * world,
+          viewport.origin.y + glyph[1] * world,
+          viewport.origin.x + glyph[2] * world,
+          viewport.origin.y + glyph[3] * world,
+        ],
+      });
+    }
+  }
+  return boxes;
+}
+
+export function rasterNameEvidence(pixelBoxes, candidates, masks = []) {
+  const overlaps = (left, right) => left[0] < right[2] && left[2] > right[0] && left[1] < right[3] && left[3] > right[1];
+  const visible = (pixelBoxes || []).filter((pixel) => {
+    const box = pixel.box || pixel;
+    return !(masks || []).some((mask) => overlaps(box, [mask.left, mask.top, mask.right, mask.bottom]));
+  });
+  if (!visible.length || !candidates?.length) return false;
+  return visible.some((pixel) => candidates.some((candidate) => overlaps(pixel.box || pixel, candidate.box || candidate)));
 }
 
 /** A letter that crosses the canvas and is not hidden by a label cover. */
@@ -205,7 +244,7 @@ export function clippedRasterRemnant(boxes, viewport, covers) {
     const right = Math.min(box[2], viewport.width);
     const bottom = Math.min(box[3], viewport.height);
     const overflow = Math.max(-box[0], -box[1], box[2] - viewport.width, box[3] - viewport.height);
-    if (!(overflow > 1) || right - left < 1 || bottom - top < 1) continue;
+    if (!(overflow > 0) || right - left < 1 || bottom - top < 1) continue;
     const crossesLeft = box[0] < -1;
     const crossesTop = box[1] < -1;
     const crossesRight = box[2] > viewport.width + 1;

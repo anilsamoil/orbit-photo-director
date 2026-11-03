@@ -55,9 +55,15 @@ const created = vi.hoisted(() => ({
 
 vi.mock('maplibre-gl', () => {
   class Marker {
+    constructor(public options?: { element?: HTMLElement }) {}
     setLngLat(): this { return this; }
-    addTo(): this { return this; }
-    remove(): void {}
+    addTo(map?: { options?: { container?: HTMLElement } }): this {
+      const element = this.options?.element;
+      const container = map?.options?.container;
+      if (element && container) container.append(element);
+      return this;
+    }
+    remove(): void { this.options?.element?.remove(); }
   }
   class Map {
     constructor(public options: typeof created.options) {
@@ -94,6 +100,13 @@ vi.mock('maplibre-gl', () => {
       const y = (latitude: number) => (1 - Math.asinh(Math.tan(latitude * Math.PI / 180)) / Math.PI) / 2;
       const scale = 512 * 2 ** created.zoom;
       return { x: created.size[0] / 2 + (lon - created.center[0]) / 360 * scale, y: created.size[1] / 2 + (y(lat) - y(created.center[1])) * scale };
+    }
+    unproject({ x, y }: { x: number; y: number }): { lng: number; lat: number } {
+      const yOf = (latitude: number) => (1 - Math.asinh(Math.tan(latitude * Math.PI / 180)) / Math.PI) / 2;
+      const latOf = (mercatorY: number) => Math.atan(Math.sinh(Math.PI * (1 - 2 * mercatorY))) * 180 / Math.PI;
+      const scale = 512 * 2 ** created.zoom;
+      const mercatorY = yOf(created.center[1]) + (y - created.size[1] / 2) / scale;
+      return { lng: created.center[0] + (x - created.size[0] / 2) / scale * 360, lat: latOf(mercatorY) };
     }
     setFilter(id: string, filter: unknown): void {
       const layer = created.options?.style.layers.find((entry) => entry.id === id);
@@ -153,7 +166,7 @@ describe('plan inset labels', () => {
     expect(style?.sources['inset-labels']?.tiles?.[0]).toContain('World_Boundaries_and_Places');
     expect(style?.sources['inset-labels']?.maxzoom).toBeGreaterThan(2);
     const ids = style?.layers.map((layer) => layer.id);
-    expect(ids?.slice(0, 4)).toEqual(['inset-basemap', 'inset-night', 'inset-labels', 'inset-track']);
+    expect(ids?.slice(0, 5)).toEqual(['inset-basemap', 'inset-night', 'inset-labels', 'inset-label-mask', 'inset-track']);
     expect(ids).toContain('inset-countries');
     expect(ids).toContain('inset-countries-viewport');
     expect(style?.layers.find((layer) => layer.id === 'inset-labels')?.paint?.['raster-opacity']).toBe(0.85);
@@ -344,40 +357,55 @@ describe('plan inset labels', () => {
     inset.destroy();
   });
 
-  it('paints off-centroid names once and covers a clipped raster remnant', () => {
+  it('paints off-centroid names once and keeps the track above a clipped raster', () => {
     const names = () => {
       const filter = created.options?.style.layers.find((layer) => layer.id === 'inset-countries-viewport')?.filter as [string, unknown, [string, string[]]];
       return filter[2][1];
     };
-    const covers = (frame: HTMLElement) => [...frame.querySelectorAll<HTMLElement>('[data-inset-label-cover]')].map((node) => ({
-      left: Number(node.style.left.replace('px', '')),
-      width: Number(node.style.width.replace('px', '')),
-    }));
-    const mount = (zoom: number, center: [number, number]) => {
+    const order = () => (created.options?.style.layers ?? []).map((layer) => layer.id);
+    const mount = (zoom: number, center: [number, number], size: [number, number]) => {
       created.zoom = zoom;
       created.center = center;
-      created.size = [492, 690];
+      created.size = size;
       const frame = document.createElement('div');
-      Object.defineProperty(frame, 'clientWidth', { value: 492 });
-      Object.defineProperty(frame, 'clientHeight', { value: 690 });
-      const inset = createTrackInset(frame, document.createElement('div'));
+      const marker = document.createElement('div');
+      Object.defineProperty(frame, 'clientWidth', { value: size[0] });
+      Object.defineProperty(frame, 'clientHeight', { value: size[1] });
+      const inset = createTrackInset(frame, marker);
+      inset.show([{
+        type: 'Feature',
+        properties: {},
+        geometry: { type: 'LineString', coordinates: [[center[0] - 1, center[1]], [center[0] + 1, center[1]]] },
+      }], { lon: center[0], lat: center[1] });
       created.events.render?.();
-      return { frame, inset };
+      return { frame, inset, marker };
     };
-    const france = mount(5.5, [-0.33, 46]);
+    const assertStack = (frame: HTMLElement, label: string) => {
+      const ids = order();
+      expect(ids.indexOf('inset-label-mask'), label).toBeGreaterThan(ids.indexOf('inset-labels'));
+      expect(ids.indexOf('inset-track'), label).toBeGreaterThan(ids.indexOf('inset-label-mask'));
+      expect(frame.querySelectorAll('[data-inset-label-cover]'), label).toHaveLength(0);
+      expect(created.sources.get('inset-track')?.features?.length, label).toBeGreaterThan(0);
+    };
+    const france = mount(5.5, [-0.33, 46], [492, 690]);
     expect(names(), 'France pan 5.5').not.toContain('France');
-    expect(covers(france.frame), 'France pan 5.5 cover').toEqual([]);
+    assertStack(france.frame, 'France pan 5.5');
     france.inset.destroy();
-    for (const zoom of [6.5, 6.51]) {
-      const australia = mount(zoom, [134, -25]);
-      expect(names(), `Australia ${zoom}`).not.toContain('Australia');
-      expect(covers(australia.frame).some((cover) => cover.width > 2), `Australia ${zoom} cover`).toBe(false);
+    for (const [center, size] of [
+      [[131.772, -25], [478, 690]],
+      [[132.723, -25], [274, 984]],
+    ] as const) {
+      const australia = mount(5.5, [center[0], center[1]], [size[0], size[1]]);
+      expect(names(), `Australia ${size.join('x')}`).toEqual(['Australia']);
+      assertStack(australia.frame, `Australia ${size.join('x')}`);
+      expect((created.sources.get('inset-label-mask') as { features?: unknown[] } | undefined)?.features?.length, `Australia ${size.join('x')}`).toBeGreaterThan(0);
       australia.inset.destroy();
-      const clipped = mount(zoom, [-0.33, 46]);
-      expect(names(), `France pan ${zoom}`).not.toContain('France');
-      expect(covers(clipped.frame).some((cover) => cover.left > 400 && cover.width > 8), `France pan ${zoom} remnant`).toBe(true);
-      clipped.inset.destroy();
     }
+    const argentina = mount(6.5, [-63.36, -34], [478, 690]);
+    expect(names(), 'Argentina').toEqual(['Argentina']);
+    assertStack(argentina.frame, 'Argentina');
+    expect(argentina.marker.isConnected || argentina.frame.contains(argentina.marker), 'Argentina marker').toBe(true);
+    argentina.inset.destroy();
   });
 
   it('restores Kenya and Nigeria at zoom 6.5 when only a stale dark z6 box is inside the canvas', () => {

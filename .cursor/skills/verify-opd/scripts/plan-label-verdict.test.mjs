@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { readableRasterName } from './raster-ocr.mjs';
 import {
   AUDITED_RASTER_LEVELS, auditRasterLevels, countryStyleVerdict, countrySweepZooms,
-  auditedNameReadable, clippedRasterRemnant, loadCountryRasterLevels, loadCountrySymbolLayers, oneNameSource, planLabelReaders, planLabelVerdict, rasterPainted,
+  auditedNameReadable, clippedRasterRemnant, loadCountryRasterLevels, loadCountrySymbolLayers, oneNameSource, planLabelReaders, planLabelVerdict, rasterNameEvidence, rasterPainted,
 } from './plan-label-verdict.mjs';
 
 test('an exact sovereign name is not vetoed by an unrelated adjective', () => {
@@ -195,7 +195,16 @@ test('the name sweep includes the off-centroid cameras and rejects a clipped rem
   assert.match(sweep, /-0\.33,\s*46/);
   assert.match(sweep, /\[\s*134,\s*-25\s*\]/);
   assert.match(sweep, /6\.51/);
-  assert.match(sweep, /data-inset-label-cover/);
+  assert.match(sweep, /131\.772,\s*-25/);
+  assert.match(sweep, /132\.723,\s*-25/);
+  assert.match(sweep, /-63\.36,\s*-34/);
+  assert.match(sweep, /inset-label-mask/);
+  assert.doesNotMatch(sweep, /data-inset-label-cover/);
+  assert.equal(rasterNameEvidence([], [{ box: [10, 10, 40, 20] }]), false);
+  assert.equal(rasterNameEvidence([{ box: [12, 12, 36, 18] }], [{ box: [10, 10, 40, 20] }]), true);
+  assert.equal(rasterNameEvidence([{ box: [80, 80, 100, 90] }], [{ box: [10, 10, 40, 20] }]), false);
+  assert.equal(rasterNameEvidence([{ box: [12, 12, 36, 18] }], [{ box: [10, 10, 40, 20] }], [{ left: 0, top: 0, right: 50, bottom: 30 }]), false);
+  assert.doesNotMatch(drive.slice(drive.indexOf('export async function assertOneNameSource'), drive.indexOf('export async function proveFractionalPlanLabels')), /\|\| auditedNameReadable/);
   const open = oneNameSource({
     tilesOk: true, zoom: 5.5, tileZ: 6, country: 'France', names: ['France'], rasterReadable: true,
   });
@@ -215,6 +224,11 @@ test('the name sweep includes the off-centroid cameras and rejects a clipped rem
   const clippedWorld = 512 * (2 ** 6.5);
   const clipped = { width: 492, height: 690, occlusions: [], origin: { x: 246 - mercatorX * clippedWorld, y: 345 - mercatorY * clippedWorld } };
   assert.equal(auditedNameReadable('France', 6.5, clipped), false);
+});
+
+test('plan layout cleanup does not delete devicePixelRatio', () => {
+  const drive = readFileSync(new URL('./drive.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(drive, /delete window\.devicePixelRatio/);
 });
 
 test('the plan-inset docs name the level-6 clamp at zoom 5.5', () => {

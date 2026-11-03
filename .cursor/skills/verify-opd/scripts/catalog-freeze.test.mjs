@@ -90,3 +90,16 @@ test('a catalog that arrives after the final freeze is frozen again before the p
   assert.match(region, /!pin/);
   assert.equal(region.split('freezeAccepted()').length - 1, 1);
 });
+
+test('a pin that appears after the deadline is not accepted', async () => {
+  let now = 0;
+  await assert.rejects(() => pollPinnedCatalog({
+    now: () => now,
+    sleep: async (ms) => { now += ms; },
+    deadlineMs: 15000,
+    readStep: async () => {
+      now += 15000;
+      return { path: 'launch/catalog/v/c1000-1.json', frozen: 1000, refroze: true, pin: { ok: true, pin: true } };
+    },
+  }), /timed out/);
+});
