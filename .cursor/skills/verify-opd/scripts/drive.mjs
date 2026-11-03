@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
 import { earthAfterResizeReaders } from './earth-after-resize.mjs';
 import { auditRasterLevels, countryIdentity, countrySweepZooms, KENYA_WEST_RASTER_COUNT, keptCountrySymbol, loadCountryRasterLevels, matchesMain, occurrenceCount, PLAN_COUNTRIES, planLabelReaders, tilesLoaded } from './plan-label-verdict.mjs';
-import { checkRasterOcr, clearRasterOcrRun, countryRasterUrls, rasterWords, rasterOcrStats, readableRasterName } from './raster-ocr.mjs';
+import { checkRasterOcr, clearRasterOcrRun, rasterOcrStats } from './raster-ocr.mjs';
 import { pinFixtureCookie } from './fixture-session.mjs';
 import { BOSTON_NADIR_EPOCH_MS, effectiveNowMs, refreshLaunchClock } from './fixtures.mjs';
 import { freezeFixtureClock, restoreFixtureClock } from './fixture-clock.mjs';
