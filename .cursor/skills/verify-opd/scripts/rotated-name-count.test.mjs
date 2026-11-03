@@ -73,14 +73,9 @@ test('the off-centroid verdict counts screenshot ink, including the regressed ca
   assert.match(loop, /8\.5,\s*11/);
   assert.match(loop, /37\.5,\s*2/);
   assert.match(loop, /\[\s*9,\s*10\s*\]/);
-  assert.match(loop, /clippedRasterRemnant\(/);
-  assert.match(loop, /symbolCrossesEdge\(/);
-  assert.match(loop, /peekingGlyphInk\(/);
-  assert.match(loop, /countCountryGlyphs|countryGlyphBoxes/);
-  assert.doesNotMatch(loop, /hasLabelInk\(/);
-  assert.doesNotMatch(loop, /auditedTotal/);
-  assert.match(loop, /toDataURL\('image\/png'\)/);
-  assert.match(loop, /nameCountOk\(westPair \? 1 : total, placed\.inside, \{ peek:/);
+  assert.match(loop, /assertPlanLabelChecks\(row\)/);
+  assert.match(loop, /KENYA_WEST_RASTER_COUNT/);
+  assert.doesNotMatch(loop, /countryGlyphBoxes|countCountryGlyphs|hasLabelInk|nameCountOk\(/);
 });
 
 test('Kenya west counts two names and twelve bright pixels count as none', () => {

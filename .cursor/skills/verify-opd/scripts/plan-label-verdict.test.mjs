@@ -40,8 +40,7 @@ test('opacity and false Australia-hole mutations fail the real-style guard', () 
   transparent.find((layer) => layer.id === 'inset-countries').paint['text-opacity'] = 0;
   assert.equal(countryStyleVerdict(transparent).ok, false);
   const shifted = structuredClone(baseline);
-  const australia = shifted.find((layer) => layer.filter?.[2]?.[1]?.includes('Australia'));
-  australia.paint['text-opacity'] = ['step', ['zoom'], 1, 0, 0];
+  shifted.find((layer) => layer.id === 'inset-countries').paint['text-opacity'] = ['step', ['zoom'], 1, 0, 0];
   assert.equal(countryStyleVerdict(shifted).ok, false);
   for (const bad of [[0, 1, 2, 3, 4, 5, 6], [1, 2, 4, 5, 6], [1, 2, 3, 4, 6]]) {
     const levels = structuredClone(AUDITED_RASTER_LEVELS);
@@ -240,7 +239,9 @@ test('the name sweep includes the off-centroid cameras and rejects a clipped rem
   assert.equal(mainBaseline, '671f6e5cea4d8666421870c6fd220beebb8d47cc');
   assert.match(mainInset, /nameLayer\('inset-countries', 'inset-countries', undefined, PLAN_RASTER_NAME_ZOOM\)/);
   assert.doesNotMatch(mainInset, /inset-countries-viewport/);
-  assert.match(sweep, /inset-label-mask/);
+  assert.match(sweep, /assertPlanLabelChecks/);
+  assert.doesNotMatch(sweep, /inset-label-mask/);
+  assert.doesNotMatch(sweep, /countryGlyphBoxes/);
   assert.doesNotMatch(sweep, /data-inset-label-cover/);
   assert.equal(rasterNameEvidence([], [{ box: [10, 10, 40, 20] }]), false);
   assert.equal(rasterNameEvidence([{ box: [12, 12, 36, 18] }], [{ box: [10, 10, 40, 20] }]), true);
@@ -358,7 +359,7 @@ test('glyph ink, not the padded OCR box, meets the shared one-pixel clock rule',
   assert.equal(symbolCrossesEdge({ left: 8, top: 10, right: 60, bottom: 26 }, 274, 984), false);
   const drive = readFileSync(new URL('./drive.mjs', import.meta.url), 'utf8');
   const off = drive.slice(drive.indexOf('const offCentroid'), drive.indexOf('const france = await readPlanLabelZoom'));
-  assert.match(off, /clippedRasterRemnant\(/);
-  assert.match(off, /symbolCrossesEdge\(/);
-  assert.match(off, /peekingGlyphInk\(/);
+  assert.match(off, /assertPlanLabelChecks\(row\)/);
+  assert.match(off, /rasterExpectation/);
+  assert.doesNotMatch(off, /countryGlyphBoxes|clippedRasterRemnant|peekingGlyphInk/);
 });

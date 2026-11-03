@@ -51,6 +51,7 @@ const created = vi.hoisted(() => ({
   staleDrag: false,
   sources: new Map<string, { features?: unknown[] }>(),
   setDataCalls: [] as string[],
+  paintWrites: [] as unknown[],
   handlers: {} as Record<string, ((event: { originalEvent?: Event; preventDefault?: () => void }) => void)[]>,
 }));
 
@@ -140,33 +141,39 @@ vi.mock('maplibre-gl', () => {
       created.fit = options;
       created.fitCount += 1;
     }
+    setPaintProperty(id: string, key: string, value: unknown): void {
+      const layer = created.options?.style.layers.find((entry) => entry.id === id);
+      if (layer) layer.paint = { ...layer.paint, [key]: value };
+      created.paintWrites.push(value);
+    }
     jumpTo(): void {}
     remove(): void {}
   }
   return { Map, Marker };
 });
 
-import countryRasterLevels from '../src/map/adapters/maplibre/country-raster-levels.json' with { type: 'json' };
-import { countrySymbolBox, createTrackInset, fittedSymbolAnchor, keptLettering, letterboxCamera, PLAN_WHEEL_RESIZE_CAP_MS, readableCountryName, remnantCovers } from '../src/map/adapters/maplibre/track-inset';
+import { createTrackInset, letterboxCamera, PLAN_WHEEL_RESIZE_CAP_MS, rasterShowsSameCountry } from '../src/map/adapters/maplibre/track-inset';
 
-function unprojectCover(x: number, y: number): { lng: number; lat: number } {
+function project(lngLat: [number, number], center: [number, number], zoom: number, width: number, height: number): { x: number; y: number } {
   const yOf = (latitude: number) => (1 - Math.asinh(Math.tan(latitude * Math.PI / 180)) / Math.PI) / 2;
-  const latOf = (mercatorY: number) => Math.atan(Math.sinh(Math.PI * (1 - 2 * mercatorY))) * 180 / Math.PI;
-  const scale = 512 * 2 ** created.zoom;
-  const mercatorY = yOf(created.center[1]) + (y - created.size[1] / 2) / scale;
-  return { lng: created.center[0] + (x - created.size[0] / 2) / scale * 360, lat: latOf(mercatorY) };
+  const scale = 512 * 2 ** zoom;
+  return {
+    x: width / 2 + (lngLat[0] - center[0]) / 360 * scale,
+    y: height / 2 + (yOf(lngLat[1]) - yOf(center[1])) * scale,
+  };
 }
 
-function maskArea(ring: number[][]): number {
-  let sum = 0;
-  for (let index = 0; index < ring.length - 1; index += 1) {
-    sum += ring[index]![0]! * ring[index + 1]![1]! - ring[index + 1]![0]! * ring[index]![1]!;
-  }
-  return Math.abs(sum) / 2;
+function paint(): void {
+  const handlers = created.handlers.render ?? [];
+  handlers[handlers.length - 1]?.({});
+}
+
+function opacity(): unknown {
+  return created.options?.style.layers.find((layer) => layer.id === 'inset-countries')?.paint?.['text-opacity'];
 }
 
 describe('plan inset labels', () => {
-  it('draws the Esri reference raster above the basemap and lets a tighter track zoom past 2', () => {
+  it('draws the main country labels on the reference raster', () => {
     const frame = document.createElement('div');
     Object.defineProperty(frame, 'clientWidth', { value: 274 });
     Object.defineProperty(frame, 'clientHeight', { value: 900 });
@@ -184,17 +191,15 @@ describe('plan inset labels', () => {
     expect(style?.sources['inset-basemap']?.tiles).toEqual([
       'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
     ]);
+    expect(style?.sources['inset-basemap']?.maxzoom).toBe(20);
     expect(style?.sources['inset-labels']?.tiles?.[0]).toContain('World_Boundaries_and_Places');
-    expect(style?.sources['inset-labels']?.maxzoom).toBeGreaterThan(2);
+    expect(style?.sources['inset-labels']?.maxzoom).toBe(19);
     const ids = style?.layers.map((layer) => layer.id);
-    expect(ids?.slice(0, 5)).toEqual(['inset-basemap', 'inset-night', 'inset-labels', 'inset-label-mask', 'inset-track']);
-    expect(ids).toContain('inset-countries');
-    expect(ids).toContain('inset-countries-viewport');
+    expect(ids).toEqual(['inset-basemap', 'inset-night', 'inset-labels', 'inset-track', 'inset-countries']);
+    expect(style?.sources['inset-label-mask']).toBeUndefined();
+    expect(style?.sources['inset-country-fallbacks']).toBeUndefined();
     expect(style?.layers.find((layer) => layer.id === 'inset-labels')?.paint?.['raster-opacity']).toBe(0.85);
-    expect(style?.layers.find((layer) => layer.id === 'inset-labels')?.maxzoom).toBeUndefined();
     expect(style?.layers.find((layer) => layer.id === 'inset-night')?.paint?.['fill-opacity']).toBe(0.28);
-    expect(ids).not.toContain('inset-cities');
-    expect(ids).not.toContain('inset-towns');
     expect(created.rotationLocks).toBe(2);
     expect(created.options?.interactive).toBe(true);
     expect(created.options?.scrollZoom).toBe(true);
@@ -204,20 +209,20 @@ describe('plan inset labels', () => {
     expect(style?.glyphs).toBe('/glyphs/{fontstack}/{range}.pbf');
     const countries = style?.layers.find((layer) => layer.id === 'inset-countries');
     expect(countries?.type).toBe('symbol');
+    expect(countries?.maxzoom).toBe(3);
     expect(countries?.layout?.['text-field']).toEqual(['get', 'name']);
     expect(countries?.layout?.['text-font']).toEqual(['Open Sans Regular']);
-    expect(countries?.layout?.['text-allow-overlap']).not.toBe(true);
-    expect(countries?.layout?.['text-ignore-placement']).not.toBe(true);
-    expect(countries?.layout?.['text-variable-anchor-offset']).toEqual([
-      'match', ['get', 'name'], 'Kenya',
-      ['literal', expect.arrayContaining(['bottom', [0, -1.5], 'top', [0, 1.5]])],
-      ['literal', expect.arrayContaining(['left', 'right', 'top', 'bottom'])],
+    expect(countries?.layout?.['text-allow-overlap']).toBeUndefined();
+    expect(countries?.layout?.['text-ignore-placement']).toBeUndefined();
+    expect(countries?.layout?.['text-variable-anchor-offset']).toBeUndefined();
+    expect(countries?.layout?.['symbol-sort-key']).toBeUndefined();
+    expect(countries?.paint?.['text-opacity']).toBeUndefined();
+    expect(style?.sources['inset-countries']?.data?.features?.map((feature) => feature.properties?.name)).toEqual([
+      'Canada', 'Mexico', 'Brazil', 'Argentina', 'France', 'Egypt', 'Nigeria', 'Kenya', 'China', 'India', 'Japan', 'Australia',
     ]);
-    const kenyaAnchors = (countries?.layout?.['text-variable-anchor-offset'] as [string, unknown, string, [string, string[]]])[3][1];
-    expect(kenyaAnchors[0]).toBe('bottom');
-    expect(kenyaAnchors[1]).toEqual([0, -1.5]);
-    expect(countries?.layout?.['symbol-sort-key']).toEqual(['match', ['get', 'name'], 'Nigeria', 0, 'Kenya', 1, 2]);
-    expect(style?.sources['inset-countries']?.data?.features?.some((feature) => feature.properties?.name === 'Brazil')).toBe(true);
+    const source = readFileSync(resolve(__dirname, '../src/map/adapters/maplibre/track-inset.ts'), 'utf8');
+    expect(source).not.toContain('viewport.right >= 430');
+    expect(source).not.toContain('inset-countries-viewport');
     const glyphs = readFileSync(resolve(__dirname, '../public/glyphs/Open Sans Regular/0-255.pbf'));
     expect(glyphs.byteLength).toBeGreaterThan(10000);
     inset.show([{
@@ -229,464 +234,100 @@ describe('plan inset labels', () => {
     inset.destroy();
   });
 
-  it('shows a centroid symbol only when that tile zoom is missing from the painted levels', () => {
-    const frame = document.createElement('div');
-    Object.defineProperty(frame, 'clientWidth', { value: 274 });
-    Object.defineProperty(frame, 'clientHeight', { value: 900 });
-    const inset = createTrackInset(frame, document.createElement('div'));
-    const layers = (created.options?.style?.layers ?? []).filter((layer) => layer.type === 'symbol' && layer.source === 'inset-countries');
-    const listed = (layer: (typeof layers)[number]) => {
-      const filter = layer.filter;
-      if (!Array.isArray(filter) || filter[0] !== 'in' || !Array.isArray(filter[2]) || filter[2][0] !== 'literal' || !Array.isArray(filter[2][1])) {
-        return [];
-      }
-      return filter[2][1].filter((name): name is string => typeof name === 'string');
-    };
-    const opacityOn = (layer: (typeof layers)[number], zoom: number) => {
-      const opacity = layer.paint?.['text-opacity'];
-      if (!Array.isArray(opacity) || opacity[0] !== 'step') return opacity !== 0;
-      let value: unknown = opacity[2];
-      for (let index = 3; index + 1 < opacity.length; index += 2) {
-        if (zoom >= Number(opacity[index])) value = opacity[index + 1];
-      }
-      return value !== 0;
-    };
-    const covers = (name: string, zoom: number) => layers.some((layer) => {
-      if (!listed(layer).includes(name) || !opacityOn(layer, zoom)) return false;
-      const min = layer.minzoom ?? Number.NEGATIVE_INFINITY;
-      const max = layer.maxzoom ?? Number.POSITIVE_INFINITY;
-      return zoom >= min && zoom < max;
-    });
-    expect(layers.some((layer) => layer.maxzoom != null && layer.maxzoom <= 0)).toBe(false);
-    expect(covers('Australia', -1)).toBe(true);
-    expect(covers('Australia', -0.51)).toBe(true);
-    expect(covers('Australia', -0.5)).toBe(false);
-    expect(covers('Australia', -0.227)).toBe(false);
-    expect(covers('Australia', 1.49)).toBe(false);
-    expect(covers('Australia', 1.5)).toBe(false);
-    expect(covers('Australia', 2.49)).toBe(false);
-    expect(covers('Australia', 2.5)).toBe(false);
-    for (const zoom of [3.49, 3.5, 4.49, 4.5, 5]) expect(covers('Australia', zoom), `Australia @ ${zoom}`).toBe(false);
-    expect(covers('Brazil', 3.5)).toBe(false);
-    expect(covers('India', 3.5)).toBe(false);
-    expect(covers('Nigeria', 1.49)).toBe(true);
-    expect(covers('Nigeria', 1.5)).toBe(false);
-    expect(covers('Nigeria', 2.49)).toBe(false);
-    expect(covers('France', 1.49)).toBe(true);
-    expect(covers('France', 1.5)).toBe(false);
-    expect(covers('Japan', 1.49)).toBe(true);
-    expect(covers('Japan', 1.5)).toBe(false);
-    expect(covers('Kenya', 1.49)).toBe(true);
-    expect(covers('Kenya', 2.49)).toBe(true);
-    expect(covers('Kenya', 2.5)).toBe(false);
-    const auditedLevels: Record<string, number[]> = Object.fromEntries(
-      ['Canada', 'Mexico', 'Brazil', 'Argentina', 'France', 'Egypt', 'Nigeria', 'Kenya', 'China', 'India', 'Japan', 'Australia']
-        .map((name) => [name, name === 'Australia' ? [1, 2, 3, 4, 5, 6] : name === 'Kenya' ? [4, 5, 6] : [3, 4, 5, 6]]),
-    );
-    expect(countryRasterLevels.through).toBe(6);
-    expect(countryRasterLevels.countries).toEqual(auditedLevels);
-    const samples = new Set([-1.1497862143712645, -0.23372503287116042, 5]);
-    for (let tile = 1; tile <= countryRasterLevels.through; tile += 1) {
-      for (const delta of [-0.01, 0, 0.01]) samples.add(Number((tile - 1.5 + delta).toFixed(2)));
-    }
-    for (const layer of layers) {
-      for (const edge of [layer.minzoom, layer.maxzoom]) {
-        if (edge != null) for (const delta of [-0.01, 0, 0.01]) samples.add(edge + delta);
-      }
-    }
-    for (const [name, levels] of Object.entries(auditedLevels)) {
-      for (const zoom of samples) {
-        const tile = Math.max(0, Math.round(zoom + 1));
-        const onRaster = tile <= countryRasterLevels.through
-          ? levels.includes(tile)
-          : levels.includes(countryRasterLevels.through);
-        expect(covers(name, zoom), `${name} @ ${zoom}`).toBe(!onRaster);
-      }
-    }
-    inset.destroy();
-  });
-
-  it('requires the complete raster lettering inside the viewport and outside chrome', () => {
-    const viewport = { left: 0, top: 0, right: 274, bottom: 984 };
-    const canada = { left: 66, top: 95, right: 164, bottom: 109 };
-    expect(readableCountryName(canada, viewport, [])).toBe(true);
-    expect(readableCountryName(canada, viewport, [{ left: 21, top: 20, right: 220, bottom: 113 }])).toBe(false);
-    expect(readableCountryName({ ...canada, top: -51, bottom: -37 }, { ...viewport, right: 478, bottom: 690 }, [])).toBe(false);
-    expect(readableCountryName({ left: 252, top: 494, right: 335, bottom: 508 }, viewport, [])).toBe(false);
-  });
-
-  it('restores centered Canada and Brazil only when their audited raster name is clipped or covered', () => {
-    for (const [name, center, size, chrome, expected] of [
-      ['Canada', [-100, 50], [478, 690], false, true],
-      ['Canada', [-100, 50], [274, 984], false, false],
-      ['Canada', [-100, 50], [274, 984], true, true],
-      ['Brazil', [-55, -10], [274, 984], false, true],
-      ['Brazil', [-55, -10], [478, 690], false, false],
-      ['Canada', [0, 0], [478, 690], false, false],
-    ] as const) {
-      created.zoom = 5;
-      created.center = [...center];
-      created.size = [...size];
-      const frame = document.createElement('div');
-      Object.defineProperty(frame, 'clientWidth', { value: size[0] });
-      Object.defineProperty(frame, 'clientHeight', { value: size[1] });
-      const cover = document.createElement('div');
-      cover.dataset.issClock = '';
-      if (chrome) {
-        cover.getClientRects = () => [{ left: 20, top: 20, right: 250, bottom: 120 }] as unknown as DOMRectList;
-        cover.getBoundingClientRect = () => ({ left: 20, top: 20, right: 250, bottom: 120 }) as DOMRect;
-        document.body.append(cover);
-      }
-      const inset = createTrackInset(frame, document.createElement('div'));
-      created.events.render?.();
-      const filter = created.options?.style.layers.find((layer) => layer.id === 'inset-countries-viewport')?.filter as [string, unknown, [string, string[]]];
-      expect(filter[2][1].includes(name), `${name} ${size} chrome=${chrome}`).toBe(expected);
-      if (chrome) {
-        cover.style.visibility = 'hidden';
-        created.events.render?.();
-        const uncovered = created.options?.style.layers.find((layer) => layer.id === 'inset-countries-viewport')?.filter as [string, unknown, [string, string[]]];
-        expect(uncovered[2][1]).not.toContain(name);
-      }
-      cover.remove();
-      inset.destroy();
+  it('hides a vector name only when the drawn reference tile shows that complete name', () => {
+    const canada = { tile: 3, service: 'reference', ink: [0.205078125, 0.313476562, 0.236816406, 0.317871094] as const };
+    const viewport = { left: 0, top: 0, right: 478, bottom: 690 };
+    const at = (zoom: number, center: [number, number], width = 478, height = 690) => (lngLat: [number, number]) => project(lngLat, center, zoom, width, height);
+    expect(rasterShowsSameCountry(1.5, 3, canada, at(1.5, [-100, 50]), viewport, [])).toBe(true);
+    expect(rasterShowsSameCountry(1.5, 3, canada, at(1.5, [2, 46]), viewport, [])).toBe(false);
+    expect(rasterShowsSameCountry(1.5, 4, canada, at(1.5, [-100, 50]), viewport, [])).toBe(false);
+    expect(rasterShowsSameCountry(2.5, 4, canada, at(2.5, [-100, 50]), viewport, [])).toBe(false);
+    expect(rasterShowsSameCountry(2.99, 4, canada, at(2.99, [-100, 50]), viewport, [])).toBe(false);
+    expect(rasterShowsSameCountry(3, 4, canada, at(3, [-100, 50]), viewport, [])).toBe(false);
+    expect(rasterShowsSameCountry(3.01, 4, canada, at(3.01, [-100, 50]), viewport, [])).toBe(false);
+    expect(rasterShowsSameCountry(5, 6, canada, at(5, [-100, 50]), viewport, [])).toBe(false);
+    expect(rasterShowsSameCountry(1.5, 3, { ...canada, service: 'dark' }, at(1.5, [-100, 50]), viewport, [])).toBe(false);
+    expect(rasterShowsSameCountry(1.5, 3, undefined, at(1.5, [-100, 50]), viewport, [])).toBe(false);
+    expect(rasterShowsSameCountry(1.5, 3, { ...canada, ink: [0.22, 0.31, 0.2201, 0.3101] }, at(1.5, [-100, 50]), viewport, [])).toBe(false);
+    const covered = rasterShowsSameCountry(1.5, 3, canada, at(1.5, [-100, 50]), viewport, [{ left: 200, top: 300, right: 280, bottom: 330 }]);
+    expect(covered).toBe(false);
+    for (const width of [429, 430, 431]) {
+      expect(rasterShowsSameCountry(1.5, 3, canada, at(1.5, [-100, 50], width, 800), { left: 0, top: 0, right: width, bottom: 800 }, [])).toBe(true);
     }
   });
 
-  it('draws one France symbol on a centered high-zoom plan and none when the word cannot fit', () => {
-    const names = () => {
-      const filter = created.options?.style.layers.find((layer) => layer.id === 'inset-countries-viewport')?.filter as [string, unknown, [string, string[]]];
-      return filter[2][1];
-    };
-    for (const zoom of [5.5, 6.5, 8]) {
-      created.zoom = zoom;
-      created.center = [2, 46];
-      created.size = [1600, 1600];
-      const frame = document.createElement('div');
-      Object.defineProperty(frame, 'clientWidth', { value: 1600 });
-      Object.defineProperty(frame, 'clientHeight', { value: 1600 });
-      const inset = createTrackInset(frame, document.createElement('div'));
-      created.events.render?.();
-      expect(names(), `France @ ${zoom}`).toEqual(zoom >= 6.5 ? ['France'] : []);
-      inset.destroy();
-    }
-    created.zoom = 5;
-    created.center = [2, 46];
-    created.size = [40, 40];
-    const clipped = document.createElement('div');
-    Object.defineProperty(clipped, 'clientWidth', { value: 40 });
-    Object.defineProperty(clipped, 'clientHeight', { value: 40 });
-    const inset = createTrackInset(clipped, document.createElement('div'));
-    created.events.render?.();
-    expect(names()).not.toContain('France');
-    inset.destroy();
-  });
-
-  it('paints off-centroid names once and keeps the track above a clipped raster', () => {
-    const names = () => {
-      const filter = created.options?.style.layers.find((layer) => layer.id === 'inset-countries-viewport')?.filter as [string, unknown, [string, string[]]];
-      return filter[2][1];
-    };
-    const order = () => (created.options?.style.layers ?? []).map((layer) => layer.id);
-    const mount = (zoom: number, center: [number, number], size: [number, number]) => {
+  it('drops Canada at zoom 1.5 and puts the vector back when the raster name leaves the frame', () => {
+    const mount = (zoom: number, center: [number, number], width: number, height: number) => {
       created.zoom = zoom;
       created.center = center;
-      created.size = size;
+      created.size = [width, height];
+      created.paintWrites = [];
       const frame = document.createElement('div');
-      const marker = document.createElement('div');
-      Object.defineProperty(frame, 'clientWidth', { value: size[0] });
-      Object.defineProperty(frame, 'clientHeight', { value: size[1] });
-      const inset = createTrackInset(frame, marker);
-      inset.show([{
-        type: 'Feature',
-        properties: {},
-        geometry: { type: 'LineString', coordinates: [[center[0] - 1, center[1]], [center[0] + 1, center[1]]] },
-      }], { lon: center[0], lat: center[1] });
-      created.events.render?.();
-      return { frame, inset, marker };
-    };
-    const assertStack = (frame: HTMLElement, label: string) => {
-      const ids = order();
-      expect(ids.indexOf('inset-label-mask'), label).toBeGreaterThan(ids.indexOf('inset-labels'));
-      expect(ids.indexOf('inset-track'), label).toBeGreaterThan(ids.indexOf('inset-label-mask'));
-      expect(frame.querySelectorAll('[data-inset-label-cover]'), label).toHaveLength(0);
-      expect(created.sources.get('inset-track')?.features?.length, label).toBeGreaterThan(0);
-    };
-    const france = mount(5, [-0.33, 46], [492, 690]);
-    expect(names(), 'France pan 5.5').not.toContain('France');
-    assertStack(france.frame, 'France pan 5.5');
-    france.inset.destroy();
-    for (const [center, size] of [
-      [[131.772, -25], [478, 690]],
-      [[132.723, -25], [274, 984]],
-    ] as const) {
-      const australia = mount(5.49, [center[0], center[1]], [size[0], size[1]]);
-      expect(names(), `Australia ${size.join('x')}`).toEqual(['Australia']);
-      assertStack(australia.frame, `Australia ${size.join('x')}`);
-      const mask = created.sources.get('inset-label-mask') as { features?: { geometry: { coordinates: number[][][] } }[] } | undefined;
-      expect(mask?.features?.length, `Australia ${size.join('x')}`).toBeGreaterThan(0);
-      const ring = mask?.features?.[0]?.geometry.coordinates[0] ?? [];
-      expect(ring.length, `Australia ${size.join('x')} ring`).toBeGreaterThan(3);
-      expect(ring.every((pair) => pair.every((value) => Number.isFinite(value))), `Australia ${size.join('x')} coords`).toBe(true);
-      expect(maskArea(ring), `Australia ${size.join('x')} area`).toBeGreaterThan(0);
-      const cover = (australia.frame as HTMLElement & { __opdTrackInset?: { __opdLabelMasks?: { left: number; top: number; right: number; bottom: number }[] } }).__opdTrackInset?.__opdLabelMasks?.[0];
-      expect(cover, `Australia ${size.join('x')} cover`).toBeTruthy();
-      const corner = unprojectCover(cover!.left, cover!.top);
-      expect(Math.abs(ring[0]![0]! - corner.lng)).toBeLessThan(0.01);
-      expect(Math.abs(ring[0]![1]! - corner.lat)).toBeLessThan(0.01);
-      australia.inset.destroy();
-    }
-    for (const zoom of [6.5, 6.51] as const) {
-      created.sources.delete('inset-label-mask');
-      created.zoom = zoom;
-      created.center = [79, 22];
-      created.size = [478, 690];
-      const frame = document.createElement('div');
-      Object.defineProperty(frame, 'clientWidth', { value: 478 });
-      Object.defineProperty(frame, 'clientHeight', { value: 690 });
+      Object.defineProperty(frame, 'clientWidth', { configurable: true, value: width });
+      Object.defineProperty(frame, 'clientHeight', { configurable: true, value: height });
       const inset = createTrackInset(frame, document.createElement('div'));
-      created.events.render?.();
-      expect(names().filter((name) => name === 'India'), `India ${zoom}`).toEqual(['India']);
-      expect((created.sources.get('inset-label-mask') as { features?: unknown[] } | undefined)?.features ?? [], `India ${zoom}`).toEqual([]);
-      inset.destroy();
-    }
-    const argentina = mount(6.5, [-63.36, -34], [478, 690]);
-    expect(names(), 'Argentina').toEqual([]);
-    assertStack(argentina.frame, 'Argentina');
-    expect(argentina.marker.isConnected || argentina.frame.contains(argentina.marker), 'Argentina marker').toBe(true);
-    argentina.inset.destroy();
-  });
-
-  it('covers the dark Nigeria remnant that sticks out above the reference mask', () => {
-    created.zoom = 6.5;
-    created.center = [8, 10];
-    created.size = [274, 984];
-    const frame = document.createElement('div');
-    Object.defineProperty(frame, 'clientWidth', { value: 274 });
-    Object.defineProperty(frame, 'clientHeight', { value: 984 });
-    const inset = createTrackInset(frame, document.createElement('div'));
-    created.events.render?.();
-    const names = (created.options?.style.layers.find((layer) => layer.id === 'inset-countries-viewport')?.filter as [string, unknown, [string, string[]]])[2][1];
-    expect(names).not.toContain('Nigeria');
-    inset.destroy();
-  });
-
-  it('covers the dark India ink left of the reference name at zoom 6.51', () => {
-    created.zoom = 6.51;
-    created.center = [79, 22];
-    created.size = [410, 624];
-    const frame = document.createElement('div');
-    Object.defineProperty(frame, 'clientWidth', { value: 410 });
-    Object.defineProperty(frame, 'clientHeight', { value: 624 });
-    const inset = createTrackInset(frame, document.createElement('div'));
-    created.events.render?.();
-    const names = (created.options?.style.layers.find((layer) => layer.id === 'inset-countries-viewport')?.filter as [string, unknown, [string, string[]]])[2][1];
-    expect(names).not.toContain('India');
-    inset.destroy();
-  });
-
-  it('masks the dark-raster name when the reference name is already on the narrow plan', () => {
-    created.zoom = 6.5;
-    created.center = [8.6386, 10];
-    created.size = [274, 984];
-    const frame = document.createElement('div');
-    Object.defineProperty(frame, 'clientWidth', { value: 274 });
-    Object.defineProperty(frame, 'clientHeight', { value: 984 });
-    const inset = createTrackInset(frame, document.createElement('div'));
-    created.events.render?.();
-    const names = (created.options?.style.layers.find((layer) => layer.id === 'inset-countries-viewport')?.filter as [string, unknown, [string, string[]]])[2][1];
-    expect(names).not.toContain('Nigeria');
-    expect(names.filter((entry) => entry === 'Nigeria')).toHaveLength(0);
-    inset.destroy();
-  });
-
-  it('keeps one name at 410 and 435 and does not leave partial ink', () => {
-    const names = () => {
-      const filter = created.options?.style.layers.find((layer) => layer.id === 'inset-countries-viewport')?.filter as [string, unknown, [string, string[]]];
-      return filter[2][1];
-    };
-    const cases = [
-      { country: 'France', center: [2, 46] as [number, number], zoom: 6.51, allowEmpty: false },
-      { country: 'France', center: [-0.33, 46] as [number, number], zoom: 5.5, allowEmpty: true },
-      { country: 'Australia', center: [134, -25] as [number, number], zoom: 6.51, allowEmpty: false },
-      { country: 'Australia', center: [131.772, -25] as [number, number], zoom: 5.5, allowEmpty: true },
-      { country: 'Argentina', center: [-64, -34] as [number, number], zoom: 6.5, allowEmpty: false },
-    ];
-    for (const size of [[410, 624], [435, 700]] as const) {
-      for (const item of cases) {
-        created.zoom = item.zoom;
-        created.center = [...item.center];
-        created.size = [...size];
-        const frame = document.createElement('div');
-        Object.defineProperty(frame, 'clientWidth', { value: size[0] });
-        Object.defineProperty(frame, 'clientHeight', { value: size[1] });
-        const inset = createTrackInset(frame, document.createElement('div'));
-        created.events.render?.();
-        const symbol = names().filter((name) => name === item.country).length;
-        const raster = (frame as HTMLElement & { __opdTrackInset?: { __opdRasterCount?: number } }).__opdTrackInset?.__opdRasterCount ?? 0;
-        const features = (created.sources.get('inset-label-mask') as { features?: { geometry: { coordinates: number[][][] } }[] } | undefined)?.features ?? [];
-        for (const feature of features) expect(maskArea(feature.geometry.coordinates[0] ?? []), `${item.country} ${size.join('x')}`).toBeGreaterThan(0);
-        expect(symbol + raster, `${item.country} ${size.join('x')} z${item.zoom}`).toBeLessThan(2);
-        if (!item.allowEmpty && item.zoom < 6.5) expect(symbol + raster, `${item.country} ${size.join('x')} z${item.zoom}`).toBe(1);
-        if (symbol === 1) expect(raster).toBe(0);
-        inset.destroy();
-      }
-    }
-  });
-
-  it('does not stack a fallback on Nigeria or Kenya border cameras at 274x984', () => {
-    const names = () => {
-      const filter = created.options?.style.layers.find((layer) => layer.id === 'inset-countries-viewport')?.filter as [string, unknown, [string, string[]]];
-      return filter[2][1];
-    };
-    const cameras = [
-      { country: 'Nigeria', center: [9, 10] as [number, number] },
-      { country: 'Nigeria', center: [8.5, 11] as [number, number] },
-      { country: 'Nigeria', center: [8.6386, 10] as [number, number] },
-      { country: 'Kenya', center: [37.5, 2] as [number, number] },
-      { country: 'Kenya', center: [37, 1] as [number, number] },
-    ];
-    for (const zoom of [6.5, 6.51]) {
-      for (const camera of cameras) {
-        created.zoom = zoom;
-        created.center = [...camera.center];
-        created.size = [274, 984];
-        const frame = document.createElement('div');
-        Object.defineProperty(frame, 'clientWidth', { value: 274 });
-        Object.defineProperty(frame, 'clientHeight', { value: 984 });
-        const inset = createTrackInset(frame, document.createElement('div'));
-        created.events.render?.();
-        const symbol = names().filter((name) => name === camera.country).length;
-        const raster = (frame as HTMLElement & { __opdTrackInset?: { __opdRasterCount?: number } }).__opdTrackInset?.__opdRasterCount ?? 0;
-        expect(symbol, `${camera.country} ${camera.center.join(',')} z${zoom}`).toBe(0);
-        expect(raster, `${camera.country} ${camera.center.join(',')} z${zoom}`).toBe(0);
-        inset.destroy();
-      }
-    }
-  });
-
-  it('reaches idle because a repeated render does not send the same label data', () => {
-    created.setDataCalls = [];
-    created.zoom = 6.51;
-    created.center = [2, 46];
-    created.size = [435, 590];
-    const frame = document.createElement('div');
-    Object.defineProperty(frame, 'clientWidth', { value: 435 });
-    Object.defineProperty(frame, 'clientHeight', { value: 590 });
-    const inset = createTrackInset(frame, document.createElement('div'));
-    const paint = () => {
-      const handlers = created.handlers.render ?? [];
-      handlers[handlers.length - 1]?.({} as Event);
-    };
-    let writes = 0;
-    let idle = false;
-    for (let frameIndex = 0; frameIndex < 8; frameIndex += 1) {
-      const before = created.setDataCalls.length;
       paint();
-      if (created.setDataCalls.length === before) {
-        idle = true;
-        break;
-      }
-      writes += 1;
-    }
-    expect(idle).toBe(true);
-    expect(writes).toBe(1);
-    const fallbackWrites = created.setDataCalls.filter((id) => id === 'inset-country-fallbacks').length;
-    expect(fallbackWrites).toBe(1);
-    paint();
-    expect(created.setDataCalls.filter((id) => id === 'inset-country-fallbacks').length).toBe(1);
-    inset.destroy();
-  });
-
-  it('covers remnant halos and stays off the kept name', () => {
-    const viewport = { left: 0, top: 0, right: 274, bottom: 984 };
-    const extent = { left: 20, top: 20, right: 80, bottom: 40 };
-    const open = remnantCovers(extent, null, viewport);
-    expect(open[0]?.left).toBe(16);
-    expect(open[0]?.right).toBe(84);
-    const kept = { left: 40, top: 36, right: 140, bottom: 70 };
-    const covers = remnantCovers(extent, kept, viewport);
-    for (const cover of covers) {
-      const overlapW = Math.min(cover.right, kept.right) - Math.max(cover.left, kept.left);
-      const overlapH = Math.min(cover.bottom, kept.bottom) - Math.max(cover.top, kept.top);
-      expect(overlapW > 0 && overlapH > 0).toBe(false);
-    }
-    expect(covers.some((cover) => cover.bottom <= 32 && cover.top < kept.top)).toBe(true);
-  });
-
-  it('shifts a symbol that would be clipped by the plan edge', () => {
-    const viewport = { left: 0, top: 0, right: 274, bottom: 984 };
-    const fitted = fittedSymbolAnchor('Nigeria', { x: 8, y: 400 }, viewport);
-    expect(fitted).toBeTruthy();
-    const box = countrySymbolBox('Nigeria', fitted!);
-    expect(box.left).toBeGreaterThanOrEqual(0);
-    expect(box.right).toBeLessThanOrEqual(274);
-    const keny = fittedSymbolAnchor('Kenya', { x: 260, y: 400 }, viewport);
-    expect(keny).toBeTruthy();
-    expect(countrySymbolBox('Kenya', keny!).right).toBeLessThanOrEqual(274);
-  });
-
-  it('keeps one complete name and masks the smaller border names', () => {
-    const decision = keptLettering([
-      { complete: true, area: 10 },
-      { complete: true, area: 40 },
-      { complete: true, area: 4 },
-    ]);
-    expect(decision.keep).toBe(1);
-    expect(decision.mask).toEqual([0, 2]);
-  });
-
-  it('recomputes the label mask when the camera pans', () => {
-    created.zoom = 5.49;
-    created.center = [-63.7, -36.42];
-    created.size = [120, 200];
-    const frame = document.createElement('div');
-    Object.defineProperty(frame, 'clientWidth', { value: 120 });
-    Object.defineProperty(frame, 'clientHeight', { value: 200 });
-    const inset = createTrackInset(frame, document.createElement('div'));
-    created.events.render?.();
-    const before = JSON.stringify(created.sources.get('inset-label-mask'));
-    created.center = [-63.96, -36.42];
-    const move = created.handlers.move?.at(-1);
-    expect(typeof move).toBe('function');
-    move?.({} as Event);
-    const after = JSON.stringify(created.sources.get('inset-label-mask'));
-    const left = (raw: string) => (JSON.parse(raw) as { features: { geometry: { coordinates: number[][][] } }[] }).features[0]?.geometry.coordinates[0]?.[0]?.[0];
-    expect(Number.isFinite(left(before))).toBe(true);
-    expect(Number.isFinite(left(after))).toBe(true);
-    expect(left(after)).not.toBe(left(before));
-    const ring = (JSON.parse(after) as { features: { geometry: { coordinates: number[][][] } }[] }).features[0]?.geometry.coordinates[0] ?? [];
-    expect(maskArea(ring)).toBeGreaterThan(0);
-    inset.destroy();
-  });
-
-  it('restores Kenya and Nigeria at zoom 5.49 when only a stale dark z6 box is inside the canvas', () => {
-    const names = () => {
-      const filter = created.options?.style.layers.find((layer) => layer.id === 'inset-countries-viewport')?.filter as [string, unknown, [string, string[]]];
-      return filter[2][1];
+      return inset;
     };
-    for (const [name, center, size] of [
-      ['Kenya', [38.4677, 0.7652], [100, 80]],
-      ['Nigeria', [8.9, 11.02], [120, 140]],
-    ] as const) {
-      created.zoom = 5.49;
-      created.center = [...center];
-      created.size = [...size];
-      const frame = document.createElement('div');
-      Object.defineProperty(frame, 'clientWidth', { value: size[0] });
-      Object.defineProperty(frame, 'clientHeight', { value: size[1] });
-      const inset = createTrackInset(frame, document.createElement('div'));
-      created.events.render?.();
-      expect(names(), name).toContain(name);
-      inset.destroy();
+    const canada = mount(1.5, [-100, 50], 478, 690);
+    expect(opacity()).toEqual(['case', ['in', ['get', 'name'], ['literal', ['Canada']]], 0, 1]);
+    expect(created.paintWrites).toHaveLength(1);
+    paint();
+    expect(created.paintWrites).toHaveLength(1);
+    canada.destroy();
+
+    for (const width of [429, 430, 431]) {
+      const wide = mount(1.5, [-100, 50], width, 800);
+      expect(opacity(), String(width)).toEqual(['case', ['in', ['get', 'name'], ['literal', ['Canada']]], 0, 1]);
+      wide.destroy();
     }
+
+    const away = mount(1.5, [2, 46], 478, 690);
+    expect(created.paintWrites).toEqual([]);
+    expect(opacity()).toBeUndefined();
+    away.destroy();
+
+    const hidden = mount(1.5, [-100, 50], 478, 690);
+    expect(opacity()).toEqual(['case', ['in', ['get', 'name'], ['literal', ['Canada']]], 0, 1]);
+    created.center = [2, 46];
+    paint();
+    expect(opacity()).toBe(1);
+    hidden.destroy();
+
+    for (const zoom of [2.5, 2.99, 3, 3.01, 5]) {
+      const edge = mount(zoom, [-100, 50], 478, 690);
+      expect(created.paintWrites, String(zoom)).toEqual([]);
+      expect(created.options?.style.layers.find((layer) => layer.id === 'inset-countries')?.maxzoom).toBe(3);
+      edge.destroy();
+    }
+
+    const france = mount(1.5, [2, 46], 478, 690);
+    expect(created.paintWrites).toEqual([]);
+    france.destroy();
+    const high = mount(6.5, [2, 46], 435, 590);
+    expect(created.paintWrites).toEqual([]);
+    expect(created.options?.style.layers.map((layer) => layer.id)).not.toContain('inset-countries-viewport');
+    high.destroy();
   });
 
-  it('lets the label raster use the same tile levels as the basemap above the audit', () => {
+  it('keeps the vector when chrome covers the raster name', () => {
+    created.zoom = 1.5;
+    created.center = [-100, 50];
+    created.size = [478, 690];
+    created.paintWrites = [];
     const frame = document.createElement('div');
-    Object.defineProperty(frame, 'clientWidth', { value: 800 });
-    Object.defineProperty(frame, 'clientHeight', { value: 800 });
+    Object.defineProperty(frame, 'clientWidth', { value: 478 });
+    Object.defineProperty(frame, 'clientHeight', { value: 690 });
+    frame.getBoundingClientRect = () => ({ left: 0, top: 0, right: 478, bottom: 690, width: 478, height: 690, x: 0, y: 0, toJSON: () => ({}) });
+    const clock = document.createElement('div');
+    clock.dataset.issClock = '';
+    clock.getBoundingClientRect = () => ({ left: 200, top: 300, right: 280, bottom: 330, width: 80, height: 30, x: 200, y: 300, toJSON: () => ({}) });
+    document.body.append(clock);
     const inset = createTrackInset(frame, document.createElement('div'));
-    expect(created.options?.style.sources['inset-labels']?.maxzoom).toBe(19);
+    paint();
+    expect(created.paintWrites).toEqual([]);
+    expect(opacity()).toBeUndefined();
+    clock.remove();
     inset.destroy();
   });
 

@@ -121,15 +121,16 @@ export function loadCountrySymbolLayers() {
   const file = resolve(root, 'frontend/src/map/adapters/maplibre/track-inset.ts');
   const require = createRequire(resolve(root, 'frontend/package.json'));
   const ts = require('typescript');
-  const source = readFileSync(file, 'utf8') + '\nexport { countrySymbolLayers };\n';
+  const source = readFileSync(file, 'utf8') + '\nexport { countryLabelLayer };\n';
   const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText;
   const module = { exports: {} };
   const context = vm.createContext({ module, exports: module.exports, require: (id) => {
     if (id === './country-raster-levels.json') return loadCountryRasterLevels();
+    if (id.endsWith('plan-labels')) return { PLAN_RASTER_NAME_ZOOM: 3, planTier: () => [] };
     return {};
   } });
   vm.runInContext(compiled, context, { filename: file });
-  return JSON.parse(JSON.stringify(module.exports.countrySymbolLayers()));
+  return [JSON.parse(JSON.stringify(module.exports.countryLabelLayer()))];
 }
 
 function opacityAt(value, zoom) {
@@ -143,23 +144,72 @@ function opacityAt(value, zoom) {
   return Number(result);
 }
 
+/** Main's one country layer. Opacity 0 or a zoom step would hide names the raster has not shown. */
 export function countryStyleVerdict(layers, levels = loadCountryRasterLevels()) {
   const audit = auditRasterLevels(levels);
   if (!audit.ok) return audit;
-  for (const { name } of PLAN_COUNTRIES) {
-    for (const zoom of countrySweepZooms(levels)) {
-      const count = layers.filter((layer) => {
-        const names = layer.filter?.[2]?.[1];
-        return Array.isArray(names) && names.includes(name)
-          && zoom >= (layer.minzoom ?? -Infinity) && zoom < (layer.maxzoom ?? Infinity)
-          && layer.layout?.visibility !== 'none' && opacityAt(layer.paint?.['text-opacity'], zoom) > 0;
-      }).length;
-      const expected = levelPaints(AUDITED_RASTER_LEVELS, name, idealTile(zoom)) ? 0 : 1;
-      if (count !== expected) return { ok: false, reason: 'style-coverage', country: name, zoom, count, expected };
-    }
+  const symbols = (layers || []).filter((layer) => layer.type === 'symbol');
+  if (symbols.length !== 1 || symbols[0].id !== 'inset-countries' || symbols[0].source !== 'inset-countries') {
+    return { ok: false, reason: 'layer', ids: symbols.map((layer) => layer.id) };
   }
+  const layer = symbols[0];
+  if (layer.maxzoom !== 3) return { ok: false, reason: 'maxzoom', maxzoom: layer.maxzoom };
+  if (layer.layout?.['text-allow-overlap'] === true || layer.layout?.['text-ignore-placement'] === true) {
+    return { ok: false, reason: 'placement' };
+  }
+  if (layer.layout?.['text-variable-anchor-offset'] || layer.layout?.['symbol-sort-key']) {
+    return { ok: false, reason: 'anchor' };
+  }
+  const opacity = layer.paint?.['text-opacity'];
+  if (opacity === 0 || (Array.isArray(opacity) && opacity[0] === 'step')) return { ok: false, reason: 'opacity' };
   return { ok: true };
 }
+
+/** Tiles loaded and settled. This does not say a country name is readable. */
+export function tilesLoaded(row) {
+  if (!row || row.tilesOk !== true) {
+    return { ok: false, check: 'tiles', reason: 'tiles', zoom: row && row.zoom, detail: row && row.detail };
+  }
+  const zoom = Number(row.zoom);
+  if (!Number.isFinite(zoom)) return { ok: false, check: 'tiles', reason: 'zoom', zoom: row && row.zoom };
+  if (row.tileZ != null && row.tileZ !== labelTile(zoom)) {
+    return { ok: false, check: 'tiles', reason: 'tile', tileZ: row.tileZ, expected: labelTile(zoom), zoom };
+  }
+  return { ok: true, check: 'tiles', zoom, tileZ: row.tileZ };
+}
+
+/** Every rendered symbol is one of the twelve plan countries. A same-length stand-in is not a match. */
+export function countryIdentity(names, country) {
+  const list = nameList(names);
+  const known = new Set(PLAN_COUNTRIES.map((entry) => entry.name));
+  const unknown = list.filter((name) => !known.has(name));
+  if (country && !known.has(country)) return { ok: false, check: 'country', reason: 'identity', country };
+  if (unknown.length) return { ok: false, check: 'country', reason: 'identity', unknown, country };
+  return { ok: true, check: 'country', country, names: list };
+}
+
+/** How many times the target is drawn. The expected count comes from main, not from a one-name rule. */
+export function occurrenceCount(count, expected) {
+  const actual = Number(count);
+  return {
+    ok: actual === expected,
+    check: 'count',
+    reason: actual === expected ? undefined : 'count',
+    count: actual,
+    expected,
+  };
+}
+
+/** Visible symbol names compared with main's names for the same camera. */
+export function matchesMain(actual, mainNames) {
+  const left = nameList(actual).slice().sort();
+  const right = nameList(mainNames).slice().sort();
+  const ok = JSON.stringify(left) === JSON.stringify(right);
+  return { ok, check: 'parity', reason: ok ? undefined : 'parity', actual: left, main: right };
+}
+
+/** Kenya west keeps main's two raster names. The symbol layer adds none. */
+export const KENYA_WEST_RASTER_COUNT = 2;
 
 /** The plan label source uses main's tile cap, not the audit cap. Overzooming z6 turns border lettering into a second name. */
 export const LABEL_SOURCE_MAX_ZOOM = 19;
@@ -396,6 +446,7 @@ export function planLabelVerdict(sample) {
     if (value == null) return 1;
     if (typeof value === 'number') return value;
     if (Array.isArray(value) && value[0] === 'literal' && typeof value[1] === 'number') return value[1];
+    if (Array.isArray(value) && value[0] === 'case' && value[value.length - 1] === 1) return 1;
     return 0;
   }
   function colorAlpha(colorValue) {

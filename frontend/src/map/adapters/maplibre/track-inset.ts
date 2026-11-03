@@ -1,7 +1,8 @@
-import { Map, Marker, type LngLat, type Map as MapLibreMap, type SymbolLayerSpecification } from 'maplibre-gl';
+import { Map, Marker, type LngLat, type Map as MapLibreMap } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 import { insetTrackBounds, type LonLat } from '../../../insets/bounds';
+import { PLAN_RASTER_NAME_ZOOM, planTier, type PlanPlace } from '../../../insets/plan-labels';
 import { terminatorNightPolygonFeatures } from '../../../terminator';
 import { countryLabelCounts, letteringOccluded } from './country-label-size';
 import countryRasterLevels from './country-raster-levels.json' with { type: 'json' };
@@ -15,30 +16,14 @@ const ESRI_LABEL_TILES = [
   'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
 ];
 
+type RasterInk = { service: string; box: readonly number[]; ink?: readonly number[] };
+
 /** Audited national-name tile levels and their Mercator lettering bounds in each raster service. */
 const COUNTRY_RASTER_LEVELS: {
   through: number;
   countries: Record<string, readonly number[]>;
-  bounds?: Record<string, Record<string, readonly { service: string; box: readonly number[]; ink?: readonly number[] }[]>>;
+  bounds?: Record<string, Record<string, readonly RasterInk[]>>;
 } = countryRasterLevels;
-
-const COUNTRY_CENTROIDS: GeoJSON.FeatureCollection = {
-  type: 'FeatureCollection',
-  features: [
-    { type: 'Feature', properties: { name: 'Canada' }, geometry: { type: 'Point', coordinates: [-100, 50] } },
-    { type: 'Feature', properties: { name: 'Mexico' }, geometry: { type: 'Point', coordinates: [-102, 23] } },
-    { type: 'Feature', properties: { name: 'Brazil' }, geometry: { type: 'Point', coordinates: [-55, -10] } },
-    { type: 'Feature', properties: { name: 'Argentina' }, geometry: { type: 'Point', coordinates: [-64, -34] } },
-    { type: 'Feature', properties: { name: 'France' }, geometry: { type: 'Point', coordinates: [2, 46] } },
-    { type: 'Feature', properties: { name: 'Egypt' }, geometry: { type: 'Point', coordinates: [30, 26] } },
-    { type: 'Feature', properties: { name: 'Nigeria' }, geometry: { type: 'Point', coordinates: [8, 10] } },
-    { type: 'Feature', properties: { name: 'Kenya' }, geometry: { type: 'Point', coordinates: [38, 1] } },
-    { type: 'Feature', properties: { name: 'China' }, geometry: { type: 'Point', coordinates: [104, 35] } },
-    { type: 'Feature', properties: { name: 'India' }, geometry: { type: 'Point', coordinates: [79, 22] } },
-    { type: 'Feature', properties: { name: 'Japan' }, geometry: { type: 'Point', coordinates: [138, 36] } },
-    { type: 'Feature', properties: { name: 'Australia' }, geometry: { type: 'Point', coordinates: [134, -25] } },
-  ],
-};
 
 /** Caps the fit. A tighter track zooms in. A full orbit stays below zoom 2. */
 const INSET_FIT_MAX_ZOOM = 5;
@@ -73,301 +58,108 @@ const NIGHT_MINUTE_MS = 60_000;
 
 const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
 
-/** A tile-0 hole cannot use maxzoom below 0. The geojson worker buckets overscaled zoom 0, and `isHidden(0)` drops that layer. */
-const TILE_ZERO_HIDE_AT = -0.5;
-
-type SymbolBand = { minzoom?: number; maxzoom?: number; hideAt?: number };
-
-function holeBands(painted: readonly number[], through: number): SymbolBand[] {
-  const has = new Set(painted);
-  const holes: number[] = [];
-  for (let tile = 0; tile <= through; tile += 1) {
-    if (!has.has(tile)) holes.push(tile);
-  }
-  const bands: SymbolBand[] = [];
-  let index = 0;
-  while (index < holes.length) {
-    let end = index;
-    while (end + 1 < holes.length && holes[end + 1] === holes[end]! + 1) end += 1;
-    const first = holes[index]!;
-    const last = holes[end]!;
-    const band: SymbolBand = {};
-    if (first === 0 && last === 0) {
-      band.hideAt = TILE_ZERO_HIDE_AT;
-    } else {
-      if (first > 0) band.minzoom = first - 1.5;
-      if (!(last === through && !has.has(through))) band.maxzoom = last - 0.5;
-    }
-    bands.push(band);
-    index = end + 1;
-  }
-  return bands;
-}
-
-function bandKey(band: SymbolBand): string {
-  if (band.hideAt != null) return `hide-${String(band.hideAt).replace('-', 'n').replace('.', '-')}`;
-  const min = band.minzoom == null ? 'floor' : String(band.minzoom).replace('-', 'n').replace('.', '-');
-  const max = band.maxzoom == null ? 'ceil' : String(band.maxzoom).replace('-', 'n').replace('.', '-');
-  return `${min}-${max}`;
-}
-
-function coversView(band: SymbolBand, zoom: number): boolean {
-  if (band.hideAt != null && zoom >= band.hideAt) return false;
-  const min = band.minzoom ?? Number.NEGATIVE_INFINITY;
-  const max = band.maxzoom ?? Number.POSITIVE_INFINITY;
-  return zoom >= min && zoom < max;
-}
-
-const COUNTRY_TEXT_LAYOUT: SymbolLayerSpecification['layout'] = {
-  'text-field': ['get', 'name'],
-  'text-font': ['Open Sans Regular'],
-  'text-size': 12,
-  'text-variable-anchor-offset': ['match', ['get', 'name'], 'Kenya',
-    ['literal', ['bottom', [0, -1.5], 'top', [0, 1.5], ...countryPlacementCandidates()]],
-    ['literal', countryPlacementCandidates()]],
-  'symbol-sort-key': ['match', ['get', 'name'], 'Nigeria', 0, 'Kenya', 1, 2],
-};
-
-/** Try nearby free space before moving a crowded fitted-world label farther from its centroid. */
-function countryPlacementCandidates(): Array<string | [number, number]> {
-  const candidates: Array<string | [number, number]> = ['center', [0, 0]];
-  for (const offset of [0.6, 1.5, 2]) {
-    candidates.push('left', [offset, 0], 'right', [-offset, 0], 'top', [0, offset], 'bottom', [0, -offset],
-      'top-left', [offset, offset], 'top-right', [-offset, offset], 'bottom-left', [offset, -offset], 'bottom-right', [-offset, -offset]);
-  }
-  return candidates;
-}
-
-const COUNTRY_TEXT_PAINT: SymbolLayerSpecification['paint'] = {
-  'text-color': '#f7f4ea',
-  'text-halo-color': '#02040c',
-  'text-halo-width': 1.4,
-};
-
-/** Symbol layers for the centroid names. A layer is on only where round(viewZoom + 1) is missing from that country's painted tiles. */
-function countrySymbolLayers() {
-  const grouped: Record<string, { band: SymbolBand; names: string[] }> = {};
-  for (const [name, painted] of Object.entries(COUNTRY_RASTER_LEVELS.countries)) {
-    for (const band of holeBands(painted, COUNTRY_RASTER_LEVELS.through)) {
-      const key = bandKey(band);
-      const group = grouped[key] ?? { band, names: [] };
-      group.names.push(name);
-      grouped[key] = group;
-    }
-  }
-  const groups = Object.values(grouped);
-  const primary = groups.reduce((best, group) => {
-    if (!coversView(group.band, 0)) return best;
-    if (!best || group.names.length > best.names.length) return group;
-    return best;
-  }, null as { band: SymbolBand; names: string[] } | null);
-  return groups
-    .sort((left, right) => (left.band.minzoom ?? -Infinity) - (right.band.minzoom ?? -Infinity)
-      || (left.band.maxzoom ?? Infinity) - (right.band.maxzoom ?? Infinity))
-    .map((group) => ({
-      id: group === primary ? 'inset-countries' : `inset-countries-${bandKey(group.band)}`,
-      type: 'symbol' as const,
-      source: 'inset-countries',
-      ...(group.band.minzoom == null ? {} : { minzoom: group.band.minzoom }),
-      ...(group.band.maxzoom == null ? {} : { maxzoom: group.band.maxzoom }),
-      filter: ['in', ['get', 'name'], ['literal', group.names]] as ['in', ['get', 'name'], ['literal', string[]]],
-      layout: COUNTRY_TEXT_LAYOUT,
-      paint: {
-        ...COUNTRY_TEXT_PAINT,
-        ...(group.band.hideAt == null ? {} : { 'text-opacity': ['step', ['zoom'], 1, group.band.hideAt, 0] as ['step', ['zoom'], 1, number, 0] }),
-      },
-    }));
-}
-
-const COUNTRY_SYMBOL_LAYERS = countrySymbolLayers();
-
 type ScreenBox = { left: number; top: number; right: number; bottom: number };
 
-/** Raster halos sit a few screen pixels outside the audited ink. The mask has to cover them and stay off a kept name. */
-export const LABEL_HALO_PX = 4;
+/** Reference-raster names checked against main as a second copy of the vector label. */
+const DEMONSTRATED_DUPLICATE_RASTER: readonly { name: string; tile: number; service: 'reference' }[] = [
+  { name: 'Canada', tile: 3, service: 'reference' },
+];
 
-/** Open Sans at 12px, measured wide enough that a shifted word is not clipped. */
-const SYMBOL_CHAR_PX = 7.2;
+function collection(places: readonly PlanPlace[]): GeoJSON.FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: places.map((place) => ({
+      type: 'Feature' as const,
+      properties: { name: place.name },
+      geometry: { type: 'Point' as const, coordinates: [place.lon, place.lat] },
+    })),
+  };
+}
 
-const SYMBOL_HEIGHT_PX = 16;
+/** Main's country symbol layer: centered placement, collision on, and a hard stop at zoom 3. */
+export function countryLabelLayer() {
+  return nameLayer('inset-countries', 'inset-countries', undefined, PLAN_RASTER_NAME_ZOOM);
+}
 
-/** Same edge as the verifier: a letter that crosses the canvas is not a complete raster name. */
-const RASTER_INK_EDGE_PX = 0;
+function nameLayer(id: string, source: string, minzoom?: number, maxzoom?: number) {
+  return {
+    id,
+    type: 'symbol' as const,
+    source,
+    ...(minzoom === undefined ? {} : { minzoom }),
+    ...(maxzoom === undefined ? {} : { maxzoom }),
+    layout: {
+      'text-field': ['get', 'name'] as ['get', 'name'],
+      'text-font': ['Open Sans Regular'],
+      'text-size': 12,
+    },
+    paint: {
+      'text-color': '#f7f4ea',
+      'text-halo-color': '#02040c',
+      'text-halo-width': 1.4,
+    },
+  };
+}
 
-/** Matches the dark-gray land under a letter that crosses the canvas edge. */
-const CLIPPED_LABEL_COVER = '#414143';
-
-/** A raster name owns the label only when its complete lettering is visible above the inset chrome. */
-export function readableCountryName(box: ScreenBox, viewport: ScreenBox, occlusions: readonly ScreenBox[]): boolean {
-  return box.left >= viewport.left - RASTER_INK_EDGE_PX && box.top >= viewport.top - RASTER_INK_EDGE_PX
-    && box.right <= viewport.right + RASTER_INK_EDGE_PX && box.bottom <= viewport.bottom + RASTER_INK_EDGE_PX
-    && !letteringOccluded(box, occlusions);
+function drawnTile(zoom: number, maxzoom: number): number {
+  return Math.min(maxzoom, Math.max(0, Math.round(zoom + 1)));
 }
 
 function mercatorLngLat(x: number, y: number): [number, number] {
   return [x * 360 - 180, Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180 / Math.PI];
 }
 
-const RASTER_SOURCES = [
-  { service: 'reference', maxzoom: INSET_LABEL_MAX_ZOOM },
-  { service: 'dark', maxzoom: INSET_BASEMAP_MAX_ZOOM },
-] as const;
-
-function drawnTile(zoom: number, maxzoom: number): number {
-  return Math.min(maxzoom, Math.max(0, Math.round(zoom + 1)));
-}
-
-function shownBox(screen: ScreenBox, viewport: ScreenBox): ScreenBox | null {
-  const left = Math.max(screen.left, viewport.left);
-  const top = Math.max(screen.top, viewport.top);
-  const right = Math.min(screen.right, viewport.right);
-  const bottom = Math.min(screen.bottom, viewport.bottom);
-  if (right - left < 1 || bottom - top < 1) return null;
-  return { left, top, right, bottom };
-}
-
-function padBox(box: ScreenBox, halo: number): ScreenBox {
-  return { left: box.left - halo, top: box.top - halo, right: box.right + halo, bottom: box.bottom + halo };
-}
-
-/** The screen box of a centered country symbol. */
-export function countrySymbolBox(name: string, anchor: { x: number; y: number }): ScreenBox {
-  const width = Math.ceil(name.length * SYMBOL_CHAR_PX);
+function projectInk(ink: readonly number[], project: (lngLat: [number, number]) => { x: number; y: number }): ScreenBox {
+  const start = project(mercatorLngLat(ink[0]!, ink[1]!));
+  const end = project(mercatorLngLat(ink[2]!, ink[3]!));
   return {
-    left: anchor.x - width / 2,
-    top: anchor.y - SYMBOL_HEIGHT_PX / 2,
-    right: anchor.x + width / 2,
-    bottom: anchor.y + SYMBOL_HEIGHT_PX / 2,
+    left: Math.min(start.x, end.x),
+    top: Math.min(start.y, end.y),
+    right: Math.max(start.x, end.x),
+    bottom: Math.max(start.y, end.y),
   };
 }
 
-/** Move a symbol fully inside the plan. A word wider than the plan is not drawn. */
-export function fittedSymbolAnchor(name: string, anchor: { x: number; y: number }, viewport: ScreenBox): { x: number; y: number } | null {
-  if (anchor.x < viewport.left || anchor.y < viewport.top || anchor.x > viewport.right || anchor.y > viewport.bottom) return null;
-  const box = countrySymbolBox(name, anchor);
-  let x = anchor.x;
-  let y = anchor.y;
-  if (box.left < viewport.left) x += viewport.left - box.left;
-  if (box.right > viewport.right) x += viewport.right - box.right;
-  if (box.top < viewport.top) y += viewport.top - box.top;
-  if (box.bottom > viewport.bottom) y += viewport.bottom - box.bottom;
-  const fitted = countrySymbolBox(name, { x, y });
-  if (fitted.left < viewport.left - 0.5 || fitted.top < viewport.top - 0.5 || fitted.right > viewport.right + 0.5 || fitted.bottom > viewport.bottom + 0.5) return null;
-  return { x, y };
+/** The vector stays unless this frame shows that country's complete name on the drawn reference tile. */
+export function rasterShowsSameCountry(
+  zoom: number,
+  drawn: number,
+  entry: { tile: number; service: string; ink?: readonly number[] } | undefined,
+  project: (lngLat: [number, number]) => { x: number; y: number },
+  viewport: ScreenBox,
+  occlusions: readonly ScreenBox[],
+): boolean {
+  if (!(zoom < PLAN_RASTER_NAME_ZOOM)) return false;
+  if (!entry || entry.tile !== drawn || entry.service !== 'reference' || !entry.ink) return false;
+  if (!countryLabelCounts({ width: entry.ink[2]! - entry.ink[0]!, height: entry.ink[3]! - entry.ink[1]! })) return false;
+  const box = projectInk(entry.ink, project);
+  const inside = box.left >= viewport.left && box.top >= viewport.top && box.right <= viewport.right && box.bottom <= viewport.bottom;
+  return inside && !letteringOccluded(box, occlusions);
 }
 
-function exposedCovers(screen: ScreenBox, kept: ScreenBox | null, viewport: ScreenBox): ScreenBox[] {
-  if (!kept) {
-    const box = shownBox(screen, viewport);
-    return box ? [box] : [];
-  }
-  const parts: ScreenBox[] = [
-    { left: screen.left, top: screen.top, right: screen.right, bottom: Math.min(screen.bottom, kept.top) },
-    { left: screen.left, top: Math.max(screen.top, kept.bottom), right: screen.right, bottom: screen.bottom },
-    { left: screen.left, top: Math.max(screen.top, kept.top), right: Math.min(screen.right, kept.left), bottom: Math.min(screen.bottom, kept.bottom) },
-    { left: Math.max(screen.left, kept.right), top: Math.max(screen.top, kept.top), right: screen.right, bottom: Math.min(screen.bottom, kept.bottom) },
-  ];
-  return parts.flatMap((part) => {
-    const box = shownBox(part, viewport);
-    return box ? [box] : [];
-  });
-}
-
-/** Cover a remnant, halo included, and keep that paint off the name that stays. */
-export function remnantCovers(extent: ScreenBox, kept: ScreenBox | null, viewport: ScreenBox, halo = LABEL_HALO_PX): ScreenBox[] {
-  return exposedCovers(padBox(extent, halo), kept ? padBox(kept, halo) : null, viewport);
-}
-
-/** Keep one complete name. Smaller border names and every clipped or occluded scrap are masked. */
-export function keptLettering(entries: readonly { complete: boolean; area: number }[]): { keep: number; mask: number[] } {
-  const complete = entries.map((entry, index) => ({ ...entry, index })).filter((entry) => entry.complete);
-  if (complete.length > 1) {
-    const ranked = [...complete].sort((left, right) => right.area - left.area || left.index - right.index);
-    const keep = ranked[0]?.index ?? -1;
-    return { keep, mask: entries.map((_, index) => index).filter((index) => index !== keep) };
-  }
-  return { keep: complete[0]?.index ?? -1, mask: entries.flatMap((entry, index) => entry.complete ? [] : [index]) };
-}
-
-function viewportFallbacks(map: MapLibreMap, frame: HTMLElement): { names: string[]; covers: ScreenBox[]; rasterCount: number; symbols: { name: string; anchor: { x: number; y: number } }[]; kept: ScreenBox[] } {
-  const zoom = map.getZoom();
+function frameOcclusions(frame: HTMLElement): ScreenBox[] {
   const frameBox = frame.getBoundingClientRect();
-  const viewport = { left: 0, top: 0, right: frame.clientWidth, bottom: frame.clientHeight };
-  const occlusions = Array.from(frame.ownerDocument.querySelectorAll('[data-iss-clock], [data-iss-edition], [data-iss-split-chrome]'))
+  return Array.from(frame.ownerDocument.querySelectorAll('[data-iss-clock], [data-iss-edition], [data-iss-split-chrome]'))
     .filter((element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== 'hidden')
     .map((element) => {
       const box = element.getBoundingClientRect();
       return { left: box.left - frameBox.left, top: box.top - frameBox.top, right: box.right - frameBox.left, bottom: box.bottom - frameBox.top };
     });
-  const covers: ScreenBox[] = [];
-  const symbols: { name: string; anchor: { x: number; y: number } }[] = [];
-  const kept: ScreenBox[] = [];
-  let rasterCount = 0;
-  const names = COUNTRY_CENTROIDS.features.flatMap((feature) => {
-    if (feature.geometry.type !== 'Point') return [];
-    const name = String(feature.properties?.name);
-    const painted = COUNTRY_RASTER_LEVELS.countries[name] ?? [];
-    const liveTile = drawnTile(zoom, INSET_LABEL_MAX_ZOOM);
-    const sources = RASTER_SOURCES.flatMap((source) => {
-      const drawn = drawnTile(zoom, source.maxzoom);
-      const audited = painted.filter((level) => level <= drawn);
-      const tile = audited.includes(drawn) ? drawn : audited[audited.length - 1];
-      return tile == null ? [] : [{ service: source.service, tile, stale: !painted.includes(drawn) }];
-    });
-    if (sources.length === 0) return [];
-    const glyphs: { screen: ScreenBox; extent: ScreenBox; complete: boolean; area: number; onCanvas: boolean }[] = [];
-    for (const source of sources) {
-      for (const entry of COUNTRY_RASTER_LEVELS.bounds?.[name]?.[source.tile] ?? []) {
-        if (entry.service !== source.service) continue;
-        const projectBounds = (bounds: readonly number[]): ScreenBox => {
-          const start = map.project(mercatorLngLat(bounds[0]!, bounds[1]!));
-          const end = map.project(mercatorLngLat(bounds[2]!, bounds[3]!));
-          return { left: Math.min(start.x, end.x), top: Math.min(start.y, end.y), right: Math.max(start.x, end.x), bottom: Math.max(start.y, end.y) };
-        };
-        const glyph = entry.ink ?? entry.box;
-        const ink = projectBounds(glyph);
-        const extent = projectBounds(entry.box);
-        const counted = countryLabelCounts({ width: glyph[2]! - glyph[0]!, height: glyph[3]! - glyph[1]! });
-        const onCanvas = counted && readableCountryName(ink, viewport, occlusions);
-        glyphs.push({
-          screen: ink,
-          extent,
-          onCanvas,
-          complete: !source.stale && onCanvas,
-          area: Math.abs(ink.right - ink.left) * Math.abs(ink.bottom - ink.top),
-        });
-      }
-    }
-    const onScreen = glyphs.some((glyph) => glyph.onCanvas);
-    if (liveTile > COUNTRY_RASTER_LEVELS.through) {
-      const anchor = map.project(feature.geometry.coordinates as [number, number]);
-      const dx = anchor.x - viewport.right / 2;
-      const dy = anchor.y - viewport.bottom / 2;
-      const centered = viewport.right >= 430 && dx * dx + dy * dy <= 24 * 24;
-      if (onScreen && liveTile < 8) return [];
-      if (!centered) return [];
-      const fitted = fittedSymbolAnchor(name, anchor, viewport);
-      if (!fitted) return [];
-      symbols.push({ name, anchor: { x: Math.round(fitted.x), y: Math.round(fitted.y) } });
-      return [name];
-    }
-    const decision = keptLettering(glyphs);
-    const keptInk = decision.keep >= 0 ? glyphs[decision.keep]!.screen : null;
-    if (keptInk) {
-      rasterCount += 1;
-      kept.push(keptInk);
-    }
-    const anchor = map.project(feature.geometry.coordinates as [number, number]);
-    const fitted = keptInk ? null : fittedSymbolAnchor(name, anchor, viewport);
-    const protect = keptInk ?? (fitted ? countrySymbolBox(name, fitted) : null);
-    for (const index of decision.mask) {
-      covers.push(...remnantCovers(glyphs[index]!.extent, protect, viewport));
-    }
-    if (!fitted) return [];
-    symbols.push({ name, anchor: { x: Math.round(fitted.x), y: Math.round(fitted.y) } });
-    return [name];
-  });
-  return { names, covers, rasterCount, symbols, kept };
+}
+
+function hiddenCountryNames(map: MapLibreMap, frame: HTMLElement): string[] {
+  const zoom = map.getZoom();
+  const tile = drawnTile(zoom, INSET_LABEL_MAX_ZOOM);
+  const viewport = { left: 0, top: 0, right: frame.clientWidth, bottom: frame.clientHeight };
+  const occlusions = frameOcclusions(frame);
+  const hidden: string[] = [];
+  for (const item of DEMONSTRATED_DUPLICATE_RASTER) {
+    const entries = COUNTRY_RASTER_LEVELS.bounds?.[item.name]?.[String(item.tile)] ?? [];
+    const ink = entries.find((entry) => entry.service === item.service);
+    const evidence = ink ? { tile: item.tile, service: item.service, ink: ink.ink } : undefined;
+    if (rasterShowsSameCountry(zoom, tile, evidence, (lngLat) => map.project(lngLat), viewport, occlusions)) hidden.push(item.name);
+  }
+  return hidden;
 }
 
 type InsetFrame = HTMLElement & { __opdTrackInset?: MapLibreMap };
@@ -415,9 +207,7 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
         'inset-basemap': { type: 'raster', tiles: ESRI_DARK_TILES, tileSize: 256, maxzoom: INSET_BASEMAP_MAX_ZOOM },
         'inset-night': { type: 'geojson', data: EMPTY },
         'inset-labels': { type: 'raster', tiles: ESRI_LABEL_TILES, tileSize: 256, maxzoom: INSET_LABEL_MAX_ZOOM },
-        'inset-label-mask': { type: 'geojson', data: EMPTY },
-        'inset-countries': { type: 'geojson', data: COUNTRY_CENTROIDS },
-        'inset-country-fallbacks': { type: 'geojson', data: EMPTY },
+        'inset-countries': { type: 'geojson', data: collection(planTier(0)) },
         'inset-track': { type: 'geojson', data: EMPTY },
       },
       layers: [
@@ -429,29 +219,13 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
           paint: { 'fill-color': '#000000', 'fill-opacity': 0.28 },
         },
         { id: 'inset-labels', type: 'raster', source: 'inset-labels', paint: { 'raster-opacity': 0.85 } },
-        { id: 'inset-label-mask', type: 'fill', source: 'inset-label-mask', paint: { 'fill-color': CLIPPED_LABEL_COVER, 'fill-opacity': 1 } },
         {
           id: 'inset-track',
           type: 'line',
           source: 'inset-track',
           paint: { 'line-color': '#5cd0ff', 'line-width': 2 },
         },
-        ...COUNTRY_SYMBOL_LAYERS,
-        {
-          id: 'inset-countries-viewport',
-          type: 'symbol',
-          source: 'inset-country-fallbacks',
-          filter: ['in', ['get', 'name'], ['literal', []]],
-          layout: {
-            'text-field': ['get', 'name'],
-            'text-font': ['Open Sans Regular'],
-            'text-size': 12,
-            'text-anchor': 'center',
-            'text-allow-overlap': true,
-            'text-ignore-placement': true,
-          },
-          paint: COUNTRY_TEXT_PAINT,
-        },
+        countryLabelLayer(),
       ],
     },
   });
@@ -478,61 +252,19 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
   let trackDirty = false;
   let fittedWidth = -1;
   let fittedHeight = -1;
-  let viewportNames = '';
-  let viewportCovers = '';
-  let symbolDataKey = '';
-  const syncCountryLabels = (): void => {
+  let hiddenKey = '';
+  const syncDuplicateLabels = (): void => {
     if (removed || !map.isStyleLoaded() || frame.clientWidth < 2 || frame.clientHeight < 2) return;
-    const state = viewportFallbacks(map, frame);
-    const features = state.covers.map((cover) => {
-      const ring = [
-        map.unproject([Math.round(cover.left), Math.round(cover.top)]),
-        map.unproject([Math.round(cover.right), Math.round(cover.top)]),
-        map.unproject([Math.round(cover.right), Math.round(cover.bottom)]),
-        map.unproject([Math.round(cover.left), Math.round(cover.bottom)]),
-      ].map((point) => [point.lng, point.lat] as [number, number]);
-      ring.push(ring[0]!);
-      return { type: 'Feature' as const, properties: {}, geometry: { type: 'Polygon' as const, coordinates: [ring] } };
-    });
-    const roundCoord = (value: number) => Math.round(value * 1e5) / 1e5;
-    const coverKey = JSON.stringify(features.map((feature) => feature.geometry.coordinates[0]?.map((pair) => [roundCoord(pair[0]!), roundCoord(pair[1]!)])));
-    if (coverKey !== viewportCovers) {
-      viewportCovers = coverKey;
-      const source = map.getSource('inset-label-mask');
-      if (source && 'setData' in source && typeof source.setData === 'function') {
-        source.setData({ type: 'FeatureCollection', features });
-      }
-    }
-    const symbolFeatures = state.symbols.map((symbol) => {
-      const point = map.unproject([symbol.anchor.x, symbol.anchor.y]);
-      return {
-        type: 'Feature' as const,
-        properties: { name: symbol.name },
-        geometry: { type: 'Point' as const, coordinates: [point.lng, point.lat] as [number, number] },
-      };
-    });
-    const symbolKey = JSON.stringify(symbolFeatures.map((feature) => [feature.properties.name, roundCoord(feature.geometry.coordinates[0]), roundCoord(feature.geometry.coordinates[1])]));
-    if (symbolKey !== symbolDataKey) {
-      symbolDataKey = symbolKey;
-      const symbolSource = map.getSource('inset-country-fallbacks');
-      if (symbolSource && 'setData' in symbolSource && typeof symbolSource.setData === 'function') {
-        symbolSource.setData({ type: 'FeatureCollection', features: symbolFeatures });
-      }
-    }
-    Object.assign(map, {
-      __opdLabelMasks: state.covers,
-      __opdRasterCount: state.rasterCount,
-      __opdKeptBoxes: state.kept,
-      __opdSymbolBoxes: state.symbols.map((symbol) => countrySymbolBox(symbol.name, symbol.anchor)),
-    });
-    const key = state.names.join('|');
-    if (key === viewportNames) return;
-    viewportNames = key;
-    map.setFilter('inset-countries-viewport', ['in', ['get', 'name'], ['literal', state.names]]);
+    const hidden = hiddenCountryNames(map, frame);
+    const key = hidden.join('|');
+    if (key === hiddenKey) return;
+    hiddenKey = key;
+    frame.dataset.insetHiddenCountries = key;
+    map.setPaintProperty('inset-countries', 'text-opacity', key === '' ? 1 : ['case', ['in', ['get', 'name'], ['literal', hidden]], 0, 1]);
   };
-  map.on('render', syncCountryLabels);
-  map.on('move', syncCountryLabels);
-  map.on('moveend', syncCountryLabels);
+  map.on('render', syncDuplicateLabels);
+  map.on('move', syncDuplicateLabels);
+  map.on('moveend', syncDuplicateLabels);
   let paintedWidth = -1;
   let paintedHeight = -1;
   let paintedRatio = -1;
