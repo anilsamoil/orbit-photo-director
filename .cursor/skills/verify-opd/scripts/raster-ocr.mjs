@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { countryLabelCountsScreen } from '../../../../frontend/src/map/adapters/maplibre/country-label-size.ts';
 
 export function rasterHelperFrom(source) {
   const text = String(source);
@@ -161,6 +162,7 @@ export function readableRasterName(pack, row, country) {
       const world = 256 * (2 ** mosaic.z) * wrap;
       const box = [(x1+world)*scale+origin.x, y1*scale+origin.y, (x2+world)*scale+origin.x, y2*scale+origin.y];
       if (box[0] < 0 || box[1] < 0 || box[2] > width || box[3] > height) continue;
+      if (Number.isFinite(zoom) && !countryLabelCountsScreen(box, zoom)) continue;
       if ((occlusions || []).some(rect => box[0] < rect[2] && box[2] > rect[0] && box[1] < rect[3] && box[3] > rect[1])) continue;
       boxes.push({ service: mosaic.service, text: word.text, box });
     }

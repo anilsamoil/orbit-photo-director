@@ -3,6 +3,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 
 import { insetTrackBounds, type LonLat } from '../../../insets/bounds';
 import { terminatorNightPolygonFeatures } from '../../../terminator';
+import { countryLabelCounts } from './country-label-size';
 import countryRasterLevels from './country-raster-levels.json' with { type: 'json' };
 
 const ESRI_DARK_TILES = [
@@ -223,6 +224,7 @@ function viewportFallbacks(map: MapLibreMap, frame: HTMLElement): string[] {
     const readable = sources.some((source) => (COUNTRY_RASTER_LEVELS.bounds?.[name]?.[source.tile] ?? []).some((entry) => {
       if (entry.service !== source.service) return false;
       const box = entry.box;
+      if (!countryLabelCounts({ width: box[2]! - box[0]!, height: box[3]! - box[1]! })) return false;
       const start = map.project(mercatorLngLat(box[0]!, box[1]!));
       const end = map.project(mercatorLngLat(box[2]!, box[3]!));
       return readableCountryName({ left: start.x, top: start.y, right: end.x, bottom: end.y }, viewport, occlusions);
