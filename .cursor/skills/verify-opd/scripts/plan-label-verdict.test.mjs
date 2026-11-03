@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { readableRasterName } from './raster-ocr.mjs';
 import {
   AUDITED_RASTER_LEVELS, auditRasterLevels, countryStyleVerdict, countrySweepZooms,
-  loadCountryRasterLevels, loadCountrySymbolLayers, oneNameSource, planLabelReaders, planLabelVerdict, rasterPainted,
+  auditedNameReadable, clippedRasterRemnant, loadCountryRasterLevels, loadCountrySymbolLayers, oneNameSource, planLabelReaders, planLabelVerdict, rasterPainted,
 } from './plan-label-verdict.mjs';
 
 test('an exact sovereign name is not vetoed by an unrelated adjective', () => {
@@ -186,6 +186,35 @@ test('readPlanLabels keeps each feature paint object and does not collapse two F
   const verdict = context.readPlanLabels(orbit, 12000, 320, 240);
   assert.equal(verdict.names.filter((name) => name === 'France').length, 2);
   assert.equal(verdict.names.includes('Canada'), true);
+});
+
+test('the name sweep includes the off-centroid cameras and rejects a clipped remnant', () => {
+  const drive = readFileSync(new URL('./drive.mjs', import.meta.url), 'utf8');
+  const start = drive.indexOf('const sweepNotes');
+  const sweep = drive.slice(start, drive.indexOf('const france = await readPlanLabelZoom', start));
+  assert.match(sweep, /-0\.33,\s*46/);
+  assert.match(sweep, /\[\s*134,\s*-25\s*\]/);
+  assert.match(sweep, /6\.51/);
+  assert.match(sweep, /data-inset-label-cover/);
+  const open = oneNameSource({
+    tilesOk: true, zoom: 5.5, tileZ: 6, country: 'France', names: ['France'], rasterReadable: true,
+  });
+  assert.equal(open.reason, 'duplicate');
+  const remnant = clippedRasterRemnant(
+    [{ box: [400, 200, 520, 240] }],
+    { width: 492, height: 690 },
+    [],
+  );
+  assert.equal(remnant.covered, false);
+  const world = 512 * (2 ** 5.5);
+  const center = [-0.33, 46];
+  const mercatorX = (center[0] + 180) / 360;
+  const mercatorY = (1 - Math.asinh(Math.tan(center[1] * Math.PI / 180)) / Math.PI) / 2;
+  const france = { width: 492, height: 690, occlusions: [], origin: { x: 246 - mercatorX * world, y: 345 - mercatorY * world } };
+  assert.equal(auditedNameReadable('France', 5.5, france), true);
+  const clippedWorld = 512 * (2 ** 6.5);
+  const clipped = { width: 492, height: 690, occlusions: [], origin: { x: 246 - mercatorX * clippedWorld, y: 345 - mercatorY * clippedWorld } };
+  assert.equal(auditedNameReadable('France', 6.5, clipped), false);
 });
 
 test('the plan-inset docs name the level-6 clamp at zoom 5.5', () => {

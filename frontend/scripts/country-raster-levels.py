@@ -178,6 +178,20 @@ def ocr_image(image: Image.Image) -> str:
     return observation_text(ocr_observations(image))
 
 
+def letter_ink(image: Image.Image, box: list[float]) -> list[float] | None:
+    x0, y0 = max(0, math.floor(box[0])), max(0, math.floor(box[1]))
+    x1, y1 = min(image.width, math.ceil(box[2])), min(image.height, math.ceil(box[3]))
+    found = []
+    for y in range(y0, y1):
+        for x in range(x0, x1):
+            red, green, blue, alpha = image.getpixel((x, y))
+            if alpha > 128 and red > 200 and green > 200 and blue > 200:
+                found.append((x, y))
+    if not found:
+        return None
+    return [float(min(p[0] for p in found)), float(min(p[1] for p in found)), float(max(p[0] for p in found) + 1), float(max(p[1] for p in found) + 1)]
+
+
 def name_boxes(lines: list[list[dict]], country: str) -> list[list[float]]:
     boxes = []
     for line in lines:
@@ -254,8 +268,14 @@ def main() -> int:
                     boxes.extend([[left + (cx - xs[0]) * 256, top + (cy - ys[0]) * 256, right + (cx - xs[0]) * 256, bottom + (cy - ys[0]) * 256] for left, top, right, bottom in name_boxes(center_observed, name)])
                 for left, top, right, bottom in boxes:
                     scale = 256 * 2**zoom
-                    box = [(left + 256 * xs[0]) / scale, (top + 256 * ys[0]) / scale, (right + 256 * xs[0]) / scale, (bottom + 256 * ys[0]) / scale]
-                    bounds[name].setdefault(zoom, []).append({"service": service_name, "box": [round(value, 9) for value in box]})
+                    origin_x, origin_y = 256 * xs[0], 256 * ys[0]
+                    box = [(left + origin_x) / scale, (top + origin_y) / scale, (right + origin_x) / scale, (bottom + origin_y) / scale]
+                    entry = {"service": service_name, "box": [round(value, 9) for value in box]}
+                    tight = letter_ink(mosaic, [left, top, right, bottom])
+                    if tight is not None:
+                        ink = [(tight[0] + origin_x) / scale, (tight[1] + origin_y) / scale, (tight[2] + origin_x) / scale, (tight[3] + origin_y) / scale]
+                        entry["ink"] = [round(value, 9) for value in ink]
+                    bounds[name].setdefault(zoom, []).append(entry)
             if any(raster_painted(text, name) for text in words):
                 if not bounds[name].get(zoom):
                     raise RuntimeError(f"{name} z{zoom}: OCR name has no readable glyph bounds")

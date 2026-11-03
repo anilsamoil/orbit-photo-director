@@ -43,6 +43,21 @@ class CountryRasterTruth(unittest.TestCase):
             {"text": "Tralia", "box": [10, 0, 30, 8]},
         ]], "Australia"), [])
 
+    def test_letter_ink_is_the_white_letter_not_the_black_halo(self):
+        image = GENERATOR.Image.new("RGBA", (12, 8), (0, 0, 0, 0))
+        for x in range(2, 10):
+            image.putpixel((x, 3), (0, 0, 0, 255))
+            image.putpixel((x, 4), (255, 255, 255, 255))
+        self.assertEqual(GENERATOR.letter_ink(image, [0, 0, 12, 8]), [2, 4, 10, 5])
+
+    def test_france_z6_reference_ink_sits_inside_the_padded_box(self):
+        payload = json.loads(GENERATOR.OUT.read_text())
+        entry = next(item for item in payload["bounds"]["France"]["6"] if item["service"] == "reference")
+        self.assertLess(entry["box"][0], entry["ink"][0])
+        self.assertGreater(entry["box"][2], entry["ink"][2])
+        self.assertLess(entry["box"][1], entry["ink"][1])
+        self.assertGreater(entry["box"][3], entry["ink"][3])
+
     def test_generated_levels_match_independent_fresh_tile_audit(self):
         payload = json.loads(GENERATOR.OUT.read_text())
         self.assertEqual(payload["through"], 6)

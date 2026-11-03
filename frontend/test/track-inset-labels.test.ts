@@ -344,6 +344,42 @@ describe('plan inset labels', () => {
     inset.destroy();
   });
 
+  it('paints off-centroid names once and covers a clipped raster remnant', () => {
+    const names = () => {
+      const filter = created.options?.style.layers.find((layer) => layer.id === 'inset-countries-viewport')?.filter as [string, unknown, [string, string[]]];
+      return filter[2][1];
+    };
+    const covers = (frame: HTMLElement) => [...frame.querySelectorAll<HTMLElement>('[data-inset-label-cover]')].map((node) => ({
+      left: Number(node.style.left.replace('px', '')),
+      width: Number(node.style.width.replace('px', '')),
+    }));
+    const mount = (zoom: number, center: [number, number]) => {
+      created.zoom = zoom;
+      created.center = center;
+      created.size = [492, 690];
+      const frame = document.createElement('div');
+      Object.defineProperty(frame, 'clientWidth', { value: 492 });
+      Object.defineProperty(frame, 'clientHeight', { value: 690 });
+      const inset = createTrackInset(frame, document.createElement('div'));
+      created.events.render?.();
+      return { frame, inset };
+    };
+    const france = mount(5.5, [-0.33, 46]);
+    expect(names(), 'France pan 5.5').not.toContain('France');
+    expect(covers(france.frame), 'France pan 5.5 cover').toEqual([]);
+    france.inset.destroy();
+    for (const zoom of [6.5, 6.51]) {
+      const australia = mount(zoom, [134, -25]);
+      expect(names(), `Australia ${zoom}`).not.toContain('Australia');
+      expect(covers(australia.frame).some((cover) => cover.width > 2), `Australia ${zoom} cover`).toBe(false);
+      australia.inset.destroy();
+      const clipped = mount(zoom, [-0.33, 46]);
+      expect(names(), `France pan ${zoom}`).not.toContain('France');
+      expect(covers(clipped.frame).some((cover) => cover.left > 400 && cover.width > 8), `France pan ${zoom} remnant`).toBe(true);
+      clipped.inset.destroy();
+    }
+  });
+
   it('restores Kenya and Nigeria at zoom 6.5 when only a stale dark z6 box is inside the canvas', () => {
     const names = () => {
       const filter = created.options?.style.layers.find((layer) => layer.id === 'inset-countries-viewport')?.filter as [string, unknown, [string, string[]]];

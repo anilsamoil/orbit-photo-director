@@ -170,6 +170,56 @@ function levelPaints(levels, country, tileZoom) {
   return painted.includes(levels.through);
 }
 
+/** The map's own lettering test: white ink when the audit measured it, otherwise the padded box. */
+export function auditedNameReadable(country, zoom, viewport, levels = loadCountryRasterLevels()) {
+  if (!viewport || !viewport.origin || !Number.isFinite(Number(zoom))) return false;
+  const painted = levels.countries?.[country] || [];
+  const world = 512 * (2 ** Number(zoom));
+  const sources = [
+    { service: 'reference', tile: Math.min(levels.through, Math.max(0, Math.round(Number(zoom) + 1))) },
+    { service: 'dark', tile: Math.min(20, Math.max(0, Math.round(Number(zoom) + 1))) },
+  ].filter((source) => painted.includes(source.tile));
+  return sources.some((source) => (levels.bounds?.[country]?.[String(source.tile)] || []).some((entry) => {
+    if (entry.service !== source.service) return false;
+    const box = entry.box;
+    if (!(box[2] - box[0] >= 0.0004 && box[3] - box[1] >= 0.0004)) return false;
+    const glyph = entry.ink || box;
+    const screen = [
+      viewport.origin.x + glyph[0] * world,
+      viewport.origin.y + glyph[1] * world,
+      viewport.origin.x + glyph[2] * world,
+      viewport.origin.y + glyph[3] * world,
+    ];
+    if (screen[0] < -1 || screen[1] < -1 || screen[2] > viewport.width + 1 || screen[3] > viewport.height + 1) return false;
+    return !(viewport.occlusions || []).some((rect) => screen[0] < rect[2] && screen[2] > rect[0] && screen[1] < rect[3] && screen[3] > rect[1]);
+  }));
+}
+
+/** A letter that crosses the canvas and is not hidden by a label cover. */
+export function clippedRasterRemnant(boxes, viewport, covers) {
+  const open = [];
+  for (const item of boxes || []) {
+    const box = item.box;
+    const left = Math.max(box[0], 0);
+    const top = Math.max(box[1], 0);
+    const right = Math.min(box[2], viewport.width);
+    const bottom = Math.min(box[3], viewport.height);
+    const overflow = Math.max(-box[0], -box[1], box[2] - viewport.width, box[3] - viewport.height);
+    if (!(overflow > 1) || right - left < 1 || bottom - top < 1) continue;
+    const crossesLeft = box[0] < -1;
+    const crossesTop = box[1] < -1;
+    const crossesRight = box[2] > viewport.width + 1;
+    const crossesBottom = box[3] > viewport.height + 1;
+    const covered = (covers || []).some((cover) => cover.left < right && cover.right > left && cover.top < bottom && cover.bottom > top
+      && (!crossesLeft || cover.left <= 1)
+      && (!crossesTop || cover.top <= 1)
+      && (!crossesRight || cover.right >= viewport.width - 1)
+      && (!crossesBottom || cover.bottom >= viewport.height - 1));
+    if (!covered) open.push([left, top, right, bottom]);
+  }
+  return { covered: open.length === 0, open };
+}
+
 /** Exactly one name source: the centroid symbol, or the raster lettering, never both and never neither. */
 export function oneNameSource(row) {
   if (!row || row.tilesOk !== true) {

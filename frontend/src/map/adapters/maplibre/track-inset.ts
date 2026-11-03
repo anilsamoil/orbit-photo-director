@@ -19,7 +19,7 @@ const ESRI_LABEL_TILES = [
 const COUNTRY_RASTER_LEVELS: {
   through: number;
   countries: Record<string, readonly number[]>;
-  bounds?: Record<string, Record<string, readonly { service: string; box: readonly number[] }[]>>;
+  bounds?: Record<string, Record<string, readonly { service: string; box: readonly number[]; ink?: readonly number[] }[]>>;
 } = countryRasterLevels;
 
 const COUNTRY_CENTROIDS: GeoJSON.FeatureCollection = {
@@ -180,12 +180,28 @@ const COUNTRY_SYMBOL_LAYERS = countrySymbolLayers();
 
 type ScreenBox = { left: number; top: number; right: number; bottom: number };
 
+/** One screen pixel. Audited ink is whole tile pixels, and a fractional pixel is not a letter remnant. */
+const RASTER_INK_EDGE_PX = 1;
+
+/** Matches the dark-gray land under a letter that crosses the canvas edge. */
+const CLIPPED_LABEL_COVER = '#414143';
+
 /** A raster name owns the label only when its complete lettering is visible above the inset chrome. */
 export function readableCountryName(box: ScreenBox, viewport: ScreenBox, occlusions: readonly ScreenBox[]): boolean {
-  return box.left >= viewport.left && box.top >= viewport.top
-    && box.right <= viewport.right && box.bottom <= viewport.bottom
+  return box.left >= viewport.left - RASTER_INK_EDGE_PX && box.top >= viewport.top - RASTER_INK_EDGE_PX
+    && box.right <= viewport.right + RASTER_INK_EDGE_PX && box.bottom <= viewport.bottom + RASTER_INK_EDGE_PX
     && !occlusions.some((cover) => box.left < cover.right && box.right > cover.left
       && box.top < cover.bottom && box.bottom > cover.top);
+}
+
+function clippedLabelCover(box: ScreenBox, viewport: ScreenBox): ScreenBox | null {
+  const left = Math.max(box.left, viewport.left);
+  const top = Math.max(box.top, viewport.top);
+  const right = Math.min(box.right, viewport.right);
+  const bottom = Math.min(box.bottom, viewport.bottom);
+  const overflow = Math.max(viewport.left - box.left, viewport.top - box.top, box.right - viewport.right, box.bottom - viewport.bottom);
+  if (overflow <= RASTER_INK_EDGE_PX || right - left < 1 || bottom - top < 1) return null;
+  return { left, top, right, bottom };
 }
 
 function mercatorLngLat(x: number, y: number): [number, number] {
@@ -201,7 +217,7 @@ function drawnTile(zoom: number, maxzoom: number): number {
   return Math.min(maxzoom, Math.max(0, Math.round(zoom + 1)));
 }
 
-function viewportFallbacks(map: MapLibreMap, frame: HTMLElement): string[] {
+function viewportFallbacks(map: MapLibreMap, frame: HTMLElement): { names: string[]; covers: ScreenBox[] } {
   const zoom = map.getZoom();
   const frameBox = frame.getBoundingClientRect();
   const viewport = { left: 0, top: 0, right: frame.clientWidth, bottom: frame.clientHeight };
@@ -211,7 +227,8 @@ function viewportFallbacks(map: MapLibreMap, frame: HTMLElement): string[] {
       const box = element.getBoundingClientRect();
       return { left: box.left - frameBox.left, top: box.top - frameBox.top, right: box.right - frameBox.left, bottom: box.bottom - frameBox.top };
     });
-  return COUNTRY_CENTROIDS.features.flatMap((feature) => {
+  const covers: ScreenBox[] = [];
+  const names = COUNTRY_CENTROIDS.features.flatMap((feature) => {
     if (feature.geometry.type !== 'Point') return [];
     const name = String(feature.properties?.name);
     const painted = COUNTRY_RASTER_LEVELS.countries[name] ?? [];
@@ -219,18 +236,23 @@ function viewportFallbacks(map: MapLibreMap, frame: HTMLElement): string[] {
       .map((source) => ({ service: source.service, tile: drawnTile(zoom, source.maxzoom) }))
       .filter((source) => painted.includes(source.tile));
     if (sources.length === 0) return [];
-    const anchor = map.project(feature.geometry.coordinates as [number, number]);
-    if (anchor.x < 0 || anchor.y < 0 || anchor.x > viewport.right || anchor.y > viewport.bottom) return [];
     const readable = sources.some((source) => (COUNTRY_RASTER_LEVELS.bounds?.[name]?.[source.tile] ?? []).some((entry) => {
       if (entry.service !== source.service) return false;
       const box = entry.box;
       if (!countryLabelCounts({ width: box[2]! - box[0]!, height: box[3]! - box[1]! })) return false;
-      const start = map.project(mercatorLngLat(box[0]!, box[1]!));
-      const end = map.project(mercatorLngLat(box[2]!, box[3]!));
-      return readableCountryName({ left: start.x, top: start.y, right: end.x, bottom: end.y }, viewport, occlusions);
+      const glyph = entry.ink ?? box;
+      const start = map.project(mercatorLngLat(glyph[0]!, glyph[1]!));
+      const end = map.project(mercatorLngLat(glyph[2]!, glyph[3]!));
+      const screen = { left: start.x, top: start.y, right: end.x, bottom: end.y };
+      const cover = clippedLabelCover(screen, viewport);
+      if (cover) covers.push(cover);
+      return readableCountryName(screen, viewport, occlusions);
     }));
-    return readable ? [] : [name];
+    const anchor = map.project(feature.geometry.coordinates as [number, number]);
+    if (readable || anchor.x < 0 || anchor.y < 0 || anchor.x > viewport.right || anchor.y > viewport.bottom) return [];
+    return [name];
   });
+  return { names, covers };
 }
 
 type InsetFrame = HTMLElement & { __opdTrackInset?: MapLibreMap };
@@ -335,13 +357,27 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
   let fittedWidth = -1;
   let fittedHeight = -1;
   let viewportNames = '';
+  let viewportCovers = '';
+  const labelCovers = document.createElement('div');
+  labelCovers.style.cssText = 'position:absolute;inset:0;pointer-events:none';
+  frame.append(labelCovers);
   const syncCountryLabels = (): void => {
     if (removed || !map.isStyleLoaded() || frame.clientWidth < 2 || frame.clientHeight < 2) return;
-    const names = viewportFallbacks(map, frame);
-    const key = names.join('|');
+    const state = viewportFallbacks(map, frame);
+    const coverKey = state.covers.map((cover) => `${cover.left.toFixed(1)},${cover.top.toFixed(1)},${cover.right.toFixed(1)},${cover.bottom.toFixed(1)}`).join('|');
+    if (coverKey !== viewportCovers) {
+      viewportCovers = coverKey;
+      labelCovers.replaceChildren(...state.covers.map((cover) => {
+        const patch = document.createElement('div');
+        patch.dataset.insetLabelCover = '';
+        patch.style.cssText = `position:absolute;left:${cover.left}px;top:${cover.top}px;width:${cover.right - cover.left}px;height:${cover.bottom - cover.top}px;background:${CLIPPED_LABEL_COVER};pointer-events:none`;
+        return patch;
+      }));
+    }
+    const key = state.names.join('|');
     if (key === viewportNames) return;
     viewportNames = key;
-    map.setFilter('inset-countries-viewport', ['in', ['get', 'name'], ['literal', names]]);
+    map.setFilter('inset-countries-viewport', ['in', ['get', 'name'], ['literal', state.names]]);
   };
   map.on('render', syncCountryLabels);
   let paintedWidth = -1;
@@ -563,6 +599,7 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
       window.removeEventListener('lostpointercapture', onPointerEnd, true);
       window.removeEventListener('blur', onWindowBlur);
       marker.remove();
+      labelCovers.remove();
       map.remove();
       delete insetFrame.__opdTrackInset;
     },

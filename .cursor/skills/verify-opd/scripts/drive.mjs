@@ -3,8 +3,8 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { dirname, resolve } from 'node:path';
 import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
 import { earthAfterResizeReaders } from './earth-after-resize.mjs';
-import { auditRasterLevels, loadCountryRasterLevels, countrySweepZooms, keptCountrySymbol, oneNameSource, PLAN_COUNTRIES, planLabelReaders } from './plan-label-verdict.mjs';
-import { checkRasterOcr, clearRasterOcrRun, countryRasterUrls, rasterWords, rasterOcrStats, readableRasterName } from './raster-ocr.mjs';
+import { auditRasterLevels, auditedNameReadable, clippedRasterRemnant, loadCountryRasterLevels, countrySweepZooms, keptCountrySymbol, oneNameSource, PLAN_COUNTRIES, planLabelReaders } from './plan-label-verdict.mjs';
+import { checkRasterOcr, clearRasterOcrRun, countryRasterUrls, rasterWords, rasterOcrStats, readableRasterName, sovereignScreenBoxes } from './raster-ocr.mjs';
 import { pinFixtureCookie } from './fixture-session.mjs';
 import { BOSTON_NADIR_EPOCH_MS, effectiveNowMs, refreshLaunchClock } from './fixtures.mjs';
 import { freezeFixtureClock, restoreFixtureClock } from './fixture-clock.mjs';
@@ -6844,7 +6844,7 @@ export async function assertOneNameSource(row) {
   if (!centroid) throw new Error(`unknown plan country ${row.country}`);
   const pack = await rasterWords(countryRasterUrls(row.urls || [], centroid));
   const raster = readableRasterName(pack, row, row.country);
-  const verdict = oneNameSource({ ...row, words: pack.text, rasterReadable: raster.readable });
+  const verdict = oneNameSource({ ...row, words: pack.text, rasterReadable: raster.readable || auditedNameReadable(row.country, row.zoom, row.viewport) });
   if (!verdict.ok) throw new Error(`plan label source ${JSON.stringify(verdict)}`);
   return verdict;
 }
@@ -6869,7 +6869,7 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
         country,
         names: fitted.names,
         words: fittedWords.text,
-        rasterReadable: readableRasterName(fittedWords, fitted, country).readable,
+        rasterReadable: readableRasterName(fittedWords, fitted, country).readable || auditedNameReadable(country, fitted.zoom, fitted.viewport),
       });
       if (!verdict.ok) throw new Error(`plan label fitted ${JSON.stringify(verdict)}`);
     }
@@ -6885,7 +6885,7 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
         const centroid = PLAN_COUNTRIES.find(point => point.name === country);
         if (!centroid) throw new Error(`unknown plan country ${country}`);
         const pack = await rasterWords(countryRasterUrls(row.urls, centroid));
-        const verdict = oneNameSource({ ...row, country, words: pack.text, rasterReadable: readableRasterName(pack, row, country).readable });
+        const verdict = oneNameSource({ ...row, country, words: pack.text, rasterReadable: readableRasterName(pack, row, country).readable || auditedNameReadable(country, row.zoom, row.viewport) });
         if (!verdict.ok) throw new Error(`plan label fractional ${JSON.stringify(verdict)}`);
       }
     }
@@ -6926,6 +6926,56 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
       }
       sweepNotes.push(`${country.name}:${swept.rows.length}`);
       console.log(`plan labels sweep ${country.name}:${swept.rows.length} OCR:${rasterOcrStats.calls}`);
+    }
+    const offCentroid = [
+      { country: 'France', center: [-0.33, 46], zooms: [5.5], once: true },
+      { country: 'France', center: [-0.33, 46], zooms: [6.5, 6.51], once: false },
+      { country: 'Australia', center: [134, -25], zooms: [6.5, 6.51], once: true },
+    ];
+    for (const camera of offCentroid) {
+      for (const zoom of camera.zooms) {
+        const row = await evaluate(send, `(async () => {
+          ${PLAN_TILE_HELPERS}
+          const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+          const map = frame && frame.__opdTrackInset;
+          if (!map || typeof map.jumpTo !== 'function') return { ok: false, reason: 'map' };
+          planHold(map);
+          map.jumpTo({ center: [${camera.center[0]}, ${camera.center[1]}], zoom: ${zoom} });
+          const waited = await planWaitTiles(map);
+          const covers = [...frame.querySelectorAll('[data-inset-label-cover]')].map((node) => ({
+            left: parseFloat(node.style.left) || 0,
+            top: parseFloat(node.style.top) || 0,
+            right: (parseFloat(node.style.left) || 0) + (parseFloat(node.style.width) || 0),
+            bottom: (parseFloat(node.style.top) || 0) + (parseFloat(node.style.height) || 0),
+          }));
+          return {
+            ok: true,
+            tilesOk: waited.tilesOk,
+            detail: waited.detail,
+            urls: waited.urls,
+            viewport: planViewport(map),
+            zoom: map.getZoom(),
+            tileZ: waited.tileZ,
+            names: planSymbolNames(map),
+            covers,
+            country: ${JSON.stringify(camera.country)},
+          };
+        })()`);
+        if (!row || row.ok !== true || !row.tilesOk) throw new Error(`plan label off-centroid ${camera.country} ${zoom} ${JSON.stringify(row && row.detail || row)}`);
+        const centroid = PLAN_COUNTRIES.find((point) => point.name === camera.country);
+        const pack = await rasterWords(countryRasterUrls(row.urls || [], centroid));
+        const inkInside = auditedNameReadable(camera.country, row.zoom, row.viewport);
+        const symbols = (row.names || []).filter((name) => name === camera.country).length;
+        if (camera.once && symbols + (inkInside ? 1 : 0) !== 1) {
+          throw new Error(`plan label off-centroid ${JSON.stringify({ country: camera.country, zoom, symbols, inkInside, names: row.names })}`);
+        }
+        if (!inkInside) {
+          const remnant = clippedRasterRemnant(sovereignScreenBoxes(pack, row, camera.country), { width: row.viewport.width, height: row.viewport.height }, row.covers || []);
+          if (!remnant.covered) throw new Error(`plan label remnant ${camera.country} ${zoom} ${JSON.stringify(remnant.open)}`);
+        }
+        sweepNotes.push(`${camera.country}@${zoom}`);
+        console.log(`plan labels off-centroid ${camera.country} ${zoom} OCR:${rasterOcrStats.calls}`);
+      }
     }
     const france = await readPlanLabelZoom(send, 1.2, 2, 46);
     if (!france.tilesOk) throw new Error(`plan label tiles ${JSON.stringify({ zoom: 1.2, detail: france.detail })}`);

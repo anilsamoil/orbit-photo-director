@@ -150,22 +150,35 @@ function sovereignBoxes(mosaic, country) {
   return result;
 }
 
-export function readableRasterName(pack, row, country) {
+export function sovereignScreenBoxes(pack, row, country) {
   if (!row.viewport) throw new Error('raster readability requires composed viewport geometry');
-  const { width, height, origin, occlusions } = row.viewport;
+  const { origin } = row.viewport;
   const zoom = Number(row.zoom);
   const boxes = [];
-  for (const mosaic of pack.mosaics) for (const word of sovereignBoxes(mosaic,country)) {
+  for (const mosaic of pack.mosaics) for (const word of sovereignBoxes(mosaic, country)) {
     const [x1, y1, x2, y2] = word.box;
     const scale = Number.isFinite(zoom) ? (512 * (2 ** zoom)) / (256 * (2 ** mosaic.z)) : row.viewport.scale;
     for (const wrap of row.viewport.worldCopies ? [-1, 0, 1] : [0]) {
       const world = 256 * (2 ** mosaic.z) * wrap;
-      const box = [(x1+world)*scale+origin.x, y1*scale+origin.y, (x2+world)*scale+origin.x, y2*scale+origin.y];
-      if (box[0] < 0 || box[1] < 0 || box[2] > width || box[3] > height) continue;
-      if (Number.isFinite(zoom) && !countryLabelCountsScreen(box, zoom)) continue;
-      if ((occlusions || []).some(rect => box[0] < rect[2] && box[2] > rect[0] && box[1] < rect[3] && box[3] > rect[1])) continue;
-      boxes.push({ service: mosaic.service, text: word.text, box });
+      boxes.push({
+        service: mosaic.service,
+        text: word.text,
+        box: [(x1 + world) * scale + origin.x, y1 * scale + origin.y, (x2 + world) * scale + origin.x, y2 * scale + origin.y],
+      });
     }
   }
+  return boxes;
+}
+
+export function readableRasterName(pack, row, country) {
+  const { width, height, occlusions } = row.viewport;
+  const zoom = Number(row.zoom);
+  const boxes = sovereignScreenBoxes(pack, row, country).filter((word) => {
+    const box = word.box;
+    if (box[0] < 0 || box[1] < 0 || box[2] > width || box[3] > height) return false;
+    if (Number.isFinite(zoom) && !countryLabelCountsScreen(box, zoom)) return false;
+    if ((occlusions || []).some(rect => box[0] < rect[2] && box[2] > rect[0] && box[1] < rect[3] && box[3] > rect[1])) return false;
+    return true;
+  });
   return { readable: boxes.length > 0, boxes };
 }
