@@ -9,7 +9,7 @@ import { readableRasterName } from './raster-ocr.mjs';
 import { letteringOccluded } from '../../../../frontend/src/map/adapters/maplibre/country-label-size.ts';
 import {
   AUDITED_RASTER_LEVELS, auditRasterLevels, countryStyleVerdict, countrySweepZooms,
-  anchorOnPlan, auditedNameCandidates, auditedNameReadable, clippedRasterRemnant, completeNameCount, loadCountryRasterLevels, loadCountrySymbolLayers, nameCountOk, oneNameSource, planLabelReaders, planLabelVerdict, rasterNameEvidence, rasterPainted,
+  anchorOnPlan, auditedNameCandidates, auditedNameReadable, clippedRasterRemnant, completeNameCount, labelTile, loadCountryRasterLevels, loadCountrySymbolLayers, nameCountOk, oneNameSource, planLabelReaders, planLabelVerdict, rasterNameEvidence, rasterPainted, symbolCrossesEdge,
 } from './plan-label-verdict.mjs';
 
 test('an exact sovereign name is not vetoed by an unrelated adjective', () => {
@@ -51,9 +51,9 @@ test('opacity and false Australia-hole mutations fail the real-style guard', () 
   }
 });
 
-test('France at 5.49, 5.5, 6.5, and 8 is proved at the capped label tile', () => {
+test('France at 5.49, 5.5, 6.5, and 8 is proved at the label tile the source draws', () => {
   for (const zoom of [5.49, 5.5, 6.5, 8]) {
-    const tileZ = Math.min(6, Math.max(0, Math.round(zoom + 1)));
+    const tileZ = labelTile(zoom);
     const verdict = oneNameSource({
       tilesOk: true,
       zoom,
@@ -77,7 +77,7 @@ test('Canada at zoom 6.5 does not count a 36 by 8 dark scrap as a second name', 
   const row = {
     tilesOk: true,
     zoom,
-    tileZ: 6,
+    tileZ: labelTile(zoom),
     country: 'Canada',
     names: ['Canada'],
     words: 'CANADA',
@@ -118,17 +118,17 @@ test('Australia at z6.5 on a 492 by 690 plan keeps the painted name when only th
   const evidence = rasterNameEvidence(raster.boxes, auditedNameCandidates('Australia', zoom, viewport));
   assert.equal(evidence, true);
   assert.equal(oneNameSource({
-    tilesOk: true, zoom, tileZ, country: 'Australia', names: [], words: 'AUSTRALIA', rasterReadable: evidence,
+    tilesOk: true, zoom, tileZ: labelTile(zoom), country: 'Australia', names: [], words: 'AUSTRALIA', rasterReadable: evidence,
   }).ok, true);
   const crossed = { ...word, box: [ink[0], ink[1], ink[2] + 20, ink[3]] };
   const clippedPack = { mosaics: [{ z: tileZ, service: 'reference', lines: [[crossed]], words: [crossed] }] };
   assert.equal(readableRasterName(clippedPack, row, 'Australia').readable, false);
   assert.equal(rasterNameEvidence([], auditedNameCandidates('Australia', zoom, viewport)), false);
   assert.equal(oneNameSource({
-    tilesOk: true, zoom, tileZ, country: 'Australia', names: [], words: 'AUSTRALIA', rasterReadable: false,
+    tilesOk: true, zoom, tileZ: labelTile(zoom), country: 'Australia', names: [], words: 'AUSTRALIA', rasterReadable: false,
   }).reason, 'gap');
   assert.equal(oneNameSource({
-    tilesOk: true, zoom, tileZ, country: 'Australia', names: ['Australia'], words: 'AUSTRALIA', rasterReadable: true,
+    tilesOk: true, zoom, tileZ: labelTile(zoom), country: 'Australia', names: ['Australia'], words: 'AUSTRALIA', rasterReadable: true,
   }).reason, 'duplicate');
 });
 
@@ -248,7 +248,7 @@ test('the name sweep includes the off-centroid cameras and rejects a clipped rem
   assert.equal(rasterNameEvidence([{ box: [12, 12, 36, 18] }], [{ box: [10, 10, 40, 20] }], [{ left: 0, top: 0, right: 50, bottom: 30 }]), false);
   assert.doesNotMatch(drive.slice(drive.indexOf('export async function assertOneNameSource'), drive.indexOf('export async function proveFractionalPlanLabels')), /\|\| auditedNameReadable/);
   const border = oneNameSource({
-    tilesOk: true, zoom: 6.5, tileZ: 6, country: 'Nigeria', names: [], rasterReadable: true, rasterCount: 3,
+    tilesOk: true, zoom: 6.5, tileZ: labelTile(6.5), country: 'Nigeria', names: [], rasterReadable: true, rasterCount: 3,
   });
   assert.equal(border.ok, false);
   assert.equal(border.reason, 'duplicate');
@@ -284,7 +284,7 @@ test('the name sweep includes the off-centroid cameras and rejects a clipped rem
   const canadaRow = { zoom: 1.5, viewport: { width: 8000, height: 8000, occlusions: [], origin: { x: 0, y: 0 } } };
   assert.equal(readableRasterName(doubledServices, canadaRow, 'Canada').boxes.length, 1);
   const doubled = oneNameSource({
-    tilesOk: true, zoom: 6.5, tileZ: 6, country: 'Nigeria', names: [], rasterReadable: true, rasterCount: 2,
+    tilesOk: true, zoom: 6.5, tileZ: labelTile(6.5), country: 'Nigeria', names: [], rasterReadable: true, rasterCount: 2,
   });
   assert.equal(doubled.ok, false);
   assert.equal(doubled.reason, 'duplicate');
@@ -302,7 +302,7 @@ test('the name sweep includes the off-centroid cameras and rejects a clipped rem
     { width: 200, height: 200, zoom: 6.5, occlusions: [] },
   ), 1);
   const open = oneNameSource({
-    tilesOk: true, zoom: 5.5, tileZ: 6, country: 'France', names: ['France'], rasterReadable: true,
+    tilesOk: true, zoom: 5.5, tileZ: labelTile(5.5), country: 'France', names: ['France'], rasterReadable: true,
   });
   assert.equal(open.reason, 'duplicate');
   const remnant = clippedRasterRemnant(
@@ -327,7 +327,7 @@ test('plan layout cleanup does not delete devicePixelRatio', () => {
   assert.doesNotMatch(drive, /delete window\.devicePixelRatio/);
 });
 
-test('the plan-inset docs name the level-6 clamp at zoom 5.5', () => {
+test('the plan-inset docs follow the label tile the source draws', () => {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
   const iss = readFileSync(resolve(root, '.cursor/skills/verify-opd/features/iss.md'), 'utf8');
   const skill = readFileSync(resolve(root, '.cursor/skills/verify-opd/SKILL.md'), 'utf8');
@@ -336,8 +336,29 @@ test('the plan-inset docs name the level-6 clamp at zoom 5.5', () => {
   assert.equal(iss.includes(', The fitted orbit'), false);
   assert.match(iss, /view zoom 5\.5/);
   assert.match(skill, /view zoom 5\.5/);
-  assert.match(iss, /tile level 6/);
-  assert.match(skill, /tile level 6/);
+  assert.match(iss, /reference raster maxzoom is 19/);
+  assert.match(skill, /reference raster maxzoom is 19/);
+  assert.doesNotMatch(iss, /reference raster caps at tile level 6/);
+  assert.doesNotMatch(skill, /reference raster caps at tile level 6/);
   assert.match(iss, /min\(round\(zoom \+ 1\), source maxzoom\)/);
   assert.match(skill, /min\(round\(zoom \+ 1\), source maxzoom\)/);
+});
+
+test('glyph ink, not the padded OCR box, meets the shared one-pixel clock rule', () => {
+  const scale = 1.5;
+  const box = [378.5, 8.5, 421.5, 33.5];
+  const viewport = { width: 435, height: 590, zoom: 6.51 };
+  assert.equal(completeNameCount([{ box, scale }], { ...viewport, occlusions: [[419.2, 0, 435, 90]] }), 1);
+  assert.equal(completeNameCount([{ box, scale }], { ...viewport, occlusions: [[410, 0, 435, 90]] }), 0);
+  assert.equal(nameCountOk(0, true).ok, false);
+  assert.equal(nameCountOk(1, true, { peek: true }).reason, 'peek');
+  assert.equal(nameCountOk(1, true, { clipped: true }).reason, 'clipped');
+  assert.equal(nameCountOk(1, true, { maskCut: true }).reason, 'mask');
+  assert.equal(symbolCrossesEdge({ left: -4, top: 10, right: 40, bottom: 26 }, 274, 984), true);
+  assert.equal(symbolCrossesEdge({ left: 8, top: 10, right: 60, bottom: 26 }, 274, 984), false);
+  const drive = readFileSync(new URL('./drive.mjs', import.meta.url), 'utf8');
+  const off = drive.slice(drive.indexOf('const offCentroid'), drive.indexOf('const france = await readPlanLabelZoom'));
+  assert.match(off, /clippedRasterRemnant\(/);
+  assert.match(off, /symbolCrossesEdge\(/);
+  assert.match(off, /peekingGlyphInk\(/);
 });

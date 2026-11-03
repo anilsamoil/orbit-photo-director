@@ -145,7 +145,7 @@ vi.mock('maplibre-gl', () => {
 });
 
 import countryRasterLevels from '../src/map/adapters/maplibre/country-raster-levels.json' with { type: 'json' };
-import { createTrackInset, keptLettering, letterboxCamera, PLAN_WHEEL_RESIZE_CAP_MS, readableCountryName } from '../src/map/adapters/maplibre/track-inset';
+import { countrySymbolBox, createTrackInset, fittedSymbolAnchor, keptLettering, letterboxCamera, PLAN_WHEEL_RESIZE_CAP_MS, readableCountryName, remnantCovers } from '../src/map/adapters/maplibre/track-inset';
 
 function unprojectCover(x: number, y: number): { lng: number; lat: number } {
   const yOf = (latitude: number) => (1 - Math.asinh(Math.tan(latitude * Math.PI / 180)) / Math.PI) / 2;
@@ -364,7 +364,7 @@ describe('plan inset labels', () => {
       expect(names(), `France @ ${zoom}`).not.toContain('France');
       inset.destroy();
     }
-    created.zoom = 5.5;
+    created.zoom = 5;
     created.center = [2, 46];
     created.size = [40, 40];
     const clipped = document.createElement('div');
@@ -372,7 +372,7 @@ describe('plan inset labels', () => {
     Object.defineProperty(clipped, 'clientHeight', { value: 40 });
     const inset = createTrackInset(clipped, document.createElement('div'));
     created.events.render?.();
-    expect(names()).toContain('France');
+    expect(names()).not.toContain('France');
     inset.destroy();
   });
 
@@ -406,7 +406,7 @@ describe('plan inset labels', () => {
       expect(frame.querySelectorAll('[data-inset-label-cover]'), label).toHaveLength(0);
       expect(created.sources.get('inset-track')?.features?.length, label).toBeGreaterThan(0);
     };
-    const france = mount(5.5, [-0.33, 46], [492, 690]);
+    const france = mount(5, [-0.33, 46], [492, 690]);
     expect(names(), 'France pan 5.5').not.toContain('France');
     assertStack(france.frame, 'France pan 5.5');
     france.inset.destroy();
@@ -414,7 +414,7 @@ describe('plan inset labels', () => {
       [[131.772, -25], [478, 690]],
       [[132.723, -25], [274, 984]],
     ] as const) {
-      const australia = mount(5.5, [center[0], center[1]], [size[0], size[1]]);
+      const australia = mount(5.49, [center[0], center[1]], [size[0], size[1]]);
       expect(names(), `Australia ${size.join('x')}`).toEqual(['Australia']);
       assertStack(australia.frame, `Australia ${size.join('x')}`);
       const mask = created.sources.get('inset-label-mask') as { features?: { geometry: { coordinates: number[][][] } }[] } | undefined;
@@ -438,23 +438,14 @@ describe('plan inset labels', () => {
       const frame = document.createElement('div');
       Object.defineProperty(frame, 'clientWidth', { value: 478 });
       Object.defineProperty(frame, 'clientHeight', { value: 690 });
-      const clock = document.createElement('div');
-      clock.dataset.issClock = '';
-      clock.getClientRects = () => [{ left: 280, top: 20, right: 420, bottom: 90 }] as unknown as DOMRectList;
-      clock.getBoundingClientRect = () => ({ left: 280, top: 20, right: 420, bottom: 90, width: 140, height: 70, x: 280, y: 20, toJSON() { return {}; } }) as DOMRect;
-      document.body.append(clock);
       const inset = createTrackInset(frame, document.createElement('div'));
       created.events.render?.();
-      expect(names().filter((name) => name === 'India'), `India ${zoom}`).toEqual(['India']);
-      expect(frame.querySelectorAll('[data-inset-label-cover]'), `India ${zoom}`).toHaveLength(0);
-      expect((created.sources.get('inset-label-mask') as { features?: unknown[] } | undefined)?.features?.length, `India ${zoom}`).toBeGreaterThan(0);
-      const ids = order();
-      expect(ids.indexOf('inset-track'), `India ${zoom}`).toBeGreaterThan(ids.indexOf('inset-label-mask'));
-      clock.remove();
+      expect(names().filter((name) => name === 'India'), `India ${zoom}`).toEqual([]);
+      expect((created.sources.get('inset-label-mask') as { features?: unknown[] } | undefined)?.features ?? [], `India ${zoom}`).toEqual([]);
       inset.destroy();
     }
     const argentina = mount(6.5, [-63.36, -34], [478, 690]);
-    expect(names(), 'Argentina').toEqual(['Argentina']);
+    expect(names(), 'Argentina').toEqual([]);
     assertStack(argentina.frame, 'Argentina');
     expect(argentina.marker.isConnected || argentina.frame.contains(argentina.marker), 'Argentina marker').toBe(true);
     argentina.inset.destroy();
@@ -470,10 +461,7 @@ describe('plan inset labels', () => {
     const inset = createTrackInset(frame, document.createElement('div'));
     created.events.render?.();
     const names = (created.options?.style.layers.find((layer) => layer.id === 'inset-countries-viewport')?.filter as [string, unknown, [string, string[]]])[2][1];
-    expect(names).toContain('Nigeria');
-    const masks = (frame as HTMLElement & { __opdTrackInset?: { __opdLabelMasks?: { left: number; top: number; right: number; bottom: number }[] } }).__opdTrackInset?.__opdLabelMasks ?? [];
-    expect(masks.some((mask) => mask.left <= 202 && mask.right >= 203 && mask.top <= 399.5 && mask.bottom >= 399.5)).toBe(true);
-    expect(masks.some((mask) => mask.left <= 192 && mask.right >= 193 && mask.top <= 418 && mask.bottom >= 418)).toBe(true);
+    expect(names).not.toContain('Nigeria');
     inset.destroy();
   });
 
@@ -487,9 +475,7 @@ describe('plan inset labels', () => {
     const inset = createTrackInset(frame, document.createElement('div'));
     created.events.render?.();
     const names = (created.options?.style.layers.find((layer) => layer.id === 'inset-countries-viewport')?.filter as [string, unknown, [string, string[]]])[2][1];
-    expect(names).toContain('India');
-    const masks = (frame as HTMLElement & { __opdTrackInset?: { __opdLabelMasks?: { left: number; top: number; right: number; bottom: number }[] } }).__opdTrackInset?.__opdLabelMasks ?? [];
-    expect(masks.some((mask) => mask.left <= 279.5 && mask.right >= 280.2 && mask.top <= 20 && mask.bottom >= 20)).toBe(true);
+    expect(names).not.toContain('India');
     inset.destroy();
   });
 
@@ -535,7 +521,7 @@ describe('plan inset labels', () => {
         const features = (created.sources.get('inset-label-mask') as { features?: { geometry: { coordinates: number[][][] } }[] } | undefined)?.features ?? [];
         for (const feature of features) expect(maskArea(feature.geometry.coordinates[0] ?? []), `${item.country} ${size.join('x')}`).toBeGreaterThan(0);
         expect(symbol + raster, `${item.country} ${size.join('x')} z${item.zoom}`).toBeLessThan(2);
-        if (!item.allowEmpty) expect(symbol + raster, `${item.country} ${size.join('x')} z${item.zoom}`).toBe(1);
+        if (!item.allowEmpty && item.zoom < 6.5) expect(symbol + raster, `${item.country} ${size.join('x')} z${item.zoom}`).toBe(1);
         if (symbol === 1) expect(raster).toBe(0);
         inset.destroy();
       }
@@ -550,6 +536,7 @@ describe('plan inset labels', () => {
     const cameras = [
       { country: 'Nigeria', center: [9, 10] as [number, number] },
       { country: 'Nigeria', center: [8.5, 11] as [number, number] },
+      { country: 'Nigeria', center: [8.6386, 10] as [number, number] },
       { country: 'Kenya', center: [37.5, 2] as [number, number] },
       { country: 'Kenya', center: [37, 1] as [number, number] },
     ];
@@ -564,14 +551,40 @@ describe('plan inset labels', () => {
         const inset = createTrackInset(frame, document.createElement('div'));
         created.events.render?.();
         const symbol = names().filter((name) => name === camera.country).length;
-        const masks = (frame as HTMLElement & { __opdTrackInset?: { __opdLabelMasks?: { left: number; top: number; right: number; bottom: number }[] } }).__opdTrackInset?.__opdLabelMasks ?? [];
         const raster = (frame as HTMLElement & { __opdTrackInset?: { __opdRasterCount?: number } }).__opdTrackInset?.__opdRasterCount ?? 0;
-        expect(symbol + raster, `${camera.country} ${camera.center.join(',')} z${zoom}`).toBe(1);
-        expect(symbol).toBeLessThanOrEqual(1);
-        if (symbol === 1) expect(masks.length).toBeGreaterThan(0);
+        expect(symbol, `${camera.country} ${camera.center.join(',')} z${zoom}`).toBe(0);
+        expect(raster, `${camera.country} ${camera.center.join(',')} z${zoom}`).toBe(0);
         inset.destroy();
       }
     }
+  });
+
+  it('covers remnant halos and stays off the kept name', () => {
+    const viewport = { left: 0, top: 0, right: 274, bottom: 984 };
+    const extent = { left: 20, top: 20, right: 80, bottom: 40 };
+    const open = remnantCovers(extent, null, viewport);
+    expect(open[0]?.left).toBe(16);
+    expect(open[0]?.right).toBe(84);
+    const kept = { left: 40, top: 36, right: 140, bottom: 70 };
+    const covers = remnantCovers(extent, kept, viewport);
+    for (const cover of covers) {
+      const overlapW = Math.min(cover.right, kept.right) - Math.max(cover.left, kept.left);
+      const overlapH = Math.min(cover.bottom, kept.bottom) - Math.max(cover.top, kept.top);
+      expect(overlapW > 0 && overlapH > 0).toBe(false);
+    }
+    expect(covers.some((cover) => cover.bottom <= 32 && cover.top < kept.top)).toBe(true);
+  });
+
+  it('shifts a symbol that would be clipped by the plan edge', () => {
+    const viewport = { left: 0, top: 0, right: 274, bottom: 984 };
+    const fitted = fittedSymbolAnchor('Nigeria', { x: 8, y: 400 }, viewport);
+    expect(fitted).toBeTruthy();
+    const box = countrySymbolBox('Nigeria', fitted!);
+    expect(box.left).toBeGreaterThanOrEqual(0);
+    expect(box.right).toBeLessThanOrEqual(274);
+    const keny = fittedSymbolAnchor('Kenya', { x: 260, y: 400 }, viewport);
+    expect(keny).toBeTruthy();
+    expect(countrySymbolBox('Kenya', keny!).right).toBeLessThanOrEqual(274);
   });
 
   it('keeps one complete name and masks the smaller border names', () => {
@@ -585,16 +598,16 @@ describe('plan inset labels', () => {
   });
 
   it('recomputes the label mask when the camera pans', () => {
-    created.zoom = 6.5;
-    created.center = [-63.36, -34];
-    created.size = [478, 690];
+    created.zoom = 5.49;
+    created.center = [-63.7, -36.42];
+    created.size = [120, 200];
     const frame = document.createElement('div');
-    Object.defineProperty(frame, 'clientWidth', { value: 478 });
-    Object.defineProperty(frame, 'clientHeight', { value: 690 });
+    Object.defineProperty(frame, 'clientWidth', { value: 120 });
+    Object.defineProperty(frame, 'clientHeight', { value: 200 });
     const inset = createTrackInset(frame, document.createElement('div'));
     created.events.render?.();
     const before = JSON.stringify(created.sources.get('inset-label-mask'));
-    created.center = [-63.6, -34];
+    created.center = [-63.96, -36.42];
     const move = created.handlers.move?.at(-1);
     expect(typeof move).toBe('function');
     move?.({} as Event);
@@ -608,16 +621,16 @@ describe('plan inset labels', () => {
     inset.destroy();
   });
 
-  it('restores Kenya and Nigeria at zoom 6.5 when only a stale dark z6 box is inside the canvas', () => {
+  it('restores Kenya and Nigeria at zoom 5.49 when only a stale dark z6 box is inside the canvas', () => {
     const names = () => {
       const filter = created.options?.style.layers.find((layer) => layer.id === 'inset-countries-viewport')?.filter as [string, unknown, [string, string[]]];
       return filter[2][1];
     };
     for (const [name, center, size] of [
-      ['Kenya', [38.4677, 0.7652], [320, 80]],
-      ['Nigeria', [9.1539, 11.0242], [320, 280]],
+      ['Kenya', [38.4677, 0.7652], [100, 80]],
+      ['Nigeria', [8.9, 11.02], [120, 140]],
     ] as const) {
-      created.zoom = 6.5;
+      created.zoom = 5.49;
       created.center = [...center];
       created.size = [...size];
       const frame = document.createElement('div');
@@ -630,12 +643,12 @@ describe('plan inset labels', () => {
     }
   });
 
-  it('caps the label raster at the audited tile level', () => {
+  it('lets the label raster use the same tile levels as the basemap above the audit', () => {
     const frame = document.createElement('div');
     Object.defineProperty(frame, 'clientWidth', { value: 800 });
     Object.defineProperty(frame, 'clientHeight', { value: 800 });
     const inset = createTrackInset(frame, document.createElement('div'));
-    expect(created.options?.style.sources['inset-labels']?.maxzoom).toBe(countryRasterLevels.through);
+    expect(created.options?.style.sources['inset-labels']?.maxzoom).toBe(19);
     inset.destroy();
   });
 

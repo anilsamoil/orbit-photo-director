@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { countryLabelCountsScreen } from '../../../../frontend/src/map/adapters/maplibre/country-label-size.ts';
+import { countryLabelCountsScreen, letteringOccluded } from '../../../../frontend/src/map/adapters/maplibre/country-label-size.ts';
 import vm from 'node:vm';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -161,8 +161,15 @@ export function countryStyleVerdict(layers, levels = loadCountryRasterLevels()) 
   return { ok: true };
 }
 
+/** The plan label source uses main's tile cap, not the audit cap. Overzooming z6 turns border lettering into a second name. */
+export const LABEL_SOURCE_MAX_ZOOM = 19;
+
+export function labelTile(zoom) {
+  return Math.min(LABEL_SOURCE_MAX_ZOOM, Math.max(0, Math.round(Number(zoom) + 1)));
+}
+
 function idealTile(zoom) {
-  return Math.min(AUDITED_RASTER_LEVELS.through, Math.max(0, Math.round(Number(zoom) + 1)));
+  return labelTile(zoom);
 }
 
 function levelPaints(levels, country, tileZoom) {
@@ -300,8 +307,21 @@ export function anchorOnPlan(anchor, center, zoom, width, height) {
   return { x, y, inside: x >= 0 && y >= 0 && x <= width && y <= height };
 }
 
-/** One name, or none when the anchor is off the plan. Two or more is always a duplicate. */
-export function nameCountOk(total, anchorInside) {
+/** A rendered symbol box that leaves the plan is a clipped word, not a complete name. */
+export function symbolCrossesEdge(box, width, height) {
+  if (!box) return false;
+  const left = box.left ?? box[0];
+  const top = box.top ?? box[1];
+  const right = box.right ?? box[2];
+  const bottom = box.bottom ?? box[3];
+  return left < -0.5 || top < -0.5 || right > width + 0.5 || bottom > height + 0.5;
+}
+
+/** One name, or none when the anchor is off the plan. Peeking ink, a clipped symbol, or a mask across a kept name fails even when the count is one. */
+export function nameCountOk(total, anchorInside, pixels) {
+  if (pixels && (pixels.peek || pixels.openRemnant)) return { ok: false, reason: 'peek', total };
+  if (pixels && pixels.clipped) return { ok: false, reason: 'clipped', total };
+  if (pixels && pixels.maskCut) return { ok: false, reason: 'mask', total };
   if (total >= 2) return { ok: false, reason: 'duplicate', total };
   if (total === 0) return { ok: !anchorInside, reason: anchorInside ? 'gap' : 'offscreen', total };
   return { ok: true, total };
@@ -315,10 +335,13 @@ export function completeNameCount(screenBoxes, viewport, masks = []) {
   const overlaps = (box, mask) => box[0] < mask.right && box[2] > mask.left && box[1] < mask.bottom && box[3] > mask.top;
   return (screenBoxes || []).filter((item) => {
     const box = item.box || item;
-    if (!(box[0] >= 0 && box[1] >= 0 && box[2] <= width && box[3] <= height)) return false;
-    if (Number.isFinite(zoom) && !countryLabelCountsScreen(box, zoom)) return false;
-    if ((viewport.occlusions || []).some((rect) => box[0] < rect[2] && box[2] > rect[0] && box[1] < rect[3] && box[3] > rect[1])) return false;
-    return !(masks || []).some((mask) => overlaps(box, mask));
+    const pad = Number.isFinite(item.scale) && item.scale > 0 ? item.scale : 0;
+    const ink = [box[0] + pad, box[1] + pad, box[2] - pad, box[3] - pad];
+    if (!(ink[2] > ink[0] && ink[3] > ink[1])) return false;
+    if (!(ink[0] >= 0 && ink[1] >= 0 && ink[2] <= width && ink[3] <= height)) return false;
+    if (Number.isFinite(zoom) && !countryLabelCountsScreen(ink, zoom)) return false;
+    if (letteringOccluded(ink, viewport.occlusions || [])) return false;
+    return !(masks || []).some((mask) => overlaps(ink, mask));
   }).length;
 }
 
