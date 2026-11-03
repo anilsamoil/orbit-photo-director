@@ -194,13 +194,17 @@ export function readableCountryName(box: ScreenBox, viewport: ScreenBox, occlusi
       && box.top < cover.bottom && box.bottom > cover.top);
 }
 
-function clippedLabelCover(box: ScreenBox, viewport: ScreenBox): ScreenBox | null {
+function suppressedLettering(box: ScreenBox, viewport: ScreenBox, occlusions: readonly ScreenBox[]): ScreenBox | null {
   const left = Math.max(box.left, viewport.left);
   const top = Math.max(box.top, viewport.top);
   const right = Math.min(box.right, viewport.right);
   const bottom = Math.min(box.bottom, viewport.bottom);
+  if (right - left < 1 || bottom - top < 1) return null;
   const overflow = Math.max(viewport.left - box.left, viewport.top - box.top, box.right - viewport.right, box.bottom - viewport.bottom);
-  if (overflow <= RASTER_INK_EDGE_PX || right - left < 1 || bottom - top < 1) return null;
+  const clipped = overflow > RASTER_INK_EDGE_PX;
+  const occluded = occlusions.some((cover) => box.left < cover.right && box.right > cover.left
+    && box.top < cover.bottom && box.bottom > cover.top);
+  if (!clipped && !occluded) return null;
   return { left, top, right, bottom };
 }
 
@@ -244,7 +248,7 @@ function viewportFallbacks(map: MapLibreMap, frame: HTMLElement): { names: strin
       const start = map.project(mercatorLngLat(glyph[0]!, glyph[1]!));
       const end = map.project(mercatorLngLat(glyph[2]!, glyph[3]!));
       const screen = { left: start.x, top: start.y, right: end.x, bottom: end.y };
-      const cover = clippedLabelCover(screen, viewport);
+      const cover = suppressedLettering(screen, viewport, occlusions);
       if (cover) covers.push(cover);
       return readableCountryName(screen, viewport, occlusions);
     }));

@@ -6934,6 +6934,7 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
       { country: 'Australia', center: [131.772, -25], zooms: [5.5], once: true },
       { country: 'Australia', center: [132.723, -25], zooms: [5.5], once: true },
       { country: 'Argentina', center: [-63.36, -34], zooms: [6.5], once: true },
+      { country: 'India', center: [79, 22], zooms: [6.5, 6.51], once: true },
     ];
     for (const camera of offCentroid) {
       for (const zoom of camera.zooms) {

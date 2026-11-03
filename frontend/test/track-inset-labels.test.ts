@@ -401,6 +401,29 @@ describe('plan inset labels', () => {
       expect((created.sources.get('inset-label-mask') as { features?: unknown[] } | undefined)?.features?.length, `Australia ${size.join('x')}`).toBeGreaterThan(0);
       australia.inset.destroy();
     }
+    for (const zoom of [6.5, 6.51] as const) {
+      created.sources.delete('inset-label-mask');
+      created.zoom = zoom;
+      created.center = [79, 22];
+      created.size = [478, 690];
+      const frame = document.createElement('div');
+      Object.defineProperty(frame, 'clientWidth', { value: 478 });
+      Object.defineProperty(frame, 'clientHeight', { value: 690 });
+      const clock = document.createElement('div');
+      clock.dataset.issClock = '';
+      clock.getClientRects = () => [{ left: 280, top: 20, right: 420, bottom: 90 }] as unknown as DOMRectList;
+      clock.getBoundingClientRect = () => ({ left: 280, top: 20, right: 420, bottom: 90, width: 140, height: 70, x: 280, y: 20, toJSON() { return {}; } }) as DOMRect;
+      document.body.append(clock);
+      const inset = createTrackInset(frame, document.createElement('div'));
+      created.events.render?.();
+      expect(names().filter((name) => name === 'India'), `India ${zoom}`).toEqual(['India']);
+      expect(frame.querySelectorAll('[data-inset-label-cover]'), `India ${zoom}`).toHaveLength(0);
+      expect((created.sources.get('inset-label-mask') as { features?: unknown[] } | undefined)?.features?.length, `India ${zoom}`).toBeGreaterThan(0);
+      const ids = order();
+      expect(ids.indexOf('inset-track'), `India ${zoom}`).toBeGreaterThan(ids.indexOf('inset-label-mask'));
+      clock.remove();
+      inset.destroy();
+    }
     const argentina = mount(6.5, [-63.36, -34], [478, 690]);
     expect(names(), 'Argentina').toEqual(['Argentina']);
     assertStack(argentina.frame, 'Argentina');

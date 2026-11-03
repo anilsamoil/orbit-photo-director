@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { dirname, resolve } from 'node:path';
@@ -198,6 +199,11 @@ test('the name sweep includes the off-centroid cameras and rejects a clipped rem
   assert.match(sweep, /131\.772,\s*-25/);
   assert.match(sweep, /132\.723,\s*-25/);
   assert.match(sweep, /-63\.36,\s*-34/);
+  assert.match(sweep, /country: 'India'/);
+  assert.match(sweep, /\[\s*79,\s*22\s*\]/);
+  const mainInset = execFileSync('git', ['show', 'origin/main:frontend/src/map/adapters/maplibre/track-inset.ts'], { encoding: 'utf8' });
+  assert.match(mainInset, /nameLayer\('inset-countries', 'inset-countries', undefined, PLAN_RASTER_NAME_ZOOM\)/);
+  assert.doesNotMatch(mainInset, /inset-countries-viewport/);
   assert.match(sweep, /inset-label-mask/);
   assert.doesNotMatch(sweep, /data-inset-label-cover/);
   assert.equal(rasterNameEvidence([], [{ box: [10, 10, 40, 20] }]), false);
