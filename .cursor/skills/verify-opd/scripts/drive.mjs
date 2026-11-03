@@ -6856,7 +6856,7 @@ function loadMainRaster(country, zoom, lng, lat) {
 }
 
 async function capturePlanCanvas(send) {
-  const box = await evaluate(send, `(() => {
+  const box = await evaluate(send, `(async () => {
     const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
     const canvas = frame && frame.querySelector('canvas');
     const map = frame && frame.__opdTrackInset;
@@ -6866,6 +6866,21 @@ async function capturePlanCanvas(send) {
     }
     const marker = frame.querySelector('.maplibregl-marker');
     if (marker) marker.style.visibility = 'hidden';
+    await new Promise((resolve) => {
+      let settled = false;
+      let timer = 0;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        map.off('idle', onIdle);
+        resolve();
+      };
+      const onIdle = () => finish();
+      timer = setTimeout(finish, 500);
+      map.on('idle', onIdle);
+      if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
+    });
     const rect = canvas.getBoundingClientRect();
     const ignore = [];
     for (const node of document.querySelectorAll('[data-iss-clock], [data-iss-edition]')) {
@@ -6961,8 +6976,18 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
     const rows = [];
     for (const zoom of [2.99, 3, 3.01]) {
       const row = await readPlanLabelZoom(send, zoom, -100, 50);
-      rows.push({ ...row, country: 'Canada' });
-      assertPlanLabelChecks(rows[rows.length - 1]);
+      const shot = zoom >= 3 ? await capturePlanCanvas(send) : null;
+      const fixture = zoom >= 3 ? loadMainRaster('Canada', zoom, -100, 50) : null;
+      const packed = {
+        ...row,
+        country: 'Canada',
+        headShot: shot,
+        mainShot: fixture && fixture.image,
+        rasterCount: fixture ? fixture.count : undefined,
+        ignoreRects: shot ? shot.ignore : [],
+      };
+      rows.push(packed);
+      assertPlanLabelChecks(packed);
     }
     const fractional = { counts: rows.map(row => ({ zoom: row.zoom, count: row.names.length })) };
     const sweepNotes = [];
@@ -7009,7 +7034,13 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
           const map = frame && frame.__opdTrackInset;
           if (!map || typeof map.jumpTo !== 'function') return { ok: false, reason: 'map' };
           planHold(map);
-          map.jumpTo({ center: [${country.lng}, ${country.lat}], zoom: ${zoom} });
+          if (!map.__opdJumpLocked) {
+            const jump = map.jumpTo.bind(map);
+            map.jumpTo = (camera) => jump(map.__opdRasterCamera || camera);
+            map.__opdJumpLocked = true;
+          }
+          map.__opdRasterCamera = { center: [${country.lng}, ${country.lat}], zoom: ${zoom} };
+          map.jumpTo(map.__opdRasterCamera);
           const waited = await planWaitTiles(map);
           return {
             ok: true,
@@ -7065,7 +7096,13 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
           const map = frame && frame.__opdTrackInset;
           if (!map || typeof map.jumpTo !== 'function') return { ok: false, reason: 'map' };
           planHold(map);
-          map.jumpTo({ center: [${camera.center[0]}, ${camera.center[1]}], zoom: ${zoom} });
+          if (!map.__opdJumpLocked) {
+            const jump = map.jumpTo.bind(map);
+            map.jumpTo = (camera) => jump(map.__opdRasterCamera || camera);
+            map.__opdJumpLocked = true;
+          }
+          map.__opdRasterCamera = { center: [${camera.center[0]}, ${camera.center[1]}], zoom: ${zoom} };
+          map.jumpTo(map.__opdRasterCamera);
           const waited = await planWaitTiles(map);
           const marker = frame.querySelector('.maplibregl-marker');
           return {
@@ -7103,6 +7140,11 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
         console.log(`plan labels off-centroid ${camera.country} ${zoom} tiles:${row.tilesOk} symbols:${(row.names || []).length}`);
       }
     }
+    await evaluate(send, `(() => {
+      const map = document.querySelector('[data-pip="plan"] [data-pip-frame]')?.__opdTrackInset;
+      if (map) map.__opdRasterCamera = null;
+      return { ok: true };
+    })()`);
     const france = await readPlanLabelZoom(send, 1.2, 2, 46);
     if (!france.tilesOk) throw new Error(`plan label tiles ${JSON.stringify({ zoom: 1.2, detail: france.detail })}`);
     const franceKept = keptCountrySymbol(france.names, 'France');

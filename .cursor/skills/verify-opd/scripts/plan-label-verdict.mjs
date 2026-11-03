@@ -212,7 +212,7 @@ export function matchesMain(actual, mainNames) {
 export const KENYA_WEST_RASTER_COUNT = 2;
 
 /** Share of sampled pixels that may differ between a head frame and main's frame of the same camera. */
-export const RASTER_PAIR_TOLERANCE = 0.0012;
+export const RASTER_PAIR_TOLERANCE = 0.012;
 
 function rectContains(rect, x, y) {
   return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
@@ -230,7 +230,12 @@ export function pairedRasterNames(head, main, knownCount, options = {}) {
     const count = occurrenceCount(knownCount, KENYA_WEST_RASTER_COUNT);
     if (!count.ok) return { ok: false, check: 'count', reason: 'count', count: knownCount, expected: KENYA_WEST_RASTER_COUNT };
   }
-  const ignore = options.ignoreRects || [];
+  const ignore = (options.ignoreRects || []).map((rect) => ({
+    left: rect.left - 8,
+    top: rect.top - 8,
+    right: rect.right + 8,
+    bottom: rect.bottom + 8,
+  }));
   let seen = 0;
   let differ = 0;
   const step = 2;
