@@ -4882,8 +4882,29 @@ async function provePlanWheelSurvivesRebuild(send) {
   return after.zoom;
 }
 
+export function planRasterSymbolActive(layer, zoom) {
+  const min = layer.minzoom == null ? 0 : layer.minzoom;
+  const max = layer.maxzoom == null ? 24 : layer.maxzoom;
+  if (!(zoom >= min && zoom < max)) return false;
+  if (layer.layout && layer.layout.visibility === 'none') return false;
+  const opacity = layer.paint && layer.paint['text-opacity'];
+  if (opacity === 0) return false;
+  if (Array.isArray(opacity) && opacity[0] === 'step') {
+    let value = opacity[2];
+    for (let index = 3; index + 1 < opacity.length; index += 2) {
+      if (zoom >= opacity[index]) value = opacity[index + 1];
+    }
+    if (value === 0) return false;
+  }
+  const filter = layer.filter;
+  const names = filter && filter[2] && filter[2][1];
+  if (Array.isArray(names) && names.length === 0) return false;
+  return true;
+}
+
 async function provePlanRasterNames(send) {
   const laid = await evaluate(send, `(async () => {
+    const planRasterSymbolActive = ${planRasterSymbolActive.toString()};
     const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
     const canvas = frame?.querySelector('canvas');
     const orbit = frame?.__opdTrackInset;
@@ -4906,11 +4927,7 @@ async function provePlanRasterNames(send) {
           resolve();
         });
       });
-      const active = symbolLayers.filter((layer) => {
-        const min = layer.minzoom == null ? 0 : layer.minzoom;
-        const max = layer.maxzoom == null ? 24 : layer.maxzoom;
-        return zoom >= min && zoom < max;
-      }).map((layer) => layer.id);
+      const active = symbolLayers.filter((layer) => planRasterSymbolActive(layer, zoom)).map((layer) => layer.id);
       let features = [];
       try {
         features = symbolIds.length ? orbit.queryRenderedFeatures(undefined, { layers: symbolIds }) : [];
