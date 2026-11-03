@@ -161,7 +161,7 @@ export function countryStyleVerdict(layers, levels = loadCountryRasterLevels()) 
 }
 
 function idealTile(zoom) {
-  return Math.max(0, Math.round(Number(zoom) + 1));
+  return Math.min(AUDITED_RASTER_LEVELS.through, Math.max(0, Math.round(Number(zoom) + 1)));
 }
 
 function levelPaints(levels, country, tileZoom) {

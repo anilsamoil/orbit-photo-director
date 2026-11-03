@@ -6511,10 +6511,15 @@ async function proveFullscreenTelemetry(send) {
 }
 
 export const PLAN_TILE_HELPERS = `
+function planSourceZoom(map, sourceId) {
+  const spec = map.getStyle() && map.getStyle().sources && map.getStyle().sources[sourceId];
+  const cap = spec && Number.isFinite(Number(spec.maxzoom)) ? Number(spec.maxzoom) : Infinity;
+  return Math.min(cap, Math.max(0, Math.round(map.getZoom() + 1)));
+}
 function planViewport(map) {
   const canvas = map.getCanvas();
   const rect = canvas.getBoundingClientRect();
-  const n = 2 ** planIdealZoom(map);
+  const n = 2 ** planSourceZoom(map, 'inset-labels');
   const origin = map.project([-180, 85.0511287798066]);
   const scale = 512 * (2 ** map.getZoom()) / (256 * n);
   const occlusions = [];
@@ -6537,9 +6542,6 @@ function planHold(map) {
   map.fitBounds = () => map;
   map.resize = () => map;
 }
-function planIdealZoom(map) {
-  return Math.max(0, Math.round(map.getZoom() + 1));
-}
 function planCenterTile(map, z) {
   const center = map.getCenter();
   const n = 2 ** z;
@@ -6551,7 +6553,7 @@ function planCenterTile(map, z) {
 }
 function planVisibleTiles(map, sourceId) {
   const manager = map.style && map.style.tileManagers && map.style.tileManagers[sourceId];
-  const z = planIdealZoom(map);
+  const z = planSourceZoom(map, sourceId);
   const center = planCenterTile(map, z);
   if (!manager || typeof manager.getVisibleCoordinates !== 'function') {
     return { z, tiles: [], center, state: 'manager' };

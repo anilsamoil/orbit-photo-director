@@ -45,6 +45,8 @@ const INSET_FIT_MAX_ZOOM = 5;
 /** Caps a pinch or a wheel. Past this the dark basemap is only pixels. */
 const INSET_MAX_ZOOM = 8;
 
+const INSET_BASEMAP_MAX_ZOOM = 20;
+
 const INSET_GLYPHS = '/glyphs/{fontstack}/{range}.pbf';
 const INSET_GLYPH_RANGE = '/glyphs/Open%20Sans%20Regular/0-255.pbf';
 
@@ -189,9 +191,17 @@ function mercatorLngLat(x: number, y: number): [number, number] {
   return [x * 360 - 180, Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180 / Math.PI];
 }
 
+const RASTER_SOURCES = [
+  { service: 'reference', maxzoom: COUNTRY_RASTER_LEVELS.through },
+  { service: 'dark', maxzoom: INSET_BASEMAP_MAX_ZOOM },
+] as const;
+
+function drawnTile(zoom: number, maxzoom: number): number {
+  return Math.min(maxzoom, Math.max(0, Math.round(zoom + 1)));
+}
+
 function viewportFallbacks(map: MapLibreMap, frame: HTMLElement): string[] {
   const zoom = map.getZoom();
-  const tile = Math.min(COUNTRY_RASTER_LEVELS.through, Math.max(0, Math.round(zoom + 1)));
   const frameBox = frame.getBoundingClientRect();
   const viewport = { left: 0, top: 0, right: frame.clientWidth, bottom: frame.clientHeight };
   const occlusions = Array.from(frame.ownerDocument.querySelectorAll('[data-iss-clock], [data-iss-edition], [data-iss-split-chrome]'))
@@ -204,14 +214,19 @@ function viewportFallbacks(map: MapLibreMap, frame: HTMLElement): string[] {
     if (feature.geometry.type !== 'Point') return [];
     const name = String(feature.properties?.name);
     const painted = COUNTRY_RASTER_LEVELS.countries[name] ?? [];
-    if (!painted.includes(tile)) return [];
+    const sources = RASTER_SOURCES
+      .map((source) => ({ service: source.service, tile: drawnTile(zoom, source.maxzoom) }))
+      .filter((source) => painted.includes(source.tile));
+    if (sources.length === 0) return [];
     const anchor = map.project(feature.geometry.coordinates as [number, number]);
     if (anchor.x < 0 || anchor.y < 0 || anchor.x > viewport.right || anchor.y > viewport.bottom) return [];
-    const readable = (COUNTRY_RASTER_LEVELS.bounds?.[name]?.[tile] ?? []).some(({ box }) => {
+    const readable = sources.some((source) => (COUNTRY_RASTER_LEVELS.bounds?.[name]?.[source.tile] ?? []).some((entry) => {
+      if (entry.service !== source.service) return false;
+      const box = entry.box;
       const start = map.project(mercatorLngLat(box[0]!, box[1]!));
       const end = map.project(mercatorLngLat(box[2]!, box[3]!));
       return readableCountryName({ left: start.x, top: start.y, right: end.x, bottom: end.y }, viewport, occlusions);
-    });
+    }));
     return readable ? [] : [name];
   });
 }
@@ -258,7 +273,7 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
       version: 8,
       glyphs: INSET_GLYPHS,
       sources: {
-        'inset-basemap': { type: 'raster', tiles: ESRI_DARK_TILES, tileSize: 256, maxzoom: 20 },
+        'inset-basemap': { type: 'raster', tiles: ESRI_DARK_TILES, tileSize: 256, maxzoom: INSET_BASEMAP_MAX_ZOOM },
         'inset-night': { type: 'geojson', data: EMPTY },
         'inset-labels': { type: 'raster', tiles: ESRI_LABEL_TILES, tileSize: 256, maxzoom: COUNTRY_RASTER_LEVELS.through },
         'inset-countries': { type: 'geojson', data: COUNTRY_CENTROIDS },

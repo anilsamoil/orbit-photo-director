@@ -232,8 +232,6 @@ function stubResources(entries: ReturnType<typeof emptyScript>[]): void {
   });
 }
 
-const styleObservers: MutationObserver[] = [];
-
 const staleError = new TypeError(
   'Failed to fetch dynamically imported module: http://127.0.0.1:42700/assets/map-stale.js',
 );
@@ -450,8 +448,6 @@ beforeEach(() => {
 
 afterEach(() => {
   document.head.appendChild = nativeHeadAppend;
-  for (const observer of styleObservers) observer.disconnect();
-  styleObservers.length = 0;
   mapGate.release();
   document.head.querySelectorAll('script[src*="/assets/"]').forEach((node) => node.remove());
   document.head.querySelectorAll('link[href*="maplibre-vendor"]').forEach((node) => node.remove());
@@ -808,15 +804,17 @@ describe('map pane when the chunk fails', () => {
 });
 
 function settleStylesheets(kind: 'load' | 'error'): void {
-  const observer = new MutationObserver(() => {
-    document.head.querySelectorAll('link[rel="stylesheet"]').forEach((node) => {
-      if (!(node instanceof HTMLLinkElement) || node.dataset.opdStyleReady === '1') return;
-      if (kind === 'load') Object.defineProperty(node, 'sheet', { configurable: true, value: { cssRules: [{}] } });
-      node.dispatchEvent(new Event(kind));
-    });
-  });
-  observer.observe(document.head, { childList: true });
-  styleObservers.push(observer);
+  const append = document.head.appendChild.bind(document.head);
+  document.head.appendChild = ((node: Node) => {
+    const link = node instanceof HTMLLinkElement && node.rel.toLowerCase() === 'stylesheet' ? node : null;
+    if (link && kind === 'load') {
+      Object.defineProperty(link, 'sheet', { configurable: true, value: { cssRules: [{}] } });
+      link.dispatchEvent(new Event('load'));
+    }
+    const inserted = append(node);
+    if (link && kind === 'error') link.dispatchEvent(new Event('error'));
+    return inserted;
+  }) as typeof document.head.appendChild;
 }
 
 describe('map error footer stays on the map', () => {

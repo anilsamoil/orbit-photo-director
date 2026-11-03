@@ -4,7 +4,22 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const helper = fileURLToPath(new URL('./raster-ocr.py', import.meta.url));
+export function rasterHelperFrom(source) {
+  const text = String(source);
+  if (text.startsWith('file:')) return fileURLToPath(new URL('./raster-ocr.py', text));
+  const decoded = decodeURIComponent(text);
+  const marker = '/raster-ocr.mjs';
+  const at = decoded.lastIndexOf(marker);
+  if (at < 0) throw new Error(`raster OCR helper is not a file URL: ${text}`);
+  let path = decoded.slice(0, at);
+  const embedded = path.lastIndexOf('/@fs');
+  if (embedded >= 0) path = path.slice(embedded + 4);
+  if (path.startsWith('file:')) path = fileURLToPath(path);
+  return `${path}/raster-ocr.py`;
+}
+
+const moduleSource = import.meta.url;
+const helper = rasterHelperFrom(moduleSource);
 let interpreter;
 const decoded = new Map();
 const fetched = new Map();
@@ -136,10 +151,12 @@ function sovereignBoxes(mosaic, country) {
 
 export function readableRasterName(pack, row, country) {
   if (!row.viewport) throw new Error('raster readability requires composed viewport geometry');
-  const { width, height, scale, origin, occlusions } = row.viewport;
+  const { width, height, origin, occlusions } = row.viewport;
+  const zoom = Number(row.zoom);
   const boxes = [];
   for (const mosaic of pack.mosaics) for (const word of sovereignBoxes(mosaic,country)) {
     const [x1, y1, x2, y2] = word.box;
+    const scale = Number.isFinite(zoom) ? (512 * (2 ** zoom)) / (256 * (2 ** mosaic.z)) : row.viewport.scale;
     for (const wrap of row.viewport.worldCopies ? [-1, 0, 1] : [0]) {
       const world = 256 * (2 ** mosaic.z) * wrap;
       const box = [(x1+world)*scale+origin.x, y1*scale+origin.y, (x2+world)*scale+origin.x, y2*scale+origin.y];
