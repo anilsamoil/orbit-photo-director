@@ -438,6 +438,38 @@ describe('plan inset labels', () => {
     argentina.inset.destroy();
   });
 
+  it('covers the dark Nigeria remnant that sticks out above the reference mask', () => {
+    created.zoom = 6.5;
+    created.center = [8, 10];
+    created.size = [274, 984];
+    const frame = document.createElement('div');
+    Object.defineProperty(frame, 'clientWidth', { value: 274 });
+    Object.defineProperty(frame, 'clientHeight', { value: 984 });
+    const inset = createTrackInset(frame, document.createElement('div'));
+    created.events.render?.();
+    const names = (created.options?.style.layers.find((layer) => layer.id === 'inset-countries-viewport')?.filter as [string, unknown, [string, string[]]])[2][1];
+    expect(names).toContain('Nigeria');
+    const masks = (frame as HTMLElement & { __opdTrackInset?: { __opdLabelMasks?: { left: number; top: number; right: number; bottom: number }[] } }).__opdTrackInset?.__opdLabelMasks ?? [];
+    expect(masks.some((mask) => mask.left <= 202 && mask.right >= 203 && mask.top <= 399.5 && mask.bottom >= 399.5)).toBe(true);
+    inset.destroy();
+  });
+
+  it('covers the dark India ink left of the reference name at zoom 6.51', () => {
+    created.zoom = 6.51;
+    created.center = [79, 22];
+    created.size = [410, 624];
+    const frame = document.createElement('div');
+    Object.defineProperty(frame, 'clientWidth', { value: 410 });
+    Object.defineProperty(frame, 'clientHeight', { value: 624 });
+    const inset = createTrackInset(frame, document.createElement('div'));
+    created.events.render?.();
+    const names = (created.options?.style.layers.find((layer) => layer.id === 'inset-countries-viewport')?.filter as [string, unknown, [string, string[]]])[2][1];
+    expect(names).toContain('India');
+    const masks = (frame as HTMLElement & { __opdTrackInset?: { __opdLabelMasks?: { left: number; top: number; right: number; bottom: number }[] } }).__opdTrackInset?.__opdLabelMasks ?? [];
+    expect(masks.some((mask) => mask.left <= 279.5 && mask.right >= 280.2 && mask.top <= 20 && mask.bottom >= 20)).toBe(true);
+    inset.destroy();
+  });
+
   it('masks the dark-raster name when the reference name is already on the narrow plan', () => {
     created.zoom = 6.5;
     created.center = [8.6386, 10];

@@ -185,7 +185,7 @@ export function readableRasterName(pack, row, country) {
     const ink = glyphInk(word);
     if (!(ink[2] > ink[0] && ink[3] > ink[1])) return false;
     if (ink[0] < 0 || ink[1] < 0 || ink[2] > width || ink[3] > height) return false;
-    if (Number.isFinite(zoom) && !countryLabelCountsScreen(word.box, zoom)) return false;
+    if (Number.isFinite(zoom) && !countryLabelCountsScreen(ink, zoom)) return false;
     if ((occlusions || []).some(rect => ink[0] < rect[2] && ink[2] > rect[0] && ink[1] < rect[3] && ink[3] > rect[1])) return false;
     return true;
   });

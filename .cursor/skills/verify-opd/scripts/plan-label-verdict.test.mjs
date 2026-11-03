@@ -252,6 +252,10 @@ test('the name sweep includes the off-centroid cameras and rejects a clipped rem
   assert.equal(border.ok, false);
   assert.equal(border.reason, 'duplicate');
   assert.equal(border.raster, 3);
+  assert.match(sweep, /\[\s*8,\s*10\s*\]/);
+  assert.match(sweep, /834x1210/);
+  assert.match(sweep, /820x1180/);
+  assert.match(sweep, /1210x834/);
   assert.match(sweep, /8\.6386,\s*10/);
   assert.match(sweep, /38\.3,\s*1/);
   assert.match(sweep, /38\.15,\s*1\.15/);

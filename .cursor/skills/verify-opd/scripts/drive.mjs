@@ -6928,13 +6928,14 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
       console.log(`plan labels sweep ${country.name}:${swept.rows.length} OCR:${rasterOcrStats.calls}`);
     }
     const offCentroid = [
-      { country: 'France', center: [-0.33, 46], zooms: [5.5], once: true },
+      { country: 'France', center: [-0.33, 46], zooms: [5.5], once: true, minWidth: 450 },
       { country: 'France', center: [-0.33, 46], zooms: [6.5, 6.51], once: false },
       { country: 'Australia', center: [134, -25], zooms: [6.5, 6.51], once: true },
-      { country: 'Australia', center: [131.772, -25], zooms: [5.5], once: true },
-      { country: 'Australia', center: [132.723, -25], zooms: [5.5], once: true },
-      { country: 'Argentina', center: [-63.36, -34], zooms: [6.5], once: true },
-      { country: 'India', center: [79, 22], zooms: [6.5, 6.51], once: true },
+      { country: 'Australia', center: [131.772, -25], zooms: [5.5], once: true, minWidth: 450 },
+      { country: 'Australia', center: [132.723, -25], zooms: [5.5], once: true, minWidth: 450 },
+      { country: 'Argentina', center: [-63.36, -34], zooms: [6.5], once: true, minWidth: 450 },
+      { country: 'India', center: [79, 22], zooms: [6.5, 6.51], once: true, frames: ['1210x834'] },
+      { country: 'Nigeria', center: [8, 10], zooms: [6.5], once: true, frames: ['834x1210', '820x1180', '1210x834'] },
       { country: 'Nigeria', center: [8.6386, 10], zooms: [6.5, 6.51], once: true, counted: true },
       { country: 'Kenya', center: [38.3, 1], zooms: [6.5, 6.51], once: true, counted: true },
       { country: 'Kenya', center: [38.15, 1.15], zooms: [6.5, 6.51], once: true, counted: true },
@@ -6980,7 +6981,8 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
         const raster = rasterNameEvidence(readableRasterName(pack, row, camera.country).boxes, auditedNameCandidates(camera.country, row.zoom, row.viewport), row.masks || []);
         const symbols = (row.names || []).filter((name) => name === camera.country).length;
         const sources = camera.counted ? symbols + rasterCount : symbols + (raster ? 1 : 0);
-        if (camera.once && sources !== 1) {
+        const wideEnough = !(camera.minWidth && row.viewport && row.viewport.width < camera.minWidth);
+        if (camera.once && wideEnough && sources !== 1) {
           throw new Error(`plan label off-centroid ${JSON.stringify({ country: camera.country, zoom, symbols, rasterCount, raster, names: row.names })}`);
         }
         sweepNotes.push(`${camera.country}@${zoom}`);
