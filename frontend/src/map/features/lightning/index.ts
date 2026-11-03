@@ -1,4 +1,3 @@
-import { showMapLegend } from '../../../map-legend';
 import type { MapFeature } from '../../map-core/feature';
 import { flashFeatures, observationLabel, parseLightningFeed, STALE_MS, type LightningFeed } from './feed';
 
@@ -84,7 +83,6 @@ export const lightning: MapFeature = {
       button.classList.toggle('active', enabled);
       status.hidden = !enabled;
       if (enabled) {
-        showMapLegend();
         void poll();
         paint();
         stopTick = core.clock.every(30_000, paint);
