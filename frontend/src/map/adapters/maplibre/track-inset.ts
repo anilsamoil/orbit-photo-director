@@ -182,8 +182,6 @@ type ScreenBox = { left: number; top: number; right: number; bottom: number };
 
 /** Same edge as the verifier: a letter that crosses the canvas is not a complete raster name. */
 const RASTER_INK_EDGE_PX = 0;
-/** The audited letter box is wider than the ink by the anti-aliased edge. France's false pad is 1.5px. */
-const LETTER_BOX_SLACK_PX = 2;
 
 /** Matches the dark-gray land under a letter that crosses the canvas edge. */
 const CLIPPED_LABEL_COVER = '#414143';
@@ -194,20 +192,6 @@ export function readableCountryName(box: ScreenBox, viewport: ScreenBox, occlusi
     && box.right <= viewport.right + RASTER_INK_EDGE_PX && box.bottom <= viewport.bottom + RASTER_INK_EDGE_PX
     && !occlusions.some((cover) => box.left < cover.right && box.right > cover.left
       && box.top < cover.bottom && box.bottom > cover.top);
-}
-
-function suppressedLettering(box: ScreenBox, viewport: ScreenBox, occlusions: readonly ScreenBox[]): ScreenBox | null {
-  const left = Math.max(box.left, viewport.left);
-  const top = Math.max(box.top, viewport.top);
-  const right = Math.min(box.right, viewport.right);
-  const bottom = Math.min(box.bottom, viewport.bottom);
-  if (right - left < 1 || bottom - top < 1) return null;
-  const overflow = Math.max(viewport.left - box.left, viewport.top - box.top, box.right - viewport.right, box.bottom - viewport.bottom);
-  const clipped = overflow > RASTER_INK_EDGE_PX;
-  const occluded = occlusions.some((cover) => box.left < cover.right && box.right > cover.left
-    && box.top < cover.bottom && box.bottom > cover.top);
-  if (!clipped && !occluded) return null;
-  return { left, top, right, bottom };
 }
 
 function mercatorLngLat(x: number, y: number): [number, number] {
@@ -223,6 +207,32 @@ function drawnTile(zoom: number, maxzoom: number): number {
   return Math.min(maxzoom, Math.max(0, Math.round(zoom + 1)));
 }
 
+function shownBox(screen: ScreenBox, viewport: ScreenBox): ScreenBox | null {
+  const left = Math.max(screen.left, viewport.left);
+  const top = Math.max(screen.top, viewport.top);
+  const right = Math.min(screen.right, viewport.right);
+  const bottom = Math.min(screen.bottom, viewport.bottom);
+  if (right - left < 1 || bottom - top < 1) return null;
+  return { left, top, right, bottom };
+}
+
+function exposedCovers(screen: ScreenBox, kept: ScreenBox | null, viewport: ScreenBox): ScreenBox[] {
+  if (!kept) {
+    const box = shownBox(screen, viewport);
+    return box ? [box] : [];
+  }
+  const parts: ScreenBox[] = [
+    { left: screen.left, top: screen.top, right: screen.right, bottom: Math.min(screen.bottom, kept.top) },
+    { left: screen.left, top: Math.max(screen.top, kept.bottom), right: screen.right, bottom: screen.bottom },
+    { left: screen.left, top: Math.max(screen.top, kept.top), right: Math.min(screen.right, kept.left), bottom: Math.min(screen.bottom, kept.bottom) },
+    { left: Math.max(screen.left, kept.right), top: Math.max(screen.top, kept.top), right: screen.right, bottom: Math.min(screen.bottom, kept.bottom) },
+  ];
+  return parts.flatMap((part) => {
+    const box = shownBox(part, viewport);
+    return box ? [box] : [];
+  });
+}
+
 /** Keep one complete name. Smaller border names and every clipped or occluded scrap are masked. */
 export function keptLettering(entries: readonly { complete: boolean; area: number }[]): { keep: number; mask: number[] } {
   const complete = entries.map((entry, index) => ({ ...entry, index })).filter((entry) => entry.complete);
@@ -234,7 +244,7 @@ export function keptLettering(entries: readonly { complete: boolean; area: numbe
   return { keep: complete[0]?.index ?? -1, mask: entries.flatMap((entry, index) => entry.complete ? [] : [index]) };
 }
 
-function viewportFallbacks(map: MapLibreMap, frame: HTMLElement): { names: string[]; covers: ScreenBox[] } {
+function viewportFallbacks(map: MapLibreMap, frame: HTMLElement): { names: string[]; covers: ScreenBox[]; rasterCount: number } {
   const zoom = map.getZoom();
   const frameBox = frame.getBoundingClientRect();
   const viewport = { left: 0, top: 0, right: frame.clientWidth, bottom: frame.clientHeight };
@@ -245,6 +255,7 @@ function viewportFallbacks(map: MapLibreMap, frame: HTMLElement): { names: strin
       return { left: box.left - frameBox.left, top: box.top - frameBox.top, right: box.right - frameBox.left, bottom: box.bottom - frameBox.top };
     });
   const covers: ScreenBox[] = [];
+  let rasterCount = 0;
   const names = COUNTRY_CENTROIDS.features.flatMap((feature) => {
     if (feature.geometry.type !== 'Point') return [];
     const name = String(feature.properties?.name);
@@ -256,7 +267,7 @@ function viewportFallbacks(map: MapLibreMap, frame: HTMLElement): { names: strin
       return tile == null ? [] : [{ service: source.service, tile, stale: !painted.includes(drawn) }];
     });
     if (sources.length === 0) return [];
-    const glyphs: { screen: ScreenBox; complete: boolean; area: number }[] = [];
+    const glyphs: { screen: ScreenBox; extent: ScreenBox; complete: boolean; area: number }[] = [];
     for (const source of sources) {
       for (const entry of COUNTRY_RASTER_LEVELS.bounds?.[name]?.[source.tile] ?? []) {
         if (entry.service !== source.service) continue;
@@ -268,31 +279,26 @@ function viewportFallbacks(map: MapLibreMap, frame: HTMLElement): { names: strin
         const glyph = entry.ink ?? entry.box;
         const ink = projectBounds(glyph);
         const extent = projectBounds(entry.box);
-        const boxOverflow = Math.max(viewport.left - extent.left, viewport.top - extent.top, extent.right - viewport.right, extent.bottom - viewport.bottom);
         const counted = countryLabelCounts({ width: glyph[2]! - glyph[0]!, height: glyph[3]! - glyph[1]! });
-        const screen = boxOverflow > LETTER_BOX_SLACK_PX ? extent : ink;
-        const visible = readableCountryName(ink, viewport, occlusions) && counted && boxOverflow <= LETTER_BOX_SLACK_PX;
-        glyphs.push({ screen, complete: visible && !source.stale, area: Math.abs(ink.right - ink.left) * Math.abs(ink.bottom - ink.top) });
+        glyphs.push({
+          screen: ink,
+          extent,
+          complete: !source.stale && counted && readableCountryName(ink, viewport, occlusions),
+          area: Math.abs(ink.right - ink.left) * Math.abs(ink.bottom - ink.top),
+        });
       }
     }
     const decision = keptLettering(glyphs);
     const kept = decision.keep >= 0 ? glyphs[decision.keep]!.screen : null;
+    if (decision.keep >= 0) rasterCount += 1;
     for (const index of decision.mask) {
-      const screen = glyphs[index]!.screen;
-      if (kept && screen.left < kept.right && screen.right > kept.left && screen.top < kept.bottom && screen.bottom > kept.top) continue;
-      const cover = suppressedLettering(screen, viewport, occlusions) ?? {
-        left: Math.max(screen.left, viewport.left),
-        top: Math.max(screen.top, viewport.top),
-        right: Math.min(screen.right, viewport.right),
-        bottom: Math.min(screen.bottom, viewport.bottom),
-      };
-      if (cover.right - cover.left >= 1 && cover.bottom - cover.top >= 1) covers.push(cover);
+      covers.push(...exposedCovers(glyphs[index]!.extent, kept, viewport));
     }
     const anchor = map.project(feature.geometry.coordinates as [number, number]);
     if (decision.keep >= 0 || anchor.x < 0 || anchor.y < 0 || anchor.x > viewport.right || anchor.y > viewport.bottom) return [];
     return [name];
   });
-  return { names, covers };
+  return { names, covers, rasterCount };
 }
 
 type InsetFrame = HTMLElement & { __opdTrackInset?: MapLibreMap };
@@ -403,27 +409,25 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
   const syncCountryLabels = (): void => {
     if (removed || !map.isStyleLoaded() || frame.clientWidth < 2 || frame.clientHeight < 2) return;
     const state = viewportFallbacks(map, frame);
-    const coverKey = state.covers.map((cover) => `${cover.left.toFixed(1)},${cover.top.toFixed(1)},${cover.right.toFixed(1)},${cover.bottom.toFixed(1)}`).join('|');
+    const features = state.covers.map((cover) => {
+      const ring = [
+        map.unproject([cover.left, cover.top]),
+        map.unproject([cover.right, cover.top]),
+        map.unproject([cover.right, cover.bottom]),
+        map.unproject([cover.left, cover.bottom]),
+      ].map((point) => [point.lng, point.lat] as [number, number]);
+      ring.push(ring[0]!);
+      return { type: 'Feature' as const, properties: {}, geometry: { type: 'Polygon' as const, coordinates: [ring] } };
+    });
+    const coverKey = JSON.stringify(features);
     if (coverKey !== viewportCovers) {
       viewportCovers = coverKey;
       const source = map.getSource('inset-label-mask');
       if (source && 'setData' in source && typeof source.setData === 'function') {
-        source.setData({
-          type: 'FeatureCollection',
-          features: state.covers.map((cover) => {
-            const ring = [
-              map.unproject([cover.left, cover.top]),
-              map.unproject([cover.right, cover.top]),
-              map.unproject([cover.right, cover.bottom]),
-              map.unproject([cover.left, cover.bottom]),
-            ].map((point) => [point.lng, point.lat] as [number, number]);
-            ring.push(ring[0]!);
-            return { type: 'Feature' as const, properties: {}, geometry: { type: 'Polygon' as const, coordinates: [ring] } };
-          }),
-        });
+        source.setData({ type: 'FeatureCollection', features });
       }
     }
-    Object.assign(map, { __opdLabelMasks: state.covers });
+    Object.assign(map, { __opdLabelMasks: state.covers, __opdRasterCount: state.rasterCount });
     const key = state.names.join('|');
     if (key === viewportNames) return;
     viewportNames = key;
@@ -431,6 +435,7 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
   };
   map.on('render', syncCountryLabels);
   map.on('move', syncCountryLabels);
+  map.on('moveend', syncCountryLabels);
   let paintedWidth = -1;
   let paintedHeight = -1;
   let paintedRatio = -1;

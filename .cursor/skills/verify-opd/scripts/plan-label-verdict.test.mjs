@@ -256,6 +256,14 @@ test('the name sweep includes the off-centroid cameras and rejects a clipped rem
   assert.match(sweep, /834x1210/);
   assert.match(sweep, /820x1180/);
   assert.match(sweep, /1210x834/);
+  assert.doesNotMatch(sweep, /minWidth/);
+  assert.doesNotMatch(sweep, /raster \? 1 : 0/);
+  const doubled = oneNameSource({
+    tilesOk: true, zoom: 6.5, tileZ: 6, country: 'Nigeria', names: [], rasterReadable: true, rasterCount: 2,
+  });
+  assert.equal(doubled.ok, false);
+  assert.equal(doubled.reason, 'duplicate');
+  assert.equal(doubled.count + doubled.raster, 2);
   assert.match(sweep, /8\.6386,\s*10/);
   assert.match(sweep, /38\.3,\s*1/);
   assert.match(sweep, /38\.15,\s*1\.15/);
@@ -264,6 +272,10 @@ test('the name sweep includes the off-centroid cameras and rejects a clipped rem
     [{ box: [10, 10, 14, 13] }, { box: [20, 20, 80, 40] }, { box: [90, 90, 120, 100] }],
     { width: 100, height: 100, occlusions: [] },
   ), 2);
+  assert.equal(completeNameCount(
+    [{ box: [10, 10, 46, 18] }, { box: [60, 60, 140, 100] }],
+    { width: 200, height: 200, zoom: 6.5, occlusions: [] },
+  ), 1);
   const open = oneNameSource({
     tilesOk: true, zoom: 5.5, tileZ: 6, country: 'France', names: ['France'], rasterReadable: true,
   });

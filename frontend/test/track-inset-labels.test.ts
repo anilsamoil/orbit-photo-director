@@ -147,6 +147,14 @@ vi.mock('maplibre-gl', () => {
 import countryRasterLevels from '../src/map/adapters/maplibre/country-raster-levels.json' with { type: 'json' };
 import { createTrackInset, keptLettering, letterboxCamera, PLAN_WHEEL_RESIZE_CAP_MS, readableCountryName } from '../src/map/adapters/maplibre/track-inset';
 
+function maskArea(ring: number[][]): number {
+  let sum = 0;
+  for (let index = 0; index < ring.length - 1; index += 1) {
+    sum += ring[index]![0]! * ring[index + 1]![1]! - ring[index + 1]![0]! * ring[index]![1]!;
+  }
+  return Math.abs(sum) / 2;
+}
+
 describe('plan inset labels', () => {
   it('draws the Esri reference raster above the basemap and lets a tighter track zoom past 2', () => {
     const frame = document.createElement('div');
@@ -406,6 +414,7 @@ describe('plan inset labels', () => {
       const ring = mask?.features?.[0]?.geometry.coordinates[0] ?? [];
       expect(ring.length, `Australia ${size.join('x')} ring`).toBeGreaterThan(3);
       expect(ring.every((pair) => pair.every((value) => Number.isFinite(value))), `Australia ${size.join('x')} coords`).toBe(true);
+      expect(maskArea(ring), `Australia ${size.join('x')} area`).toBeGreaterThan(0);
       australia.inset.destroy();
     }
     for (const zoom of [6.5, 6.51] as const) {
@@ -451,6 +460,7 @@ describe('plan inset labels', () => {
     expect(names).toContain('Nigeria');
     const masks = (frame as HTMLElement & { __opdTrackInset?: { __opdLabelMasks?: { left: number; top: number; right: number; bottom: number }[] } }).__opdTrackInset?.__opdLabelMasks ?? [];
     expect(masks.some((mask) => mask.left <= 202 && mask.right >= 203 && mask.top <= 399.5 && mask.bottom >= 399.5)).toBe(true);
+    expect(masks.some((mask) => mask.left <= 192 && mask.right >= 193 && mask.top <= 418 && mask.bottom >= 418)).toBe(true);
     inset.destroy();
   });
 
@@ -485,6 +495,72 @@ describe('plan inset labels', () => {
     inset.destroy();
   });
 
+  it('keeps one name at 410 and 435 and does not leave partial ink', () => {
+    const names = () => {
+      const filter = created.options?.style.layers.find((layer) => layer.id === 'inset-countries-viewport')?.filter as [string, unknown, [string, string[]]];
+      return filter[2][1];
+    };
+    const cases = [
+      { country: 'France', center: [2, 46] as [number, number], zoom: 6.51, allowEmpty: false },
+      { country: 'France', center: [-0.33, 46] as [number, number], zoom: 5.5, allowEmpty: true },
+      { country: 'Australia', center: [134, -25] as [number, number], zoom: 6.51, allowEmpty: false },
+      { country: 'Australia', center: [131.772, -25] as [number, number], zoom: 5.5, allowEmpty: true },
+      { country: 'Argentina', center: [-64, -34] as [number, number], zoom: 6.5, allowEmpty: false },
+    ];
+    for (const size of [[410, 624], [435, 700]] as const) {
+      for (const item of cases) {
+        created.zoom = item.zoom;
+        created.center = [...item.center];
+        created.size = [...size];
+        const frame = document.createElement('div');
+        Object.defineProperty(frame, 'clientWidth', { value: size[0] });
+        Object.defineProperty(frame, 'clientHeight', { value: size[1] });
+        const inset = createTrackInset(frame, document.createElement('div'));
+        created.events.render?.();
+        const symbol = names().filter((name) => name === item.country).length;
+        const raster = (frame as HTMLElement & { __opdTrackInset?: { __opdRasterCount?: number } }).__opdTrackInset?.__opdRasterCount ?? 0;
+        const features = (created.sources.get('inset-label-mask') as { features?: { geometry: { coordinates: number[][][] } }[] } | undefined)?.features ?? [];
+        for (const feature of features) expect(maskArea(feature.geometry.coordinates[0] ?? []), `${item.country} ${size.join('x')}`).toBeGreaterThan(0);
+        expect(symbol + raster, `${item.country} ${size.join('x')} z${item.zoom}`).toBeLessThan(2);
+        if (!item.allowEmpty) expect(symbol + raster, `${item.country} ${size.join('x')} z${item.zoom}`).toBe(1);
+        if (symbol === 1) expect(raster).toBe(0);
+        inset.destroy();
+      }
+    }
+  });
+
+  it('does not stack a fallback on Nigeria or Kenya border cameras at 274x984', () => {
+    const names = () => {
+      const filter = created.options?.style.layers.find((layer) => layer.id === 'inset-countries-viewport')?.filter as [string, unknown, [string, string[]]];
+      return filter[2][1];
+    };
+    const cameras = [
+      { country: 'Nigeria', center: [9, 10] as [number, number] },
+      { country: 'Nigeria', center: [8.5, 11] as [number, number] },
+      { country: 'Kenya', center: [37.5, 2] as [number, number] },
+      { country: 'Kenya', center: [37, 1] as [number, number] },
+    ];
+    for (const zoom of [6.5, 6.51]) {
+      for (const camera of cameras) {
+        created.zoom = zoom;
+        created.center = [...camera.center];
+        created.size = [274, 984];
+        const frame = document.createElement('div');
+        Object.defineProperty(frame, 'clientWidth', { value: 274 });
+        Object.defineProperty(frame, 'clientHeight', { value: 984 });
+        const inset = createTrackInset(frame, document.createElement('div'));
+        created.events.render?.();
+        const symbol = names().filter((name) => name === camera.country).length;
+        const masks = (frame as HTMLElement & { __opdTrackInset?: { __opdLabelMasks?: { left: number; top: number; right: number; bottom: number }[] } }).__opdTrackInset?.__opdLabelMasks ?? [];
+        const raster = (frame as HTMLElement & { __opdTrackInset?: { __opdRasterCount?: number } }).__opdTrackInset?.__opdRasterCount ?? 0;
+        expect(symbol + raster, `${camera.country} ${camera.center.join(',')} z${zoom}`).toBe(1);
+        expect(symbol).toBeLessThanOrEqual(1);
+        if (symbol === 1) expect(masks.length).toBeGreaterThan(0);
+        inset.destroy();
+      }
+    }
+  });
+
   it('keeps one complete name and masks the smaller border names', () => {
     const decision = keptLettering([
       { complete: true, area: 10 },
@@ -514,6 +590,8 @@ describe('plan inset labels', () => {
     expect(Number.isFinite(left(before))).toBe(true);
     expect(Number.isFinite(left(after))).toBe(true);
     expect(left(after)).not.toBe(left(before));
+    const ring = (JSON.parse(after) as { features: { geometry: { coordinates: number[][][] } }[] }).features[0]?.geometry.coordinates[0] ?? [];
+    expect(maskArea(ring)).toBeGreaterThan(0);
     inset.destroy();
   });
 

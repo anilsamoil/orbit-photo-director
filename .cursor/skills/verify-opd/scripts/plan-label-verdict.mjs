@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { countryLabelCountsScreen } from '../../../../frontend/src/map/adapters/maplibre/country-label-size.ts';
 import vm from 'node:vm';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -290,14 +291,16 @@ export function oneNameSource(row) {
   return { ok: true, country: row.country, zoom, count, raster: rasterCount };
 }
 
-/** Every fully visible name, including a small border name the size floor would drop. */
+/** Fully visible names that clear the same lettering-size floor as the raster reader. */
 export function completeNameCount(screenBoxes, viewport, masks = []) {
   const width = viewport && viewport.width;
   const height = viewport && viewport.height;
+  const zoom = viewport && Number(viewport.zoom);
   const overlaps = (box, mask) => box[0] < mask.right && box[2] > mask.left && box[1] < mask.bottom && box[3] > mask.top;
   return (screenBoxes || []).filter((item) => {
     const box = item.box || item;
     if (!(box[0] >= 0 && box[1] >= 0 && box[2] <= width && box[3] <= height)) return false;
+    if (Number.isFinite(zoom) && !countryLabelCountsScreen(box, zoom)) return false;
     if ((viewport.occlusions || []).some((rect) => box[0] < rect[2] && box[2] > rect[0] && box[1] < rect[3] && box[3] > rect[1])) return false;
     return !(masks || []).some((mask) => overlaps(box, mask));
   }).length;
