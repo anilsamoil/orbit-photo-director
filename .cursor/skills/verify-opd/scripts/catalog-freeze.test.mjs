@@ -18,7 +18,6 @@ test('a renewed catalog is the frozen clock after the original request leaves th
   const freeze = drive.slice(start, drive.indexOf('freezeFixtureClock.toString()', start));
   assert.match(freeze, /acceptedPath/);
   assert.doesNotMatch(freeze, /getEntriesByType/);
-  assert.match(freeze, /!pin/);
 });
 
 test('a delayed catalog response freezes the catalog that lands, not the one already held', async () => {
@@ -33,6 +32,15 @@ test('a delayed catalog response freezes the catalog that lands, not the one alr
       };
     }),
     acceptedPath: () => path,
+    async settledPath() {
+      let guard = 0;
+      while (this.inFlight && guard < 4) {
+        const flight = this.inFlight;
+        guard += 1;
+        await flight;
+      }
+      return this.acceptedPath();
+    },
   };
   const applied = [];
   const pending = settleCatalogFreeze(catalog, (instant) => applied.push(instant));
@@ -46,6 +54,7 @@ test('a delayed catalog response freezes the catalog that lands, not the one alr
   const drive = readFileSync(new URL('./drive.mjs', import.meta.url), 'utf8');
   const start = drive.indexOf("'iss-all-launches'");
   const region = drive.slice(start, drive.indexOf('iss all launches pin in frame', start));
-  assert.equal(region.split('settleCatalogFreeze').length - 1, 2);
+  assert.equal(region.split('freezeAccepted()').length - 1, 2);
+  assert.match(region, /settleCatalogFreeze/);
   assert.match(region, /!pin/);
 });

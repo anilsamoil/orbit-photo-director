@@ -4909,17 +4909,19 @@ export async function planRasterNameSamples(orbit) {
     orbit.jumpTo({ center: [-73, 41], zoom, bearing: 0, pitch: 0 });
     const settled = await new Promise((resolve) => {
       let done = false;
-      const timer = setTimeout(() => {
-        if (done) return;
-        done = true;
-        resolve(false);
-      }, 4000);
-      orbit.once('idle', () => {
+      const onIdle = () => {
         if (done) return;
         done = true;
         clearTimeout(timer);
         resolve(true);
-      });
+      };
+      const timer = setTimeout(() => {
+        if (done) return;
+        done = true;
+        if (typeof orbit.off === 'function') orbit.off('idle', onIdle);
+        resolve(false);
+      }, 4000);
+      orbit.once('idle', onIdle);
     });
     if (!settled) return { ok: false, reason: 'timeout', zoom, samples };
     const style = orbit.getStyle() || {};
@@ -7603,6 +7605,15 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
   return `${held.join(', ')}; restored ${restored.stage}x${restored.frame} scroll ${restored.scrollHeight}/${restored.clientHeight} controls ${restored.controlsBottom} scene ${restored.sceneBottom}`;
 }
 
+export async function settleCatalogFreeze(catalog, freeze) {
+  if (typeof catalog.settledPath !== 'function') return { ok: false, reason: 'catalog', path: '' };
+  const path = await catalog.settledPath() || '';
+  const frozen = catalogFreezeTime(null, path);
+  if (!(frozen > 0)) return { ok: false, reason: 'catalog', path };
+  freeze(frozen);
+  return { ok: true, path, frozen };
+}
+
 export function catalogFreezeTime(_entries, acceptedPath) {
   const match = String(acceptedPath || '').match(/(?:^|\/)launch\/catalog\/v\/c(\d+)/);
   if (!match) return null;
@@ -7909,16 +7920,22 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
     15000,
   );
   await shot(send, evidenceDir, 'iss-all-launches');
-  const acceptedPath = await evaluate(send, `(async () => {
+  const freezeAccepted = async () => evaluate(send, `(async () => {
     const { launchCatalog } = await import('/src/launch-catalog.ts');
-    const path = typeof launchCatalog.acceptedPath === 'function' ? launchCatalog.acceptedPath() : '';
-    return typeof path === 'string' ? path : '';
+    if (typeof launchCatalog.acceptedPath !== 'function' && typeof launchCatalog.settledPath !== 'function') {
+      return { ok: false, reason: 'catalog', path: '' };
+    }
+    const catalogFreezeTime = ${catalogFreezeTime.toString()};
+    const settleCatalogFreeze = ${settleCatalogFreeze.toString()};
+    const freezeFixtureClock = ${freezeFixtureClock.toString()};
+    return settleCatalogFreeze(launchCatalog, freezeFixtureClock);
   })()`);
-  const loadedAnchor = catalogFreezeTime([], acceptedPath);
-  const frozen = loadedAnchor || fixtureInstant(evidenceDir, send.fixtureDir);
-  await evaluate(send, `(${freezeFixtureClock.toString()})(${frozen})`);
+  const firstFreeze = await freezeAccepted();
+  if (!firstFreeze?.ok) throw new Error(`iss catalog freeze ${JSON.stringify(firstFreeze)}`);
   try {
   await click(send, '[data-iss-preset="nadir"]');
+  const pinFreeze = await freezeAccepted();
+  if (!pinFreeze?.ok) throw new Error(`iss catalog freeze ${JSON.stringify(pinFreeze)}`);
   await waitFor(
     send,
     `(() => {

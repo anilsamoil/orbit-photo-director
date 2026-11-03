@@ -48,6 +48,16 @@ export class LaunchCatalogStore {
     return typeof path === 'string' && path.length > 0 ? path : null;
   }
 
+  async settledPath(): Promise<string | null> {
+    let guard = 0;
+    while (this.inFlight && guard < 4) {
+      const flight = this.inFlight;
+      guard += 1;
+      await flight;
+    }
+    return this.acceptedPath();
+  }
+
   read(now: number): TierCatalog | null {
     if (!this.held) return null;
     if (this.seen && !samePointer(this.seen, this.held.pointer)) return null;
