@@ -86,9 +86,12 @@ export function ocrFrame(bytes) {
   }
 }
 
-export function ocrCropTexts(pngs) {
+export function ocrCropTexts(pngs, angles = []) {
   if (!pngs.length) return [];
-  const input = JSON.stringify({ crops: pngs.map((png) => Buffer.from(png).toString('base64')) });
+  const input = JSON.stringify({
+    crops: pngs.map((png) => Buffer.from(png).toString('base64')),
+    angles: pngs.map((_, index) => Number(angles[index]) || 0),
+  });
   const result = runHelper(['--crops'], input, pngs.length, 8 * 1024 * 1024);
   if (result.status !== 0) throw new Error(`line OCR failed: ${(result.stderr || result.error || '').toString().slice(0, 500)}`);
   const parsed = JSON.parse(result.stdout);

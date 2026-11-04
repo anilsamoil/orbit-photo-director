@@ -40,6 +40,14 @@ test('blank tiles have no country name and fail when the anchor is on the plan',
   assert.equal(countRotatedNames(blank, width, height), 0);
 });
 
+test('a rotated row of blocks is not a country until OCR reads the name', () => {
+  const width = 274;
+  const height = 200;
+  const pixels = canvas(width, height);
+  word(pixels, width, height, 40, [40, 40], 5, 16);
+  assert.equal(countCountryGlyphs(pixels, width, height, 'Kenya'), 0);
+});
+
 test('rotated border lettering counts, and a city dot does not', () => {
   const width = 274;
   const height = 984;

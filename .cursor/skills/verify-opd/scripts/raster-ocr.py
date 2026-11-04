@@ -113,6 +113,23 @@ def read_line(image):
     return ' '.join(words)
 
 
+def leveled_text(image, angle):
+    turned = image.rotate(angle, expand=True, resample=Image.Resampling.BICUBIC, fillcolor=(0, 0, 0, 0)) if angle else image
+    bands = [turned]
+    if angle:
+        gray = Image.alpha_composite(Image.new('RGBA', turned.size, (0, 0, 0, 0)), turned.convert('RGBA')).convert('L')
+        width, height = gray.size
+        sums = [sum(gray.getpixel((x, y)) for x in range(width)) for y in range(height)]
+        border = max(range(height), key=lambda row: sums[row]) if height else 0
+        median = sorted(sums)[len(sums) // 2] if sums else 1
+        if median and sums and sums[border] >= median * 2.2 and 6 <= border <= height - 6:
+            bands = [part for part in (
+                turned.crop((0, 0, width, border - 1)),
+                turned.crop((0, border + 2, width, height)),
+            ) if part.height >= 6]
+    return ' '.join(part for part in (read_line(band) for band in bands) if part)
+
+
 def recognize_frame(image):
     comp = Image.alpha_composite(Image.new('RGBA', image.size, (24, 26, 28, 255)), image.convert('RGBA')).convert('L')
     large = ImageOps.autocontrast(comp)
@@ -137,7 +154,13 @@ def emit_frame(path):
 
 def emit_crops():
     data = json.load(sys.stdin)
-    texts = [read_line(Image.open(io.BytesIO(base64.b64decode(crop))).convert('RGBA')) for crop in data.get('crops') or []]
+    crops = data.get('crops') or []
+    angles = data.get('angles') or []
+    texts = []
+    for index, crop in enumerate(crops):
+        angle = float(angles[index]) if index < len(angles) else 0
+        image = Image.open(io.BytesIO(base64.b64decode(crop))).convert('RGBA')
+        texts.append(leveled_text(image, angle))
     print(json.dumps({'texts': texts}))
 
 

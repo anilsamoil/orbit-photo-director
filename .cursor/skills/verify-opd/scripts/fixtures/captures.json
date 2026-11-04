@@ -14,6 +14,8 @@
         1
       ],
       "commit": "565750c",
+      "source": "Page.captureScreenshot of the plan inset canvas ([data-pip=plan] canvas) after the marker is hidden and inset-track and inset-night are turned off. Camera 37E, 1N, the Kenya-west off-centroid sweep.",
+      "environment": "Plan column canvas, 274 by 984 CSS pixels. Saved from the verifier in commit 565750c. The PNG has no browser, OS, or device metadata.",
       "note": "Screenshot of the plan inset at that camera. Not an Esri tile export and not redrawn type."
     },
     {
@@ -30,6 +32,8 @@
         11
       ],
       "commit": "ee2112f",
+      "source": "Page.captureScreenshot of the plan inset canvas ([data-pip=plan] canvas) after the marker is hidden and inset-track and inset-night are turned off. Off-centroid Nigeria camera from the sweep.",
+      "environment": "Plan column canvas, 274 by 984 CSS pixels. Saved from the verifier in commit ee2112f. The PNG has no browser, OS, or device metadata.",
       "note": "Screenshot of the plan inset at that camera. Not an Esri tile export and not redrawn type."
     },
     {
@@ -46,6 +50,8 @@
         10
       ],
       "commit": "ee2112f",
+      "source": "Page.captureScreenshot of the plan inset canvas ([data-pip=plan] canvas) after the marker is hidden and inset-track and inset-night are turned off. Off-centroid Nigeria camera from the sweep.",
+      "environment": "Plan column canvas, 274 by 984 CSS pixels. Saved from the verifier in commit ee2112f. The PNG has no browser, OS, or device metadata.",
       "note": "Screenshot of the plan inset at that camera. Not an Esri tile export and not redrawn type."
     },
     {
@@ -57,7 +63,8 @@
         478,
         690
       ],
-      "note": "KENYA plus KÉNYA, DejaVu 14px"
+      "note": "KENYA plus KÉNYA, DejaVu 14px",
+      "regenerate": "node .cursor/skills/verify-opd/scripts/plan-label-synthetic.mjs"
     },
     {
       "file": ".cursor/skills/verify-opd/scripts/fixtures/plan-label-foreign/chromium-arabic.png",
@@ -68,7 +75,8 @@
         478,
         690
       ],
-      "note": "KENYA plus Arabic كينيا, Noto Sans Arabic, 14px"
+      "note": "KENYA plus Arabic كينيا, Noto Sans Arabic, 14px",
+      "regenerate": "node .cursor/skills/verify-opd/scripts/plan-label-synthetic.mjs"
     },
     {
       "file": ".cursor/skills/verify-opd/scripts/fixtures/plan-label-foreign/chromium-cjk.png",
@@ -79,7 +87,8 @@
         478,
         690
       ],
-      "note": "KENYA plus 肯尼亚, Droid Sans Fallback, 14px"
+      "note": "KENYA plus 肯尼亚, Droid Sans Fallback, 14px",
+      "regenerate": "node .cursor/skills/verify-opd/scripts/plan-label-synthetic.mjs"
     },
     {
       "file": ".cursor/skills/verify-opd/scripts/fixtures/plan-label-foreign/chromium-cyrillic.png",
@@ -90,7 +99,8 @@
         478,
         690
       ],
-      "note": "KENYA plus Cyrillic КЕНИЯ, DejaVu 14px"
+      "note": "KENYA plus Cyrillic КЕНИЯ, DejaVu 14px",
+      "regenerate": "node .cursor/skills/verify-opd/scripts/plan-label-synthetic.mjs"
     },
     {
       "file": ".cursor/skills/verify-opd/scripts/fixtures/plan-label-foreign/chromium-greek.png",
@@ -101,7 +111,8 @@
         478,
         690
       ],
-      "note": "KENYA plus Greek ΚΕΝΥΑ, DejaVu 14px"
+      "note": "KENYA plus Greek ΚΕΝΥΑ, DejaVu 14px",
+      "regenerate": "node .cursor/skills/verify-opd/scripts/plan-label-synthetic.mjs"
     },
     {
       "file": ".cursor/skills/verify-opd/scripts/fixtures/plan-label-foreign/chromium-main.png",
@@ -112,7 +123,8 @@
         478,
         690
       ],
-      "note": "two Latin KENYA, DejaVu 14px"
+      "note": "two Latin KENYA, DejaVu 14px",
+      "regenerate": "node .cursor/skills/verify-opd/scripts/plan-label-synthetic.mjs"
     },
     {
       "file": ".cursor/skills/verify-opd/scripts/fixtures/plan-label-foreign/webkit-accent.png",
@@ -123,7 +135,8 @@
         478,
         690
       ],
-      "note": "KENYA plus KÉNYA, DejaVu 15px"
+      "note": "KENYA plus KÉNYA, DejaVu 15px",
+      "regenerate": "node .cursor/skills/verify-opd/scripts/plan-label-synthetic.mjs"
     },
     {
       "file": ".cursor/skills/verify-opd/scripts/fixtures/plan-label-foreign/webkit-arabic.png",
@@ -134,7 +147,8 @@
         478,
         690
       ],
-      "note": "KENYA plus Arabic كينيا, Noto Sans Arabic, 15px"
+      "note": "KENYA plus Arabic كينيا, Noto Sans Arabic, 15px",
+      "regenerate": "node .cursor/skills/verify-opd/scripts/plan-label-synthetic.mjs"
     },
     {
       "file": ".cursor/skills/verify-opd/scripts/fixtures/plan-label-foreign/webkit-cjk.png",
@@ -145,7 +159,8 @@
         478,
         690
       ],
-      "note": "KENYA plus 肯尼亚, Droid Sans Fallback, 15px"
+      "note": "KENYA plus 肯尼亚, Droid Sans Fallback, 15px",
+      "regenerate": "node .cursor/skills/verify-opd/scripts/plan-label-synthetic.mjs"
     },
     {
       "file": ".cursor/skills/verify-opd/scripts/fixtures/plan-label-foreign/webkit-cyrillic.png",
@@ -156,7 +171,8 @@
         478,
         690
       ],
-      "note": "KENYA plus Cyrillic КЕНИЯ, DejaVu 15px"
+      "note": "KENYA plus Cyrillic КЕНИЯ, DejaVu 15px",
+      "regenerate": "node .cursor/skills/verify-opd/scripts/plan-label-synthetic.mjs"
     },
     {
       "file": ".cursor/skills/verify-opd/scripts/fixtures/plan-label-foreign/webkit-greek.png",
@@ -167,7 +183,8 @@
         478,
         690
       ],
-      "note": "KENYA plus Greek ΚΕΝΥΑ, DejaVu 15px"
+      "note": "KENYA plus Greek ΚΕΝΥΑ, DejaVu 15px",
+      "regenerate": "node .cursor/skills/verify-opd/scripts/plan-label-synthetic.mjs"
     },
     {
       "file": ".cursor/skills/verify-opd/scripts/fixtures/plan-label-foreign/webkit-main.png",
@@ -178,7 +195,8 @@
         478,
         690
       ],
-      "note": "two Latin KENYA, DejaVu 15px"
+      "note": "two Latin KENYA, DejaVu 15px",
+      "regenerate": "node .cursor/skills/verify-opd/scripts/plan-label-synthetic.mjs"
     },
     {
       "file": ".cursor/skills/verify-opd/scripts/fixtures/plan-label-foreign/webkit-two-plus-greek.png",
@@ -189,7 +207,20 @@
         478,
         690
       ],
-      "note": "two Latin KENYA plus Greek ΚΕΝΥΑ, DejaVu 15px"
+      "note": "two Latin KENYA plus Greek ΚΕΝΥΑ, DejaVu 15px",
+      "regenerate": "node .cursor/skills/verify-opd/scripts/plan-label-synthetic.mjs"
+    },
+    {
+      "file": ".cursor/skills/verify-opd/scripts/fixtures/plan-label-foreign/towns.png",
+      "sha256": "89232193780b311c947f649d4c9aeaa6ff66733f3d794c3f62ccde0ab4c0fc5e",
+      "bytes": 7304,
+      "kind": "synthetic foreign lettering",
+      "size": [
+        478,
+        690
+      ],
+      "note": "Town names only: NAKURU, NAIROBI, NYERI, EMBU, THIKA. DejaVu Sans 15px. No country name.",
+      "regenerate": "node .cursor/skills/verify-opd/scripts/plan-label-synthetic.mjs"
     },
     {
       "file": ".cursor/skills/verify-opd/scripts/fixtures/plan-label-regression/canada-duplicated.png",
@@ -205,7 +236,8 @@
         "CANADA",
         "CANADA"
       ],
-      "note": "Drawn locally so the Canada check does not need Pillow, a font file, or /tmp."
+      "note": "Drawn locally so the Canada check does not need Pillow, a font file, or /tmp.",
+      "regenerate": "node .cursor/skills/verify-opd/scripts/plan-label-synthetic.mjs"
     },
     {
       "file": ".cursor/skills/verify-opd/scripts/fixtures/plan-label-regression/canada-main.png",
@@ -220,7 +252,8 @@
       "words": [
         "CANADA"
       ],
-      "note": "Drawn locally so the Canada check does not need Pillow, a font file, or /tmp."
+      "note": "Drawn locally so the Canada check does not need Pillow, a font file, or /tmp.",
+      "regenerate": "node .cursor/skills/verify-opd/scripts/plan-label-synthetic.mjs"
     },
     {
       "file": ".cursor/skills/verify-opd/scripts/fixtures/plan-label-regression/canada-painted-out.png",
@@ -233,7 +266,8 @@
       ],
       "fontSize": 22,
       "words": [],
-      "note": "Drawn locally so the Canada check does not need Pillow, a font file, or /tmp."
+      "note": "Drawn locally so the Canada check does not need Pillow, a font file, or /tmp.",
+      "regenerate": "node .cursor/skills/verify-opd/scripts/plan-label-synthetic.mjs"
     },
     {
       "file": ".cursor/skills/verify-opd/scripts/fixtures/plan-label-regression/chromium-chrome.png",

@@ -337,6 +337,9 @@ export function frameNameVerdict(head, main, country, options = {}) {
     const mainBlocked = [...mainChrome, ...(options.mainIgnoreRects || [])];
     const headGlyphs = countCountryGlyphs(head.data, head.width, head.height, country, { ignoreRects: headBlocked });
     const mainGlyphs = countCountryGlyphs(main.data, main.width, main.height, country, { ignoreRects: mainBlocked });
+    if (headGlyphs < 1 || mainGlyphs < 1) {
+      return { ok: false, check: 'name', reason: 'unread', count: headGlyphs, expected: mainGlyphs, head: leftCounts, main: rightCounts };
+    }
     const same = occurrenceCount(headGlyphs, mainGlyphs);
     if (!same.ok) return { ok: false, check: 'count', reason: 'count', count: headGlyphs, expected: mainGlyphs, head: leftCounts, main: rightCounts };
     return { ok: true, check: 'count', count: headGlyphs, expected: mainGlyphs, head: leftCounts, main: rightCounts };

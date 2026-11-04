@@ -436,7 +436,7 @@ function encodePng(pixels, width, height) {
   ]);
 }
 
-function cropPng(pixels, width, height, box) {
+function cropPixels(pixels, width, height, box) {
   const pad = 16;
   let x0 = Math.max(0, Math.floor(Math.min(box[0], box[2])) - pad);
   let y0 = Math.max(0, Math.floor(Math.min(box[1], box[3])) - pad);
@@ -452,12 +452,9 @@ function cropPng(pixels, width, height, box) {
   for (let y = y0; y < y1; y += 1) {
     crop.set(pixels.subarray((y * width + x0) * 4, (y * width + x1) * 4), (y - y0) * (x1 - x0) * 4);
   }
-  return encodePng(crop, x1 - x0, y1 - y0);
+  return { pixels: crop, width: x1 - x0, height: y1 - y0 };
 }
 
-function countryLetters(text) {
-  return String(text || '').toUpperCase().replace(/[^A-Z]/g, '');
-}
 
 const LATIN_LAST_LETTERS = {
   KENYA: [
@@ -547,20 +544,36 @@ export function latinLetterMatches(pixels, width, height, box, name) {
   return letterDiff(letter, reference) <= 20;
 }
 
-function nearDot(box, dots) {
-  return (dots || []).some((dot) => dot.x >= box[0] - 16 && dot.x <= box[2] + 16 && dot.y >= box[1] - 16 && dot.y <= box[3] + 16);
+function axisDegrees(line) {
+  const cx = line.reduce((sum, letter) => sum + letter.x, 0) / line.length;
+  const cy = line.reduce((sum, letter) => sum + letter.y, 0) / line.length;
+  let xx = 0;
+  let yy = 0;
+  let xy = 0;
+  for (const letter of line) {
+    const dx = letter.x - cx;
+    const dy = letter.y - cy;
+    xx += dx * dx;
+    yy += dy * dy;
+    xy += dx * dy;
+  }
+  return 0.5 * Math.atan2(2 * xy, xx - yy) * 180 / Math.PI;
 }
 
-/** A blob counts only when its letters are that country. Empty noise can be a rotated border name; a different word cannot. */
-function readsAsCountry(text, country, candidate, dots, pixels, width, height) {
+/** The crop counts only when one OCR word is that country. A fragment, a miss, or another word does not. */
+function readsAsCountry(text, country, box, pixels, width, height) {
   const name = String(country || '').replace(/[^a-z]/gi, '').toUpperCase();
-  const raw = String(text || '').trim().toUpperCase();
-  const letters = countryLetters(raw);
-  if (raw === name) return latinLetterMatches(pixels, width, height, candidate.box, name);
-  if (letters.length >= 3) return false;
-  if (!name || candidate.letters < name.length - 1 || candidate.letters > name.length + 1) return false;
-  if (candidate.angle < 18 || candidate.angle > 75) return false;
-  return !nearDot(candidate.box, dots);
+  const tokens = String(text || '').toUpperCase().split(/[^A-Z]+/).filter((token) => token.length > 0);
+  if (!name || !tokens.includes(name)) return false;
+  return latinLetterMatches(pixels, width, height, box, name);
+}
+
+function uprightCrops(pixels, width, height, box, degrees) {
+  const crop = cropPixels(pixels, width, height, box);
+  if (!crop) return [];
+  const png = encodePng(crop.pixels, crop.width, crop.height);
+  if (Math.abs(degrees) < 8) return [{ png, angle: 0 }];
+  return [-4, -2, 0, 2, 4].map((delta) => ({ png, angle: degrees + delta }));
 }
 
 export function countryGlyphBoxes(pixels, width, height, country, options = {}) {
@@ -600,26 +613,27 @@ export function countryGlyphBoxes(pixels, width, height, country, options = {}) 
       const sizes = line.map((letter) => letter.size).sort((left, right) => left - right);
       const size = sizes[Math.floor(sizes.length / 2)];
       if (size < 5 || size > 20 || length < 18 || length > 140) continue;
-      const spanX = Math.max(...xs) - Math.min(...xs);
-      const spanY = Math.max(...ys) - Math.min(...ys);
-      const angle = Math.abs(Math.atan2(spanY, spanX) * 180 / Math.PI);
-      if (angle < 12 && line.length !== nameLength && Math.abs(line.length - nameLength) > 1) continue;
       candidates.push({
         box: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)],
-        angle,
+        angle: axisDegrees(line),
         letters: line.length,
       });
     }
   }
-  const dots = Array.isArray(found) ? [] : found.dots;
   if (options.confirmName) {
     return mergeBoxes(candidates.filter((candidate) => options.confirmName(candidate)).map((candidate) => candidate.box));
   }
   if (!candidates.length) return [];
-  const crops = candidates.map((candidate) => cropPng(pixels, width, height, candidate.box));
-  if (crops.some((crop) => !crop)) return [];
-  const texts = ocrCropTexts(crops);
-  const accepted = candidates.filter((candidate, index) => readsAsCountry(texts[index], country, candidate, dots, pixels, width, height));
+  const jobs = candidates.map((candidate) => uprightCrops(pixels, width, height, candidate.box, candidate.angle));
+  if (jobs.some((crops) => crops.length === 0)) return [];
+  const flat = jobs.flat();
+  const texts = ocrCropTexts(flat.map((job) => job.png), flat.map((job) => job.angle));
+  let cursor = 0;
+  const accepted = candidates.filter((candidate, index) => {
+    const readings = texts.slice(cursor, cursor + jobs[index].length);
+    cursor += jobs[index].length;
+    return readings.some((text) => readsAsCountry(text, country, candidate.box, pixels, width, height));
+  });
   return mergeBoxes(accepted.map((candidate) => candidate.box));
 }
 

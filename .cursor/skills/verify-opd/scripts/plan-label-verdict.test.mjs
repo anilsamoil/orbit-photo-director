@@ -626,6 +626,13 @@ test('foreign-language Kenya frames fail, and WebKit counts the two visible Lati
   assert.equal(names, 2);
   const webkitMain = load('webkit-main');
   assert.equal(countCountryGlyphs(webkitMain.data, webkitMain.width, webkitMain.height, 'Kenya'), 2);
+  const towns = load('towns');
+  assert.equal(countCountryGlyphs(towns.data, towns.width, towns.height, 'Kenya'), 0);
+  const alone = frameNameVerdict(towns, towns, 'Kenya', { kenyaWest: true });
+  const against = frameNameVerdict(towns, webkitMain, 'Kenya', { kenyaWest: true });
+  assert.equal(alone.ok, false, JSON.stringify(alone));
+  assert.equal(against.ok, false, JSON.stringify(against));
+  assert.notEqual(alone.reason, undefined);
 });
 
 test('docs do not keep the calib fixture value', () => {
