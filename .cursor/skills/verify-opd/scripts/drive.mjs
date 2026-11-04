@@ -6800,7 +6800,10 @@ function planLabelPlacement(map) {
           if (anchorX >= 0 && anchorY >= 0 && anchorX <= width && anchorY <= height) labels.push({ name: propertyName, opacity: opacityValue, box: null });
           continue;
         }
-        if (!(right > canvasBox.left && bottom > canvasBox.top && left < canvasBox.right && top < canvasBox.bottom)) continue;
+        const centerX = (left + right) / 2;
+        const centerY = (top + bottom) / 2;
+        const centerInside = centerX >= canvasBox.left && centerX <= canvasBox.right && centerY >= canvasBox.top && centerY <= canvasBox.bottom;
+        if (!centerInside) continue;
         labels.push({ name: propertyName, opacity: opacityValue, box: { left, top, right, bottom } });
       }
     }
