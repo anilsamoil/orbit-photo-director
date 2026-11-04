@@ -11,9 +11,36 @@ import os
 from PIL import Image, ImageDraw, ImageFont
 
 fixtures = os.environ['OPD_LABEL_FIXTURES']
-deja = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
-arabic = '/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf'
-cjk = '/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf'
+home = os.path.expanduser('~')
+
+def font(*candidates):
+    for path in candidates:
+        if path and os.path.isfile(path):
+            return path
+    raise SystemExit('missing font: ' + candidates[0])
+
+deja = font(
+    os.path.join(fixtures, 'fonts', 'DejaVuSans.ttf'),
+    '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+    '/opt/homebrew/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+    '/usr/local/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+    '/Library/Fonts/DejaVuSans.ttf',
+    os.path.join(home, 'Library/Fonts/DejaVuSans.ttf'),
+)
+arabic = font(
+    os.path.join(fixtures, 'fonts', 'NotoSansArabic-Regular.ttf'),
+    '/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf',
+    '/opt/homebrew/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf',
+    '/Library/Fonts/NotoSansArabic-Regular.ttf',
+    os.path.join(home, 'Library/Fonts/NotoSansArabic-Regular.ttf'),
+)
+cjk = font(
+    os.path.join(fixtures, 'fonts', 'DroidSansFallbackFull.ttf'),
+    '/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf',
+    '/opt/homebrew/share/fonts/truetype/droid/DroidSansFallbackFull.ttf',
+    '/Library/Fonts/DroidSansFallbackFull.ttf',
+    os.path.join(home, 'Library/Fonts/DroidSansFallbackFull.ttf'),
+)
 ink = (236, 232, 220, 255)
 ground = (24, 26, 28, 255)
 

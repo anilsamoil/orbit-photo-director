@@ -6,4 +6,4 @@ Tesseract's English model reads ΚΕΝΥΑ and KÉNYA as KENYA. The counter stil
 
 `towns.png` is Nakuru, Nairobi, Nyeri, Embu, and Thika in the same DejaVu, with no country name.
 
-Regenerate this directory with `node .cursor/skills/verify-opd/scripts/plan-label-synthetic.mjs`.
+Regenerate this directory with `node .cursor/skills/verify-opd/scripts/plan-label-synthetic.mjs`. The script uses the fonts in `fixtures/fonts` first, then Linux and macOS font paths.

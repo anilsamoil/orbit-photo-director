@@ -15,7 +15,10 @@
       ],
       "commit": "565750c",
       "source": "Page.captureScreenshot of the plan inset canvas ([data-pip=plan] canvas) after the marker is hidden and inset-track and inset-night are turned off. Camera 37E, 1N, the Kenya-west off-centroid sweep.",
-      "environment": "Plan column canvas, 274 by 984 CSS pixels. Saved from the verifier in commit 565750c. The PNG has no browser, OS, or device metadata.",
+      "browser": "Playwright page on the verifier CDP connection. The clip scale is 1.",
+      "os": "Committed from the Linux cloud agent in 565750c. The PNG has no OS chunk.",
+      "device": "Plan inset, 274 by 984 CSS pixels. scale 1 keeps devicePixelRatio from enlarging the bitmap.",
+      "environment": "Plan column canvas, 274 by 984 CSS pixels. Saved from the verifier in commit 565750c.",
       "note": "Screenshot of the plan inset at that camera. Not an Esri tile export and not redrawn type."
     },
     {
@@ -33,7 +36,10 @@
       ],
       "commit": "ee2112f",
       "source": "Page.captureScreenshot of the plan inset canvas ([data-pip=plan] canvas) after the marker is hidden and inset-track and inset-night are turned off. Off-centroid Nigeria camera from the sweep.",
-      "environment": "Plan column canvas, 274 by 984 CSS pixels. Saved from the verifier in commit ee2112f. The PNG has no browser, OS, or device metadata.",
+      "browser": "Playwright page on the verifier CDP connection. The clip scale is 1.",
+      "os": "Committed from the Linux cloud agent in ee2112f. The PNG has no OS chunk.",
+      "device": "Plan inset, 274 by 984 CSS pixels. scale 1 keeps devicePixelRatio from enlarging the bitmap.",
+      "environment": "Plan column canvas, 274 by 984 CSS pixels. Saved from the verifier in commit ee2112f.",
       "note": "Screenshot of the plan inset at that camera. Not an Esri tile export and not redrawn type."
     },
     {
@@ -51,7 +57,10 @@
       ],
       "commit": "ee2112f",
       "source": "Page.captureScreenshot of the plan inset canvas ([data-pip=plan] canvas) after the marker is hidden and inset-track and inset-night are turned off. Off-centroid Nigeria camera from the sweep.",
-      "environment": "Plan column canvas, 274 by 984 CSS pixels. Saved from the verifier in commit ee2112f. The PNG has no browser, OS, or device metadata.",
+      "browser": "Playwright page on the verifier CDP connection. The clip scale is 1.",
+      "os": "Committed from the Linux cloud agent in ee2112f. The PNG has no OS chunk.",
+      "device": "Plan inset, 274 by 984 CSS pixels. scale 1 keeps devicePixelRatio from enlarging the bitmap.",
+      "environment": "Plan column canvas, 274 by 984 CSS pixels. Saved from the verifier in commit ee2112f.",
       "note": "Screenshot of the plan inset at that camera. Not an Esri tile export and not redrawn type."
     },
     {
