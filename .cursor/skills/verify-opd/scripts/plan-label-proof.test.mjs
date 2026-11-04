@@ -259,6 +259,31 @@ test('two renders do not settle a loaded map before idle', async () => {
   assert.equal(map.listeners(), 0);
 });
 
+test('a synchronous redraw settles when animation frames never run', async () => {
+  const { planWaitTiles } = loadHelpers();
+  const map = waitingMap({ idle: false });
+  map.loaded = () => false;
+  map.areTilesLoaded = () => true;
+  map.triggerRepaint = () => {};
+  const renderListeners = [];
+  const baseOn = map.on;
+  map.on = (event, callback) => {
+    if (event === 'render') {
+      renderListeners.push(callback);
+      return;
+    }
+    baseOn(event, callback);
+  };
+  map.redraw = () => {
+    for (const callback of renderListeners.slice()) callback();
+  };
+  const started = Date.now();
+  const waited = await planWaitTiles(map);
+  assert.equal(waited.tilesOk, true, JSON.stringify(waited.detail));
+  assert.ok(Date.now() - started < 800, Date.now() - started);
+  assert.equal(map.listeners(), 0);
+});
+
 test('the plan screenshot does not jump again when the camera is already there', () => {
   const source = readFileSync(new URL('./drive.mjs', import.meta.url), 'utf8');
   assert.match(source, /if \(map\.__opdRasterCamera && !planCameraMatches\(map, map\.__opdRasterCamera\)\.ok\) map\.jumpTo\(map\.__opdRasterCamera\);/);
