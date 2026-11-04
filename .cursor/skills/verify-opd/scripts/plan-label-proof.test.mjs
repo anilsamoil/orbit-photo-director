@@ -151,7 +151,7 @@ test('a repaint that never goes idle is still a tile failure, and the listener i
   const timedOut = await planWaitTiles(map);
   assert.equal(timedOut.tilesOk, false);
   assert.equal(map.listeners(), 0);
-  assert.match(PLAN_TILE_HELPERS, /PLAN_REPAINT_IDLE_MS = 1500/);
+  assert.match(PLAN_TILE_HELPERS, /PLAN_REPAINT_IDLE_MS = 2000/);
 });
 
 test('the raster lock covers one jump and the next jump reaches the requested camera', () => {

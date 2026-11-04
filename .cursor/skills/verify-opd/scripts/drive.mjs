@@ -6750,7 +6750,7 @@ function planReleaseRasterCamera(map) {
     delete map.__opdJumpLocked;
   }
 }
-const PLAN_REPAINT_IDLE_MS = 1500;
+const PLAN_REPAINT_IDLE_MS = 2000;
 function settleIdle(map, limitMs, kick) {
   return new Promise((resolve) => {
     let finished = false;
