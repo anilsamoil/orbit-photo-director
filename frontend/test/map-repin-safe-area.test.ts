@@ -151,15 +151,22 @@ for (const engine of [
         const map = (window as unknown as { __opdMap: import('maplibre-gl').Map }).__opdMap;
         const source = map.getSource('dropped-pin') as import('maplibre-gl').GeoJSONSource;
         const deadline = performance.now() + 5_000;
-        do {
+        let pending: Promise<import('maplibre-gl').GeoJSON> | null = null;
+        while (performance.now() < deadline) {
+          if (!pending) pending = source.getData();
+          const remaining = Math.max(0, deadline - performance.now());
+          let timer: ReturnType<typeof setTimeout> | undefined;
           const data = await Promise.race([
-            source.getData(),
-            new Promise<null>((resolve) => setTimeout(() => resolve(null), 400)),
+            pending,
+            new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), remaining); }),
           ]);
-          if (data && data.type === 'FeatureCollection' && data.features[0]?.geometry.type === 'Point'
+          if (timer) clearTimeout(timer);
+          if (!data) break;
+          pending = null;
+          if (data.type === 'FeatureCollection' && data.features[0]?.geometry.type === 'Point'
             && data.features[0].geometry.coordinates.every((value, index) => value === expected[index])) return;
           await new Promise((resolve) => setTimeout(resolve, 25));
-        } while (performance.now() < deadline);
+        }
         throw new Error(`Native hold did not update the pin to ${expected}`);
       }, before.expected);
       if (cdp) {

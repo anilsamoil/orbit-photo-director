@@ -150,7 +150,7 @@ test('tesseract receives the real path when the temp directory is a symlink', ()
   const link = join(tmpdir(), `opd-ocr-link-${process.pid}`);
   symlinkSync(real, link);
   const fake = join(real, 'tesseract');
-  writeFileSync(fake, `#!/bin/sh\ncase "$1" in\n  ${link}/*) echo "unresolved $1" >&2; exit 2;;\nesac\nexec /usr/bin/tesseract "$@"\n`);
+  writeFileSync(fake, `#!/bin/sh\ncase "$1" in\n  ${link}/*) echo "unresolved $1" >&2; exit 2;;\nesac\nexec "$(command -v tesseract)" "$@"\n`);
   chmodSync(fake, 0o700);
   const previous = { tmp: process.env.TMPDIR, tesseract: process.env.OPD_VERIFY_TESSERACT };
   process.env.TMPDIR = link;
