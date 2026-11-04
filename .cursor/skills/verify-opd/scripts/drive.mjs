@@ -6590,6 +6590,13 @@ function planCenterTile(map, z) {
   const y = Math.max(0, Math.min(n - 1, yRaw));
   return { x, y };
 }
+function planTileKey(coord, tile) {
+  const id = (tile && tile.tileID) || coord || {};
+  if (id.key) return String(id.key);
+  const canonical = id.canonical;
+  if (!canonical) return '';
+  return [canonical.z, canonical.x, canonical.y, id.wrap || 0].join('/');
+}
 function planVisibleTiles(map, sourceId) {
   const manager = map.style && map.style.tileManagers && map.style.tileManagers[sourceId];
   const z = planSourceZoom(map, sourceId);
@@ -6598,17 +6605,41 @@ function planVisibleTiles(map, sourceId) {
     return { z, tiles: [], center, state: 'manager' };
   }
   const tiles = [];
-  for (const coord of manager.getVisibleCoordinates() || []) {
-    if (!coord.canonical || coord.canonical.z !== z) continue;
-    const tile = typeof manager.getTile === 'function' ? manager.getTile(coord) : null;
+  const seen = new Set();
+  const add = (coord, tile) => {
+    const id = (tile && tile.tileID) || coord || {};
+    const canonical = id.canonical;
+    if (!canonical) return;
+    const key = planTileKey(coord, tile);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
     tiles.push({
-      z,
-      x: coord.canonical.x,
-      y: coord.canonical.y,
+      z: canonical.z,
+      x: canonical.x,
+      y: canonical.y,
       state: tile ? tile.state : 'missing',
     });
+  };
+  const view = manager._inViewTiles;
+  if (view && typeof view.getAllTiles === 'function') {
+    for (const tile of view.getAllTiles() || []) add(tile && tile.tileID, tile);
+  }
+  for (const coord of manager.getVisibleCoordinates() || []) {
+    const tile = typeof manager.getTile === 'function' ? manager.getTile(coord) : null;
+    add(coord, tile);
   }
   return { z, tiles, center };
+}
+function planRasterReady(map) {
+  const ready = (pack) => {
+    if (!pack || pack.state === 'manager' || pack.tiles.length === 0) return false;
+    const drawn = pack.tiles.filter((tile) => tile.z === pack.z);
+    if (drawn.length === 0) return false;
+    if (!drawn.every((tile) => tile.state === 'loaded')) return false;
+    if (!drawn.some((tile) => tile.x === pack.center.x && tile.y === pack.center.y)) return false;
+    return pack.tiles.every((tile) => tile.state === 'loaded' || tile.state === 'errored');
+  };
+  return ready(planVisibleTiles(map, 'inset-labels')) && ready(planVisibleTiles(map, 'inset-basemap'));
 }
 function planTileUrls(map, sourceId, tiles) {
   const spec = map.getStyle() && map.getStyle().sources && map.getStyle().sources[sourceId];
@@ -6724,28 +6755,28 @@ function settleIdle(map, limitMs, kick) {
   return new Promise((resolve) => {
     let finished = false;
     let timer = 0;
-    let frames = 0;
+    let paints = 0;
     const finish = (value) => {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
       map.off('idle', onIdle);
+      map.off('render', onRender);
       resolve(value);
     };
-    const onIdle = () => finish(true);
-    const settled = () => typeof map.loaded === 'function' && map.loaded() === true
-      && map.areTilesLoaded()
-      && !(typeof map.isMoving === 'function' && map.isMoving());
-    const watch = () => {
-      if (finished) return;
-      frames += 1;
-      if (settled()) finish(true);
-      else if (frames < 8 && typeof requestAnimationFrame === 'function') requestAnimationFrame(watch);
+    const onIdle = () => {
+      if (planRasterReady(map)) finish(true);
+    };
+    const onRender = () => {
+      if (finished || !planRasterReady(map)) return;
+      paints += 1;
+      if (paints >= 2) finish(true);
+      else if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
     };
     timer = setTimeout(() => finish(false), limitMs);
     map.on('idle', onIdle);
+    map.on('render', onRender);
     if (typeof kick === 'function') kick();
-    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(watch);
   });
 }
 async function planWaitTiles(map) {
@@ -6755,16 +6786,12 @@ async function planWaitTiles(map) {
   while (performance.now() < deadline) {
     labels = planVisibleTiles(map, 'inset-labels');
     base = planVisibleTiles(map, 'inset-basemap');
-    const ready = (pack) => pack.tiles.length > 0
-      && pack.tiles.every((tile) => tile.state === 'loaded')
-      && pack.tiles.some((tile) => tile.x === pack.center.x && tile.y === pack.center.y);
-    if (ready(labels) && ready(base) && map.areTilesLoaded()) break;
+    if (planRasterReady(map)) break;
     await settleIdle(map, 100);
   }
-  const ready = (pack) => !!(pack && pack.tiles.length > 0
-    && pack.tiles.every((tile) => tile.state === 'loaded')
-    && pack.tiles.some((tile) => tile.x === pack.center.x && tile.y === pack.center.y));
-  let tilesOk = ready(labels) && ready(base) && map.areTilesLoaded();
+  labels = planVisibleTiles(map, 'inset-labels');
+  base = planVisibleTiles(map, 'inset-basemap');
+  let tilesOk = planRasterReady(map);
   let repaintMs = null;
   let painted = null;
   if (tilesOk) {
@@ -6775,17 +6802,31 @@ async function planWaitTiles(map) {
     repaintMs = Math.round(performance.now() - idleStarted);
     labels = planVisibleTiles(map, 'inset-labels');
     base = planVisibleTiles(map, 'inset-basemap');
-    tilesOk = painted === true && ready(labels) && ready(base) && map.areTilesLoaded();
+    tilesOk = painted === true && planRasterReady(map);
   }
+  const drawn = (pack) => (pack && pack.tiles ? pack.tiles.filter((tile) => tile.z === pack.z) : []);
   const urls = tilesOk
-    ? planTileUrls(map, 'inset-labels', labels.tiles).concat(planTileUrls(map, 'inset-basemap', base.tiles))
+    ? planTileUrls(map, 'inset-labels', drawn(labels)).concat(planTileUrls(map, 'inset-basemap', drawn(base)))
     : [];
+  const blocking = [];
+  for (const pack of [labels, base]) {
+    for (const tile of (pack && pack.tiles) || []) {
+      if (tile.state !== 'loaded' && tile.state !== 'errored') blocking.push(tile);
+    }
+  }
   return {
     tilesOk,
     tileZ: labels ? labels.z : null,
     urls,
     repaintMs,
-    detail: tilesOk ? null : { labels, base, idle: painted, are: map.areTilesLoaded(), loaded: typeof map.loaded === 'function' ? map.loaded() : null },
+    detail: tilesOk ? null : {
+      labels,
+      base,
+      blocking,
+      idle: painted,
+      are: map.areTilesLoaded(),
+      loaded: typeof map.loaded === 'function' ? map.loaded() : null,
+    },
   };
 }
 `;
@@ -7083,6 +7124,7 @@ async function forgetMainLease(twin) {
 
 async function capturePlanCanvas(send) {
   const box = await evaluate(send, `(async () => {
+    ${PLAN_TILE_HELPERS}
     const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
     const canvas = frame && frame.querySelector('canvas');
     const map = frame && frame.__opdTrackInset;
@@ -7093,21 +7135,8 @@ async function capturePlanCanvas(send) {
     }
     const marker = frame.querySelector('.maplibregl-marker');
     if (marker) marker.style.visibility = 'hidden';
-    await new Promise((resolve) => {
-      let settled = false;
-      let timer = 0;
-      const finish = () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        map.off('idle', onIdle);
-        resolve();
-      };
-      const onIdle = () => finish();
-      timer = setTimeout(finish, 500);
-      map.on('idle', onIdle);
-      if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
-    });
+    const waited = await planWaitTiles(map);
+    if (!waited.tilesOk) return { ok: false, detail: waited.detail };
     const rect = canvas.getBoundingClientRect();
     const ignore = [];
     const chrome = [];
@@ -7119,8 +7148,11 @@ async function capturePlanCanvas(send) {
     };
     for (const node of document.querySelectorAll('[data-iss-clock], [data-iss-edition]')) take(node, ignore);
     for (const node of document.querySelectorAll('[data-iss-controls], [data-iss-split-chrome], .maplibregl-ctrl')) take(node, chrome);
-    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height, ignore, chrome };
+    return { ok: true, x: rect.x, y: rect.y, width: rect.width, height: rect.height, ignore, chrome };
   })()`);
+  if (box && box.ok === false) {
+    throw new Error(`plan label tiles ${JSON.stringify({ ok: false, check: 'tiles', reason: 'paint', detail: box.detail })}`);
+  }
   await new Promise((resolve) => setTimeout(resolve, 200));
   if (!box || !(box.width > 2) || !(box.height > 2)) return null;
   const image = await send('Page.captureScreenshot', {

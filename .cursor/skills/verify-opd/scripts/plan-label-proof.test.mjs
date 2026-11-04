@@ -187,15 +187,40 @@ test('Kenya west settles inside the repaint idle limit and drops the listener', 
   assert.ok(waited.repaintMs >= 900 && waited.repaintMs < 1500, waited.repaintMs);
 });
 
-test('a loaded map that never emits idle still settles when the map reports loaded', async () => {
+test('a render settles the gate when raster tiles are loaded and another source never goes idle', async () => {
   const { planWaitTiles } = loadHelpers();
   const map = waitingMap({ idle: false });
-  map.loaded = () => true;
+  map.loaded = () => false;
+  map.areTilesLoaded = () => false;
   map.isMoving = () => false;
+  const renderListeners = [];
+  const baseOn = map.on;
+  map.on = (event, callback) => {
+    if (event === 'render') {
+      renderListeners.push(callback);
+      return;
+    }
+    baseOn(event, callback);
+  };
+  map.triggerRepaint = () => {
+    for (const callback of renderListeners.slice()) callback();
+  };
   const started = Date.now();
   const waited = await planWaitTiles(map);
   assert.equal(waited.tilesOk, true, JSON.stringify(waited.detail));
   assert.ok(Date.now() - started < 800, Date.now() - started);
+  assert.equal(map.listeners(), 0);
+});
+
+test('loaded() without a render or an idle is still a tile failure', async () => {
+  const { planWaitTiles } = loadHelpers();
+  const map = waitingMap({ idle: false });
+  map.loaded = () => true;
+  map.areTilesLoaded = () => true;
+  map.isMoving = () => false;
+  const waited = await planWaitTiles(map);
+  assert.equal(waited.tilesOk, false);
+  assert.equal(waited.detail.idle, false);
   assert.equal(map.listeners(), 0);
 });
 
@@ -207,6 +232,32 @@ test('a map that is not loaded and never goes idle is still a tile failure', asy
   const waited = await planWaitTiles(map);
   assert.equal(waited.tilesOk, false);
   assert.equal(waited.detail.idle, false);
+  assert.equal(map.listeners(), 0);
+});
+
+test('a loading in-view raster tile omitted from the renderable list holds the gate', async () => {
+  const { planWaitTiles } = loadHelpers();
+  const map = waitingMap({ idle: true });
+  const visible = map.style.tileManagers['inset-labels'].getVisibleCoordinates()[0];
+  const hidden = {
+    tileID: { canonical: { z: visible.canonical.z, x: visible.canonical.x + 1, y: visible.canonical.y }, key: 'hidden' },
+    state: 'loading',
+  };
+  for (const id of ['inset-labels', 'inset-basemap']) {
+    map.style.tileManagers[id]._inViewTiles = {
+      getAllTiles: () => [
+        hidden,
+        { tileID: { canonical: visible.canonical, key: 'center' }, state: 'loaded' },
+      ],
+    };
+  }
+  setTimeout(() => {
+    hidden.state = 'loaded';
+  }, 250);
+  const started = Date.now();
+  const waited = await planWaitTiles(map);
+  assert.equal(waited.tilesOk, true, JSON.stringify(waited.detail));
+  assert.ok(Date.now() - started >= 200, Date.now() - started);
   assert.equal(map.listeners(), 0);
 });
 
