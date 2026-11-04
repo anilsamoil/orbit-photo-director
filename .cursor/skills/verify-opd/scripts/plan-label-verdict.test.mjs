@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { decodePng } from './rotated-name-count.mjs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { countCountryGlyphs, countryGlyphBoxes, decodePng } from './rotated-name-count.mjs';
 import vm from 'node:vm';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -367,6 +367,14 @@ test('glyph ink, not the padded OCR box, meets the shared one-pixel clock rule',
   assert.match(off, /releasePlanCamera\(/);
   assert.match(check, /pairedRasterNames\(/);
   assert.match(check, /frameNameVerdict\(/);
+  assert.match(check, /mainChromeRects: row\.mainChromeRects/);
+  assert.match(check, /mainIgnoreRects: row\.mainIgnoreRects/);
+  const openMain = drive.slice(drive.indexOf('async function openPlanMain'), drive.indexOf('async function forgetMainLease'));
+  assert.match(openMain, /openDeviceContext\(/);
+  assert.doesNotMatch(openMain, /session\.context\.addCookies|session\.context\.newPage/);
+  assert.match(openMain, /finally \{/);
+  assert.ok(openMain.indexOf('finally {') > openMain.indexOf('leaseMainFixture'), 'the lease release covers setup after registration');
+  assert.match(openMain, /if \(!handed\) await releaseMainLease\(lease\)/);
   assert.match(check, /countCountryGlyphs|kenyaWest/);
   assert.match(drive, /KENYA_WEST_RASTER_COUNT/);
   assert.doesNotMatch(check, /row\.rasterCount|loadMainRaster|counts\.json/);
@@ -529,30 +537,31 @@ test('edited Kenya-west frames fail the name count in both engines while staying
   assert.equal(seen.ok, true, JSON.stringify(seen));
   assert.equal(seen.count, 2);
   assert.equal(KENYA_WEST_RASTER_COUNT, 2);
+  const four = [
+    ['chromium', 'three', 3, 2],
+    ['chromium', 'chrome', 1, 2],
+    ['webkit', 'egypt', 1, 2],
+    ['webkit', 'three', 3, 2],
+  ];
+  const blobPassed = [];
+  for (const [engine, name, headCount, mainCount] of four) {
+    const head = loadRegression(engine, name);
+    const main = loadRegression(engine, 'main');
+    const ignore = name === 'chrome' ? { ignoreRects: [chrome] } : {};
+    const strictHead = countCountryGlyphs(head.data, head.width, head.height, 'Kenya', ignore);
+    const strictMain = countCountryGlyphs(main.data, main.width, main.height, 'Kenya');
+    assert.equal(strictHead, headCount, `${engine} ${name} head`);
+    assert.equal(strictMain, mainCount, `${engine} ${name} main`);
+    const looseHead = countryGlyphBoxes(head.data, head.width, head.height, 'Kenya', { confirmName: () => true }).length;
+    const looseMain = countryGlyphBoxes(main.data, main.width, main.height, 'Kenya', { confirmName: () => true }).length;
+    if (looseHead === looseMain) blobPassed.push(`${engine} ${name}`);
+  }
+  assert.deepEqual(blobPassed, ['chromium chrome', 'webkit egypt']);
 });
 
 test('painted-out and duplicated CANADA fail the name check inside the pixel limit', () => {
-  const drawn = execFileSync('python3', ['-c', String.raw`
-import os
-from PIL import Image, ImageDraw, ImageFont
-out = os.environ['OPD_CANADA_FRAMES']
-os.makedirs(out, exist_ok=True)
-font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 22)
-def frame(words):
-    image = Image.new('RGBA', (492, 690), (24, 26, 28, 255))
-    draw = ImageDraw.Draw(image)
-    for text, x, y in words:
-        draw.text((x, y), text, font=font, fill=(236, 232, 220, 255))
-    return image
-main = frame([('CANADA', 180, 300)])
-main.save(out + '/main.png')
-frame([]).save(out + '/painted-out.png')
-frame([('CANADA', 180, 300), ('CANADA', 180, 340)]).save(out + '/duplicated.png')
-print('ok')
-`], { env: { ...process.env, OPD_CANADA_FRAMES: '/tmp/opd-canada-frames' } });
-  assert.match(drawn.toString(), /ok/);
   const load = (name) => {
-    const png = readFileSync(`/tmp/opd-canada-frames/${name}.png`);
+    const png = readFileSync(new URL(`./fixtures/plan-label-regression/canada-${name}.png`, import.meta.url));
     return { ...decodePng(png), png };
   };
   const main = load('main');
@@ -565,5 +574,44 @@ print('ok')
     const verdict = frameNameVerdict(head, main, 'Canada');
     if (verdict.ok !== false) missed.push(`${name} passed`);
   }
+  const blank = load('painted-out');
+  const empty = frameNameVerdict(blank, blank, 'Canada');
+  if (empty.ok !== false || empty.reason !== 'unread') missed.push(`empty read ${empty.reason || 'passed'}`);
+  const clock = { left: 160, top: 280, right: 260, bottom: 340 };
+  const covered = {
+    ...main,
+    data: new Uint8Array(main.data),
+    png: main.png,
+  };
+  for (let y = clock.top; y < clock.bottom; y += 1) {
+    for (let x = clock.left; x < clock.right; x += 1) {
+      const index = (y * covered.width + x) * 4;
+      covered.data[index] = 12;
+      covered.data[index + 1] = 14;
+      covered.data[index + 2] = 16;
+    }
+  }
+  const shared = frameNameVerdict(covered, main, 'Canada', { chromeRects: [clock], mainChromeRects: [clock] });
+  const separate = frameNameVerdict(covered, main, 'Canada', { chromeRects: [clock], mainChromeRects: [] });
+  if (shared.ok !== true) missed.push(`shared clock mask ${shared.reason}`);
+  if (separate.ok !== false) missed.push('separate clock mask passed');
   assert.deepEqual(missed, []);
+});
+
+test('docs do not keep the calib fixture value', () => {
+  const token = ['machine', 'secret'].join('-');
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
+  const files = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === 'node_modules' || entry.name === '.git') continue;
+      const path = resolve(dir, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else if (entry.name.endsWith('.md')) files.push(path);
+    }
+  };
+  walk(resolve(root, 'docs'));
+  walk(resolve(root, '.cursor/skills/verify-opd'));
+  const hits = files.filter((file) => readFileSync(file, 'utf8').includes(token));
+  assert.deepEqual(hits, []);
 });

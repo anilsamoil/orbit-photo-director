@@ -3,11 +3,10 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createServer } from 'node:http';
-import { mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, chmodSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readFileSync } from 'node:fs';
-import { checkRasterOcr, clearRasterOcrRun, countryRasterUrls, ocrPython, ocrRasterTile, rasterWords, readableRasterName, rasterOcrStats } from './raster-ocr.mjs';
+import { checkRasterOcr, clearRasterOcrRun, countryRasterUrls, ocrFrame, ocrPython, ocrRasterTile, rasterWords, readableRasterName, rasterOcrStats } from './raster-ocr.mjs';
 
 const moduleUrl = new URL('./raster-ocr.mjs', import.meta.url).href;
 function subprocess(env) {
@@ -101,4 +100,44 @@ test('centroid neighborhoods only select already rendered URLs and retain seam n
   assert.ok(selected.includes('https://tiles.invalid/reference/tile/3/4/7'));
   const available=selected.filter(url=>!url.endsWith('/4/7'));
   assert.deepEqual(countryRasterUrls(available,{lng:134,lat:-25}),available,'missing offscreen neighbor must never be fetched or manufactured');
+});
+
+test('a stuck tesseract is killed with its session and does not hold the node timeout', () => {
+  const source = readFileSync(new URL('./raster-ocr.mjs', import.meta.url), 'utf8');
+  const helper = readFileSync(new URL('./raster-ocr.py', import.meta.url), 'utf8');
+  assert.match(source, /OPD_VERIFY_OCR_PASS_TIMEOUT \|\| 60/);
+  assert.match(source, /passes \* seconds \* 1000 \+ 20000/);
+  assert.doesNotMatch(helper, /'stdin', 'stdout'/);
+  assert.match(helper, /start_new_session=True/);
+  assert.match(helper, /os\.killpg\(proc\.pid, signal\.SIGKILL\)/);
+  const dir = mkdtempSync(join(tmpdir(), 'opd-ocr-hang-'));
+  const fake = join(dir, 'tesseract');
+  const pidfile = join(dir, 'pid');
+  writeFileSync(fake, `#!/bin/sh\necho $$ > ${JSON.stringify(pidfile)}\ntrap '' TERM INT\nsleep 30\n`);
+  chmodSync(fake, 0o700);
+  const previous = {
+    tesseract: process.env.OPD_VERIFY_TESSERACT,
+    timeout: process.env.OPD_VERIFY_OCR_PASS_TIMEOUT,
+    pid: process.env.OPD_OCR_PIDFILE,
+  };
+  process.env.OPD_VERIFY_TESSERACT = fake;
+  process.env.OPD_VERIFY_OCR_PASS_TIMEOUT = '1';
+  process.env.OPD_OCR_PIDFILE = pidfile;
+  const started = Date.now();
+  try {
+    assert.throws(() => ocrFrame(labelPng('KENYA')), /tesseract timed out/);
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed < 8000, `hung for ${elapsed}ms`);
+    const pid = readFileSync(pidfile, 'utf8').trim();
+    assert.notEqual(spawnSync('kill', ['-0', pid]).status, 0, 'the tesseract session was still alive');
+  } finally {
+    if (previous.tesseract === undefined) delete process.env.OPD_VERIFY_TESSERACT;
+    else process.env.OPD_VERIFY_TESSERACT = previous.tesseract;
+    if (previous.timeout === undefined) delete process.env.OPD_VERIFY_OCR_PASS_TIMEOUT;
+    else process.env.OPD_VERIFY_OCR_PASS_TIMEOUT = previous.timeout;
+    if (previous.pid === undefined) delete process.env.OPD_OCR_PIDFILE;
+    else process.env.OPD_OCR_PIDFILE = previous.pid;
+    rmSync(dir, { recursive: true, force: true });
+  }
+  assert.match(ocrFrame(labelPng('KENYA')).text, /KENYA/);
 });

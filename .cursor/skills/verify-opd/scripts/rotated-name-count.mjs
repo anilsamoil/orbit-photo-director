@@ -1,4 +1,5 @@
-import { inflateSync } from 'node:zlib';
+import { deflateSync, inflateSync } from 'node:zlib';
+import { ocrCropTexts } from './raster-ocr.mjs';
 
 /** Decode an 8-bit RGB or RGBA PNG, including a data URL, into straight pixels. */
 export function decodePng(input) {
@@ -390,6 +391,89 @@ function mergeBoxes(boxes) {
   return open;
 }
 
+const CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let index = 0; index < 256; index += 1) {
+    let value = index;
+    for (let bit = 0; bit < 8; bit += 1) value = (value & 1) ? (0xedb88320 ^ (value >>> 1)) : (value >>> 1);
+    table[index] = value >>> 0;
+  }
+  return table;
+})();
+
+function crc32(buffer) {
+  let crc = 0xffffffff;
+  for (const byte of buffer) crc = CRC_TABLE[(crc ^ byte) & 255] ^ (crc >>> 8);
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type, data) {
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length);
+  const body = Buffer.concat([Buffer.from(type), data]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(body));
+  return Buffer.concat([length, body, crc]);
+}
+
+function encodePng(pixels, width, height) {
+  const raw = Buffer.alloc((width * 4 + 1) * height);
+  for (let y = 0; y < height; y += 1) {
+    const start = y * (width * 4 + 1);
+    raw[start] = 0;
+    Buffer.from(pixels.buffer, pixels.byteOffset + y * width * 4, width * 4).copy(raw, start + 1);
+  }
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header[8] = 8;
+  header[9] = 6;
+  return Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    pngChunk('IHDR', header),
+    pngChunk('IDAT', deflateSync(raw)),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+function cropPng(pixels, width, height, box) {
+  const pad = 16;
+  let x0 = Math.max(0, Math.floor(Math.min(box[0], box[2])) - pad);
+  let y0 = Math.max(0, Math.floor(Math.min(box[1], box[3])) - pad);
+  let x1 = Math.min(width, Math.ceil(Math.max(box[0], box[2])) + pad);
+  let y1 = Math.min(height, Math.ceil(Math.max(box[1], box[3])) + pad);
+  if (y1 - y0 < 28) {
+    const mid = (y0 + y1) / 2;
+    y0 = Math.max(0, Math.floor(mid - 14));
+    y1 = Math.min(height, y0 + 28);
+  }
+  if (x1 <= x0 || y1 <= y0) return null;
+  const crop = new Uint8Array((x1 - x0) * (y1 - y0) * 4);
+  for (let y = y0; y < y1; y += 1) {
+    crop.set(pixels.subarray((y * width + x0) * 4, (y * width + x1) * 4), (y - y0) * (x1 - x0) * 4);
+  }
+  return encodePng(crop, x1 - x0, y1 - y0);
+}
+
+function countryLetters(text) {
+  return String(text || '').toUpperCase().replace(/[^A-Z]/g, '');
+}
+
+function nearDot(box, dots) {
+  return (dots || []).some((dot) => dot.x >= box[0] - 16 && dot.x <= box[2] + 16 && dot.y >= box[1] - 16 && dot.y <= box[3] + 16);
+}
+
+/** A blob counts only when its letters are that country. Empty noise can be a rotated border name; a different word cannot. */
+function readsAsCountry(text, country, candidate, dots) {
+  const name = String(country || '').replace(/[^a-z]/gi, '').toUpperCase();
+  const letters = countryLetters(text);
+  if (name && letters === name) return true;
+  if (letters.length >= 3) return false;
+  if (!name || candidate.letters < name.length - 1 || candidate.letters > name.length + 1) return false;
+  if (candidate.angle < 18 || candidate.angle > 75) return false;
+  return !nearDot(candidate.box, dots);
+}
+
 export function countryGlyphBoxes(pixels, width, height, country, options = {}) {
   const found = rotatedNameSpans(pixels, width, height);
   const letters = dedupedLetters(Array.isArray(found) ? [] : found.letters).filter((letter) => neutralInk(pixels, width, height, letter) && !covered(letter, options.ignoreRects));
@@ -417,7 +501,7 @@ export function countryGlyphBoxes(pixels, width, height, country, options = {}) 
     group.push(letter);
     groups.set(key, group);
   });
-  const boxes = [];
+  const candidates = [];
   for (const group of groups.values()) {
     for (const line of parallelLines(group)) {
       if (line.length < nameLength - 1 || line.length > nameLength + 1) continue;
@@ -431,10 +515,22 @@ export function countryGlyphBoxes(pixels, width, height, country, options = {}) 
       const spanY = Math.max(...ys) - Math.min(...ys);
       const angle = Math.abs(Math.atan2(spanY, spanX) * 180 / Math.PI);
       if (angle < 12 && line.length !== nameLength && Math.abs(line.length - nameLength) > 1) continue;
-      boxes.push([Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]);
+      candidates.push({
+        box: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)],
+        angle,
+        letters: line.length,
+      });
     }
   }
-  return mergeBoxes(boxes);
+  const dots = Array.isArray(found) ? [] : found.dots;
+  if (options.confirmName) {
+    return mergeBoxes(candidates.filter((candidate) => options.confirmName(candidate)).map((candidate) => candidate.box));
+  }
+  if (!candidates.length) return [];
+  const crops = candidates.map((candidate) => cropPng(pixels, width, height, candidate.box));
+  if (crops.some((crop) => !crop)) return [];
+  const texts = ocrCropTexts(crops);
+  return mergeBoxes(candidates.filter((candidate, index) => readsAsCountry(texts[index], country, candidate, dots)).map((candidate) => candidate.box));
 }
 
 export function countCountryGlyphs(pixels, width, height, country, options = {}) {

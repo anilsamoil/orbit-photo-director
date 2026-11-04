@@ -282,13 +282,16 @@ function boxDiffers(left, right, box) {
 
 /** How many times each plan country is readable in this frame. A stored count is not a reading. */
 export function frameCountryNames(image, options = {}) {
-  if (!image || !image.png) return { ok: false, reason: 'frame', counts: {} };
+  if (!image || !image.png) return { ok: false, reason: 'frame', counts: {}, words: [] };
   const recognized = ocrFrame(image.png);
+  if (!recognized || !Array.isArray(recognized.words) || recognized.words.length === 0) {
+    return { ok: false, reason: 'unread', counts: {}, words: [] };
+  }
   const names = new Set(PLAN_COUNTRIES.map((entry) => entry.name.toUpperCase()));
   const chrome = options.chromeRects || [];
   const words = [];
   const counts = {};
-  for (const word of recognized.words || []) {
+  for (const word of recognized.words) {
     const text = String(word.text || '').toUpperCase().replace(/[^A-Z]/g, '');
     if (!names.has(text) || word.uppercase === false) continue;
     const box = word.box || [0, 0, 0, 0];
@@ -299,8 +302,7 @@ export function frameCountryNames(image, options = {}) {
   return { ok: true, counts, words };
 }
 
-function confirmedCounts(image, other, chrome) {
-  const found = frameCountryNames(image, { chromeRects: chrome });
+function countsFromWords(found, image, other) {
   const counts = {};
   for (const word of found.words || []) {
     if (other && !boxDiffers(image, other, word.box)) continue;
@@ -312,22 +314,28 @@ function confirmedCounts(image, other, chrome) {
 /** Name identity and occurrence count, read from the head frame and the main frame. */
 export function frameNameVerdict(head, main, country, options = {}) {
   const chrome = options.chromeRects || [];
-  const mainChrome = options.mainChromeRects || chrome;
-  const leftCounts = confirmedCounts(head, main, chrome);
-  const rightCounts = confirmedCounts(main, head, mainChrome);
+  const mainChrome = options.mainChromeRects || [];
+  const leftFound = frameCountryNames(head, { chromeRects: chrome });
+  const rightFound = frameCountryNames(main, { chromeRects: mainChrome });
+  const leftCounts = leftFound.ok ? countsFromWords(leftFound, head, main) : {};
+  const rightCounts = rightFound.ok ? countsFromWords(rightFound, main, head) : {};
   const key = String(country || '').toUpperCase();
   const headCount = leftCounts[key] || 0;
   const mainCount = rightCounts[key] || 0;
-  const count = occurrenceCount(headCount, mainCount);
+  if (!leftFound.ok || !rightFound.ok) {
+    return { ok: false, check: 'name', reason: 'unread', count: headCount, expected: mainCount, head: leftCounts, main: rightCounts };
+  }
   const stable = (counts) => JSON.stringify(Object.fromEntries(Object.entries(counts).sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))));
   if (stable(leftCounts) !== stable(rightCounts)) {
     return { ok: false, check: 'name', reason: 'name', count: headCount, expected: mainCount, head: leftCounts, main: rightCounts };
   }
+  const count = occurrenceCount(headCount, mainCount);
   if (!count.ok) return { ok: false, check: 'count', reason: 'count', count: headCount, expected: mainCount, head: leftCounts, main: rightCounts };
   if (options.kenyaWest && head.data && main.data) {
-    const blocked = [...(options.chromeRects || []), ...(options.ignoreRects || [])];
-    const headGlyphs = countCountryGlyphs(head.data, head.width, head.height, country, { ignoreRects: blocked });
-    const mainGlyphs = countCountryGlyphs(main.data, main.width, main.height, country, { ignoreRects: options.mainIgnoreRects || blocked });
+    const headBlocked = [...chrome, ...(options.ignoreRects || [])];
+    const mainBlocked = [...mainChrome, ...(options.mainIgnoreRects || [])];
+    const headGlyphs = countCountryGlyphs(head.data, head.width, head.height, country, { ignoreRects: headBlocked });
+    const mainGlyphs = countCountryGlyphs(main.data, main.width, main.height, country, { ignoreRects: mainBlocked });
     const same = occurrenceCount(headGlyphs, mainGlyphs);
     if (!same.ok) return { ok: false, check: 'count', reason: 'count', count: headGlyphs, expected: mainGlyphs, head: leftCounts, main: rightCounts };
     return { ok: true, check: 'count', count: headGlyphs, expected: mainGlyphs, head: leftCounts, main: rightCounts };

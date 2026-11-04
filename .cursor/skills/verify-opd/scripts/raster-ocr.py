@@ -4,13 +4,51 @@ import csv
 import io
 import json
 import os
+import signal
 import subprocess
 import sys
+import tempfile
 
 try:
     from PIL import Image, ImageDraw, ImageFont, ImageOps
 except ImportError as error:
     raise SystemExit('raster OCR needs Pillow in OPD_VERIFY_OCR_PYTHON') from error
+
+
+def run_tesseract(png_bytes, psm):
+    # tesseract's stdin reader blocks until EOF while its stderr fills the pipe,
+    # so the parent waits out the whole limit and the orphan keeps the next call
+    # from finishing. A file has an end, and the child's session dies with it.
+    handle, path = tempfile.mkstemp(prefix='opd-ocr-', suffix='.png')
+    os.close(handle)
+    proc = None
+    try:
+        with open(path, 'wb') as image_file:
+            image_file.write(png_bytes)
+        proc = subprocess.Popen(
+            [os.environ.get('OPD_VERIFY_TESSERACT', 'tesseract'), path, 'stdout', '-l', 'eng', '--psm', str(psm), 'tsv'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+            env={**os.environ, 'OMP_THREAD_LIMIT': '1'},
+        )
+        try:
+            stdout, stderr = proc.communicate(timeout=float(os.environ.get('OPD_VERIFY_OCR_PASS_TIMEOUT', '60')))
+        except subprocess.TimeoutExpired:
+            os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait(timeout=5)
+            raise RuntimeError('tesseract timed out') from None
+        if proc.returncode:
+            raise RuntimeError('tesseract failed: ' + stderr.decode('utf8', 'replace')[:600])
+        return stdout
+    finally:
+        if proc and proc.poll() is None:
+            os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait(timeout=5)
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 def recognize(image, psm=11):
@@ -23,10 +61,7 @@ def recognize(image, psm=11):
         large = ImageOps.autocontrast(comp.resize((comp.width * scale, comp.height * scale), Image.Resampling.LANCZOS))
         buf = io.BytesIO()
         large.save(buf, format='PNG')
-        result = subprocess.run([os.environ.get('OPD_VERIFY_TESSERACT', 'tesseract'), 'stdin', 'stdout', '-l', 'eng', '--psm', str(psm), 'tsv'], input=buf.getvalue(), capture_output=True, timeout=float(os.environ.get('OPD_VERIFY_OCR_PASS_TIMEOUT', '60')), env={**os.environ, 'OMP_THREAD_LIMIT': '1'})
-        if result.returncode:
-            raise RuntimeError('tesseract failed: ' + result.stderr.decode('utf8', 'replace')[:600])
-        rows = csv.DictReader(io.StringIO(result.stdout.decode('utf8', 'replace')), delimiter='\t', quoting=csv.QUOTE_NONE)
+        rows = csv.DictReader(io.StringIO(run_tesseract(buf.getvalue(), psm).decode('utf8', 'replace')), delimiter='\t', quoting=csv.QUOTE_NONE)
         lines = {}
         for row in rows:
             text = row.get('text', '').strip().upper()
@@ -42,15 +77,26 @@ def recognize(image, psm=11):
     return output
 
 
+def read_line(image):
+    comp = Image.alpha_composite(Image.new('RGBA', image.size, (24, 26, 28, 255)), image.convert('RGBA')).convert('L')
+    large = ImageOps.autocontrast(comp.resize((max(1, comp.width * 3), max(1, comp.height * 3)), Image.Resampling.LANCZOS))
+    buf = io.BytesIO()
+    large.save(buf, format='PNG')
+    rows = csv.DictReader(io.StringIO(run_tesseract(buf.getvalue(), 7).decode('utf8', 'replace')), delimiter='\t', quoting=csv.QUOTE_NONE)
+    words = []
+    for row in rows:
+        text = row.get('text', '').strip()
+        if text and row.get('level') == '5':
+            words.append(text)
+    return ' '.join(words)
+
+
 def recognize_frame(image):
     comp = Image.alpha_composite(Image.new('RGBA', image.size, (24, 26, 28, 255)), image.convert('RGBA')).convert('L')
     large = ImageOps.autocontrast(comp)
     buf = io.BytesIO()
     large.save(buf, format='PNG')
-    result = subprocess.run([os.environ.get('OPD_VERIFY_TESSERACT', 'tesseract'), 'stdin', 'stdout', '-l', 'eng', '--psm', '11', 'tsv'], input=buf.getvalue(), capture_output=True, timeout=float(os.environ.get('OPD_VERIFY_OCR_PASS_TIMEOUT', '60')), env={**os.environ, 'OMP_THREAD_LIMIT': '1'})
-    if result.returncode:
-        raise RuntimeError('tesseract failed: ' + result.stderr.decode('utf8', 'replace')[:600])
-    rows = csv.DictReader(io.StringIO(result.stdout.decode('utf8', 'replace')), delimiter='\t', quoting=csv.QUOTE_NONE)
+    rows = csv.DictReader(io.StringIO(run_tesseract(buf.getvalue(), 11).decode('utf8', 'replace')), delimiter='\t', quoting=csv.QUOTE_NONE)
     words = []
     for row in rows:
         text = row.get('text', '').strip().upper()
@@ -61,44 +107,63 @@ def recognize_frame(image):
     return words
 
 
-if '--doctor' in sys.argv:
-    image = Image.new('RGBA', (500, 100), 'white')
-    font = None
-    for path in ['/System/Library/Fonts/Supplemental/Arial.ttf', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf']:
-        try:
-            font = ImageFont.truetype(path, 28)
-            break
-        except OSError:
-            pass
-    if font is None:
-        font = ImageFont.load_default()
-    ImageDraw.Draw(image).text((12, 20), 'AUSTRALIA NIGERIA KENYA', font=font, fill='black')
-    words = recognize(image, 6)
-    text = ' '.join(row['text'] for line in words for row in line)
-    if not all(name in text.split() for name in ['AUSTRALIA', 'NIGERIA', 'KENYA']):
-        raise RuntimeError('known-text OCR probe did not read AUSTRALIA NIGERIA KENYA: ' + text)
-    print(json.dumps({'ok': True, 'python': sys.executable, 'probe': text}))
-else:
+def emit_frame(path):
+    image = Image.open(path).convert('RGBA')
+    words = recognize_frame(image)
+    print(json.dumps({'words': words, 'text': ' '.join(word['text'] for word in words)}))
+
+
+def emit_crops():
     data = json.load(sys.stdin)
-    if data.get('frame'):
-        image = Image.open(io.BytesIO(base64.b64decode(data['frame']))).convert('RGBA')
-        words = recognize_frame(image)
-        print(json.dumps({'words': words, 'text': ' '.join(word['text'] for word in words)}))
-        raise SystemExit(0)
-    tiles = data['tiles']
-    left = min(tile['x'] for tile in tiles)
-    top = min(tile['y'] for tile in tiles)
-    right = max(tile['x'] for tile in tiles) + 1
-    bottom = max(tile['y'] for tile in tiles) + 1
-    image = Image.new('RGBA', ((right-left)*256, (bottom-top)*256))
-    for tile in tiles:
-        decoded = Image.open(io.BytesIO(base64.b64decode(tile['bytes']))).convert('RGBA')
-        if decoded.size != (256, 256):
-            raise RuntimeError('unexpected raster tile dimensions: ' + str(decoded.size))
-        image.paste(decoded, ((tile['x']-left)*256, (tile['y']-top)*256))
-    words = recognize(image)
-    for line in words:
-        for word in line:
-            x1, y1, x2, y2 = word['box']
-            word['box'] = [x1+left*256, y1+top*256, x2+left*256, y2+top*256]
-    print(json.dumps({'lines': words, 'words': [word for line in words for word in line], 'text': '\n'.join(' '.join(word['text'] for word in line) for line in words)}))
+    texts = [read_line(Image.open(io.BytesIO(base64.b64decode(crop))).convert('RGBA')) for crop in data.get('crops') or []]
+    print(json.dumps({'texts': texts}))
+
+
+def fail(error):
+    print(error, file=sys.stderr)
+    raise SystemExit(1)
+
+
+try:
+    if '--frame' in sys.argv:
+        emit_frame(sys.argv[sys.argv.index('--frame') + 1])
+    elif '--crops' in sys.argv:
+        emit_crops()
+    elif '--doctor' in sys.argv:
+        image = Image.new('RGBA', (500, 100), 'white')
+        font = None
+        for path in ['/System/Library/Fonts/Supplemental/Arial.ttf', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf']:
+            try:
+                font = ImageFont.truetype(path, 28)
+                break
+            except OSError:
+                pass
+        if font is None:
+            font = ImageFont.load_default()
+        ImageDraw.Draw(image).text((12, 20), 'AUSTRALIA NIGERIA KENYA', font=font, fill='black')
+        words = recognize(image, 6)
+        text = ' '.join(row['text'] for line in words for row in line)
+        if not all(name in text.split() for name in ['AUSTRALIA', 'NIGERIA', 'KENYA']):
+            raise RuntimeError('known-text OCR probe did not read AUSTRALIA NIGERIA KENYA: ' + text)
+        print(json.dumps({'ok': True, 'python': sys.executable, 'probe': text}))
+    else:
+        data = json.load(open(sys.argv[sys.argv.index('--tiles') + 1]) if '--tiles' in sys.argv else sys.stdin)
+        tiles = data['tiles']
+        left = min(tile['x'] for tile in tiles)
+        top = min(tile['y'] for tile in tiles)
+        right = max(tile['x'] for tile in tiles) + 1
+        bottom = max(tile['y'] for tile in tiles) + 1
+        image = Image.new('RGBA', ((right - left) * 256, (bottom - top) * 256))
+        for tile in tiles:
+            decoded = Image.open(io.BytesIO(base64.b64decode(tile['bytes']))).convert('RGBA')
+            if decoded.size != (256, 256):
+                raise RuntimeError('unexpected raster tile dimensions: ' + str(decoded.size))
+            image.paste(decoded, ((tile['x'] - left) * 256, (tile['y'] - top) * 256))
+        words = recognize(image)
+        for line in words:
+            for word in line:
+                x1, y1, x2, y2 = word['box']
+                word['box'] = [x1 + left * 256, y1 + top * 256, x2 + left * 256, y2 + top * 256]
+        print(json.dumps({'lines': words, 'words': [word for line in words for word in line], 'text': '\n'.join(' '.join(word['text'] for word in line) for line in words)}))
+except Exception as error:
+    fail(error)

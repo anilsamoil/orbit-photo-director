@@ -1,7 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { countryLabelCountsScreen, letteringOccluded } from '../../../../frontend/src/map/adapters/maplibre/country-label-size.ts';
 
@@ -61,20 +62,55 @@ export function clearRasterOcrRun() {
   rasterOcrStats.hits = 0;
 }
 
+function runHelper(args, input, passes, maxBuffer) {
+  const result = spawnSync(ocrPython(), [helper, ...args], {
+    input,
+    encoding: 'utf8',
+    timeout: ocrTimeout(passes),
+    maxBuffer,
+    killSignal: 'SIGTERM',
+  });
+  return result;
+}
+
 export function ocrFrame(bytes) {
-  const input = JSON.stringify({ frame: Buffer.from(bytes).toString('base64') });
-  const result = spawnSync(ocrPython(), [helper], { input, encoding: 'utf8', timeout: ocrTimeout(1), maxBuffer: 8 * 1024 * 1024 });
-  if (result.status !== 0) throw new Error(`frame OCR failed: ${(result.stderr || result.error || '').toString().slice(0, 500)}`);
-  return JSON.parse(result.stdout);
+  const dir = mkdtempSync(join(tmpdir(), 'opd-ocr-frame-'));
+  const file = join(dir, 'frame.png');
+  try {
+    writeFileSync(file, Buffer.from(bytes));
+    const result = runHelper(['--frame', file], undefined, 1, 8 * 1024 * 1024);
+    if (result.status !== 0) throw new Error(`frame OCR failed: ${(result.stderr || result.error || '').toString().slice(0, 500)}`);
+    return JSON.parse(result.stdout);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+export function ocrCropTexts(pngs) {
+  if (!pngs.length) return [];
+  const input = JSON.stringify({ crops: pngs.map((png) => Buffer.from(png).toString('base64')) });
+  const result = runHelper(['--crops'], input, 1, 8 * 1024 * 1024);
+  if (result.status !== 0) throw new Error(`line OCR failed: ${(result.stderr || result.error || '').toString().slice(0, 500)}`);
+  const parsed = JSON.parse(result.stdout);
+  if (!parsed || !Array.isArray(parsed.texts) || parsed.texts.length !== pngs.length) {
+    throw new Error('line OCR returned no reading');
+  }
+  return parsed.texts;
 }
 
 export function ocrRasterTile(tiles) {
   rasterOcrStats.calls += 1;
   const normalized = Buffer.isBuffer(tiles) ? [{ x: 0, y: 0, bytes: tiles }] : tiles;
-  const input = JSON.stringify({ tiles: normalized.map(tile => ({ ...tile, bytes: tile.bytes.toString('base64') })) });
-  const result = spawnSync(ocrPython(), [helper], { input, encoding: 'utf8', timeout: ocrTimeout(3), maxBuffer: 16 * 1024 * 1024 });
-  if (result.status !== 0) throw new Error(`raster tile OCR failed: ${(result.stderr || result.error || '').toString().slice(0, 1000)}`);
-  return JSON.parse(result.stdout);
+  const dir = mkdtempSync(join(tmpdir(), 'opd-ocr-tiles-'));
+  const file = join(dir, 'tiles.json');
+  try {
+    writeFileSync(file, JSON.stringify({ tiles: normalized.map(tile => ({ ...tile, bytes: tile.bytes.toString('base64') })) }));
+    const result = runHelper(['--tiles', file], undefined, 3, 16 * 1024 * 1024);
+    if (result.status !== 0) throw new Error(`raster tile OCR failed: ${(result.stderr || result.error || '').toString().slice(0, 1000)}`);
+    return JSON.parse(result.stdout);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 async function fetchTile(url) {

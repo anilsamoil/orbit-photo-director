@@ -8,7 +8,7 @@ import { earthAfterResizeReaders } from './earth-after-resize.mjs';
 import { auditRasterLevels, countryIdentity, countrySweepZooms, frameNameVerdict, KENYA_WEST_RASTER_COUNT, keptCountrySymbol, loadCountryRasterLevels, matchesMain, occurrenceCount, pairedRasterNames, PLAN_COUNTRIES, planLabelReaders, tilesLoaded } from './plan-label-verdict.mjs';
 import { decodePng } from './rotated-name-count.mjs';
 import { checkRasterOcr, clearRasterOcrRun, rasterOcrStats } from './raster-ocr.mjs';
-import { fixtureCookie, pinFixtureCookie } from './fixture-session.mjs';
+import { pinFixtureCookie } from './fixture-session.mjs';
 import { BOSTON_NADIR_EPOCH_MS, effectiveNowMs, refreshLaunchClock } from './fixtures.mjs';
 import { freezeFixtureClock, restoreFixtureClock } from './fixture-clock.mjs';
 import { proveLaunchPlacement } from './placement-proof.mjs';
@@ -7053,22 +7053,49 @@ async function leaseMainFixture(url, home) {
   return { token, secret, url };
 }
 
+async function releaseMainLease(lease) {
+  if (!lease) return;
+  const home = process.env.OPD_VERIFY_MAIN_HOME;
+  const state = JSON.parse(readFileSync(resolve(home, 'state.json'), 'utf8'));
+  await fetch(`${lease.url}/api/verify/fixtures`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-opd-verify-registry': state.registrySecret },
+    body: JSON.stringify({ token: lease.token, secret: lease.secret, forget: true }),
+  }).catch(() => {});
+}
+
 async function openPlanMain(send) {
   const url = process.env.OPD_VERIFY_MAIN_URL;
   const home = process.env.OPD_VERIFY_MAIN_HOME;
   if (!url || !home) throw new Error('plan label main capture needs OPD_VERIFY_MAIN_URL and OPD_VERIFY_MAIN_HOME');
   const lease = await leaseMainFixture(url, home);
+  let close = async () => {};
+  let handed = false;
+  try {
   const metrics = await evaluate(send, '({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio })');
   let twin;
-  let close = async () => {};
   const cartoDark = [];
   if (send.session) {
-    await send.session.context.addCookies([fixtureCookie(url, lease.token)]);
-    const page = await send.session.context.newPage();
-    page.on('request', (request) => noteRequest(cartoDark, request.url()));
-    twin = playwrightSend({ ...send.session, page, initScripts: [...send.session.initScripts] });
+    const measured = {
+      ...send.session.descriptor,
+      viewport: { width: metrics.w, height: metrics.h },
+      screen: { ...(send.session.descriptor.screen || {}), width: metrics.w, height: metrics.h },
+      deviceScaleFactor: metrics.dpr,
+    };
+    const opened = await openDeviceContext(send.session.browser, {
+      ...send.session.spec,
+      viewport: { width: metrics.w, height: metrics.h },
+      deviceScaleFactor: metrics.dpr,
+    }, {
+      baseUrl: url,
+      fixtureToken: lease.token,
+      initScripts: [...(send.session.initScripts || [])],
+      baseDescriptor: measured,
+      requestHandlers: [(request) => noteRequest(cartoDark, request.url())],
+    });
+    twin = playwrightSend(opened);
     twin.cartoDark = cartoDark;
-    close = async () => { await page.close(); };
+    close = async () => { await opened.context.close(); };
   } else if (send.debugPort) {
     const port = 20000 + Math.floor(Math.random() * 2000);
     const pid = startChrome(resolve(tmpdir(), `opd-main-chrome-${port}`), port);
@@ -7102,15 +7129,14 @@ async function openPlanMain(send) {
     }
     twin.closeMain = close;
     twin.lease = lease;
+    handed = true;
     return twin;
   } catch (error) {
-    await close();
-    await fetch(`${url}/api/verify/fixtures`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-opd-verify-registry': JSON.parse(readFileSync(resolve(home, 'state.json'), 'utf8')).registrySecret },
-      body: JSON.stringify({ token: lease.token, secret: lease.secret, forget: true }),
-    }).catch(() => {});
+    await close().catch(() => {});
     throw error;
+  }
+  } finally {
+    if (!handed) await releaseMainLease(lease);
   }
 }
 
@@ -7223,6 +7249,8 @@ export function assertPlanLabelChecks(row) {
       kenyaWest,
       chromeRects: row.chromeRects || [],
       ignoreRects: row.ignoreRects || [],
+      mainChromeRects: row.mainChromeRects || [],
+      mainIgnoreRects: row.mainIgnoreRects || [],
     });
     if (!named.ok) throw new Error(`plan label ${named.check} ${JSON.stringify({ country: row.country, zoom, reason: named.reason, count: named.count, expected: named.expected, head: named.head, main: named.main })}`);
     return { tiles, identity, count, parity, raster, named };
@@ -7253,6 +7281,8 @@ async function compareLockedPair(headSend, mainSend, lng, lat, zoom, country, ke
     kenyaWest: kenyaWest === true,
     ignoreRects: head.shot ? head.shot.ignore : [],
     chromeRects: head.shot ? head.shot.chrome : [],
+    mainIgnoreRects: main.shot ? main.shot.ignore : [],
+    mainChromeRects: main.shot ? main.shot.chrome : [],
   });
   return { row: head.row, verdict };
 }
@@ -7368,6 +7398,8 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
             kenyaWest,
             ignoreRects: shot ? shot.ignore : [],
             chromeRects: shot ? shot.chrome : [],
+            mainIgnoreRects: main ? main.ignore : [],
+            mainChromeRects: main ? main.chrome : [],
           });
           if (kenyaWest) console.log(`plan labels kenya west glyphs ${verdict.named.count} fixture ${KENYA_WEST_RASTER_COUNT}`);
           return row;
