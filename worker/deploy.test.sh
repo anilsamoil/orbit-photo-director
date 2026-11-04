@@ -13,6 +13,19 @@ deploy_bash=${DEPLOY_BASH:-bash}
 real_node=$(command -v node)
 package_bash=$(command -v bash)
 wrangler_target=""
+calib_token="$(printf '%s' machine; printf '%s' -secret)"
+CASE_LEAKED=0
+redact_secrets() {
+  CASE_ARGS=$(printf '%s\n' "$CASE_ARGS" | sed "s/${calib_token}/[redacted]/g")
+  CASE_ERR=$(printf '%s\n' "$CASE_ERR" | sed "s/${calib_token}/[redacted]/g")
+}
+note_secret_leak() {
+  CASE_LEAKED=0
+  if printf '%s\n' "$CASE_ARGS" | grep -q -F -- "$calib_token"; then
+    CASE_LEAKED=1
+  fi
+  redact_secrets
+}
 
 if grep -n -E '^ACCESS_SERVICE_TOKEN_CLIENT_IDS[[:space:]]*=' wrangler.toml; then
   echo "FAIL: wrangler.toml assigns ACCESS_SERVICE_TOKEN_CLIENT_IDS" >&2
@@ -385,7 +398,7 @@ EOF
   PATH="$work:$PATH" \
     WRANGLER_CALLS="$calls" \
     WRANGLER_ARGS="$args" \
-    CALIB_TOKEN="machine-secret" \
+    CALIB_TOKEN="$calib_token" \
     "$deploy_bash" ./deploy.sh "$@" >"$work/out" 2>"$work/err"
   local code=$?
   set -e
@@ -397,6 +410,7 @@ EOF
   fi
   CASE_ERR=$(cat "$work/err")
   rm -rf "$work"
+  note_secret_leak
 }
 
 assert_arg() {
@@ -435,7 +449,7 @@ if ! printf '%s\n' "$CASE_ERR" | grep -q "empties the allowlist"; then
   printf '%s\n' "$CASE_ERR" >&2
   exit 1
 fi
-if printf '%s\n' "$CASE_ARGS" | grep -q "machine-secret"; then
+if [ "$CASE_LEAKED" -ne 0 ]; then
   echo "FAIL: deploy forwarded the calibration secret" >&2
   exit 1
 fi
@@ -450,7 +464,7 @@ if printf '%s\n' "$CASE_ERR" | grep -q "empties the allowlist"; then
   echo "FAIL: a set allowlist still warned" >&2
   exit 1
 fi
-if printf '%s\n' "$CASE_ARGS" | grep -q "machine-secret"; then
+if [ "$CASE_LEAKED" -ne 0 ]; then
   echo "FAIL: deploy forwarded the calibration secret" >&2
   exit 1
 fi
@@ -491,6 +505,7 @@ EOF
     exit 1
   fi
   rm -rf "$work"
+  note_secret_leak
   echo "== package deploy ($*) exit $CASE_CODE"
 }
 

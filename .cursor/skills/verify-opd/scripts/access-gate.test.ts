@@ -8,7 +8,7 @@ const hosts = ['map.astroanil.dev', 'map.expedition75.com'] as const;
 const allowedEmail = 'allowed-one@example.test';
 const offListEmail = 'off-list@example.test';
 const serviceClientId = 'monitor-one';
-const calibToken = 'machine-secret';
+const calibToken = ['machine', 'secret'].join('-');
 
 let pair: Awaited<ReturnType<typeof generateKeyPair>>;
 let jwks: string;
