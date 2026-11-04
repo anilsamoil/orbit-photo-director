@@ -6720,10 +6720,11 @@ function planReleaseRasterCamera(map) {
   }
 }
 const PLAN_REPAINT_IDLE_MS = 1500;
-function settleIdle(map, limitMs) {
+function settleIdle(map, limitMs, kick) {
   return new Promise((resolve) => {
     let finished = false;
     let timer = 0;
+    let frames = 0;
     const finish = (value) => {
       if (finished) return;
       finished = true;
@@ -6732,8 +6733,19 @@ function settleIdle(map, limitMs) {
       resolve(value);
     };
     const onIdle = () => finish(true);
+    const settled = () => typeof map.loaded === 'function' && map.loaded() === true
+      && map.areTilesLoaded()
+      && !(typeof map.isMoving === 'function' && map.isMoving());
+    const watch = () => {
+      if (finished) return;
+      frames += 1;
+      if (settled()) finish(true);
+      else if (frames < 8 && typeof requestAnimationFrame === 'function') requestAnimationFrame(watch);
+    };
     timer = setTimeout(() => finish(false), limitMs);
     map.on('idle', onIdle);
+    if (typeof kick === 'function') kick();
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(watch);
   });
 }
 async function planWaitTiles(map) {
@@ -6754,10 +6766,12 @@ async function planWaitTiles(map) {
     && pack.tiles.some((tile) => tile.x === pack.center.x && tile.y === pack.center.y));
   let tilesOk = ready(labels) && ready(base) && map.areTilesLoaded();
   let repaintMs = null;
+  let painted = null;
   if (tilesOk) {
-    if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
     const idleStarted = performance.now();
-    const painted = await settleIdle(map, PLAN_REPAINT_IDLE_MS);
+    painted = await settleIdle(map, PLAN_REPAINT_IDLE_MS, () => {
+      if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
+    });
     repaintMs = Math.round(performance.now() - idleStarted);
     labels = planVisibleTiles(map, 'inset-labels');
     base = planVisibleTiles(map, 'inset-basemap');
@@ -6771,7 +6785,7 @@ async function planWaitTiles(map) {
     tileZ: labels ? labels.z : null,
     urls,
     repaintMs,
-    detail: tilesOk ? null : { labels, base },
+    detail: tilesOk ? null : { labels, base, idle: painted, are: map.areTilesLoaded(), loaded: typeof map.loaded === 'function' ? map.loaded() : null },
   };
 }
 `;
@@ -6888,12 +6902,23 @@ const RELEASE_PLAN_CAMERA = `(() => {
   return { ok: true, zoom: map.getZoom(), locked: map.__opdJumpLocked === true };
 })()`;
 
+async function focusMapPage(send) {
+  const page = send && ((send.session && send.session.page) || send.page);
+  if (page && typeof page.bringToFront === 'function') {
+    await page.bringToFront();
+    return;
+  }
+  if (!send) return;
+  await send('Page.bringToFront', {}).catch(() => {});
+}
+
 async function releasePlanCamera(send) {
   if (!send) return { ok: false };
   return evaluate(send, RELEASE_PLAN_CAMERA);
 }
 
 async function withLockedPlan(send, lng, lat, zoom, country, body) {
+  await focusMapPage(send);
   try {
     const row = await evaluate(send, `(async () => {
       ${PLAN_TILE_HELPERS}
@@ -7215,6 +7240,7 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
     const fractional = { counts: rows.map(row => ({ zoom: row.zoom, count: row.names.length })) };
     const sweepNotes = [];
     for (const country of PLAN_COUNTRIES) {
+      await focusMapPage(send);
       progress({ phase: 'sampling', country: country.name, samples: zooms.length, stats: { ...rasterOcrStats } });
       console.log(`plan labels sampling ${country.name}:${zooms.length}`);
       const swept = await evaluate(send, `(async () => {

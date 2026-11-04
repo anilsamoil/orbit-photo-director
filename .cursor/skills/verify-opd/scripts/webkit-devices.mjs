@@ -1010,6 +1010,7 @@ export function playwrightSend(session) {
   };
   send.replacesContext = true;
   send.session = session;
+  send.page = session.page;
   return send;
 }
 

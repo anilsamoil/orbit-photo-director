@@ -8,6 +8,7 @@ function loadHelpers() {
     performance,
     setTimeout,
     clearTimeout,
+    requestAnimationFrame: (fn) => setTimeout(fn, 0),
     document: { querySelectorAll: () => [] },
     getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
   };
@@ -184,6 +185,29 @@ test('Kenya west settles inside the repaint idle limit and drops the listener', 
   assert.ok(elapsed >= 900 && elapsed < 1500, elapsed);
   assert.equal(map.listeners(), 0);
   assert.ok(waited.repaintMs >= 900 && waited.repaintMs < 1500, waited.repaintMs);
+});
+
+test('a loaded map that never emits idle still settles when the map reports loaded', async () => {
+  const { planWaitTiles } = loadHelpers();
+  const map = waitingMap({ idle: false });
+  map.loaded = () => true;
+  map.isMoving = () => false;
+  const started = Date.now();
+  const waited = await planWaitTiles(map);
+  assert.equal(waited.tilesOk, true, JSON.stringify(waited.detail));
+  assert.ok(Date.now() - started < 800, Date.now() - started);
+  assert.equal(map.listeners(), 0);
+});
+
+test('a map that is not loaded and never goes idle is still a tile failure', async () => {
+  const { planWaitTiles } = loadHelpers();
+  const map = waitingMap({ idle: false });
+  map.loaded = () => false;
+  map.isMoving = () => false;
+  const waited = await planWaitTiles(map);
+  assert.equal(waited.tilesOk, false);
+  assert.equal(waited.detail.idle, false);
+  assert.equal(map.listeners(), 0);
 });
 
 test('tiles are read again after the repaint idle', async () => {
