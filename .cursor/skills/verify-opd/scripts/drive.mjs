@@ -6983,6 +6983,7 @@ function writePlanPng(file, bytes) {
       return;
     } catch (error) {
       if (!error || error.code !== 'EAGAIN' || attempt === 4) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50 * (attempt + 1));
     }
   }
 }
