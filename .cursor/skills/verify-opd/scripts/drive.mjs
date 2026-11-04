@@ -6751,10 +6751,6 @@ function planReleaseRasterCamera(map) {
   }
 }
 const PLAN_REPAINT_IDLE_MS = 1500;
-function planRepaint(map) {
-  if (typeof map.redraw === 'function') map.redraw();
-  else if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
-}
 function settleIdle(map, limitMs, kick) {
   return new Promise((resolve) => {
     let finished = false;
@@ -6776,7 +6772,7 @@ function settleIdle(map, limitMs, kick) {
       if (typeof map.loaded === 'function' && map.loaded() === true) return;
       paints += 1;
       if (paints >= 2) finish(true);
-      else setTimeout(() => { if (!finished) planRepaint(map); }, 0);
+      else if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
     };
     timer = setTimeout(() => finish(false), limitMs);
     map.on('idle', onIdle);
@@ -6785,14 +6781,16 @@ function settleIdle(map, limitMs, kick) {
   });
 }
 async function planWaitTiles(map) {
-  const deadline = performance.now() + 16000;
+  const deadline = performance.now() + 8000;
   let labels = null;
   let base = null;
   while (performance.now() < deadline) {
     labels = planVisibleTiles(map, 'inset-labels');
     base = planVisibleTiles(map, 'inset-basemap');
     if (planRasterReady(map)) break;
-    await settleIdle(map, 100, () => planRepaint(map));
+    await settleIdle(map, 100, () => {
+      if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
+    });
   }
   labels = planVisibleTiles(map, 'inset-labels');
   base = planVisibleTiles(map, 'inset-basemap');
@@ -6801,7 +6799,9 @@ async function planWaitTiles(map) {
   let painted = null;
   if (tilesOk) {
     const idleStarted = performance.now();
-    painted = await settleIdle(map, PLAN_REPAINT_IDLE_MS, () => planRepaint(map));
+    painted = await settleIdle(map, PLAN_REPAINT_IDLE_MS, () => {
+      if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
+    });
     repaintMs = Math.round(performance.now() - idleStarted);
     labels = planVisibleTiles(map, 'inset-labels');
     base = planVisibleTiles(map, 'inset-basemap');
