@@ -151,7 +151,7 @@ for (const engine of [
         const map = (window as unknown as { __opdMap: import('maplibre-gl').Map }).__opdMap;
         const source = map.getSource('dropped-pin') as import('maplibre-gl').GeoJSONSource;
         const deadline = performance.now() + 5_000;
-        let pending: Promise<import('maplibre-gl').GeoJSON> | null = null;
+        let pending: ReturnType<typeof source.getData> | null = null;
         while (performance.now() < deadline) {
           if (!pending) pending = source.getData();
           const remaining = Math.max(0, deadline - performance.now());
