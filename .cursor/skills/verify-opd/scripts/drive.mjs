@@ -7132,7 +7132,7 @@ async function capturePlanCanvas(send) {
     const canvas = frame && frame.querySelector('canvas');
     const map = frame && frame.__opdTrackInset;
     if (!canvas || !map) return null;
-    if (map.__opdRasterCamera) map.jumpTo(map.__opdRasterCamera);
+    if (map.__opdRasterCamera && !planCameraMatches(map, map.__opdRasterCamera).ok) map.jumpTo(map.__opdRasterCamera);
     for (const id of ['inset-track', 'inset-night']) {
       if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', 'none');
     }

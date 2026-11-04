@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { test } from 'node:test';
 import { PLAN_TILE_HELPERS } from './drive.mjs';
@@ -256,6 +257,11 @@ test('two renders do not settle a loaded map before idle', async () => {
   assert.equal(waited.tilesOk, true, JSON.stringify(waited.detail));
   assert.ok(Date.now() - started >= 350, Date.now() - started);
   assert.equal(map.listeners(), 0);
+});
+
+test('the plan screenshot does not jump again when the camera is already there', () => {
+  const source = readFileSync(new URL('./drive.mjs', import.meta.url), 'utf8');
+  assert.match(source, /if \(map\.__opdRasterCamera && !planCameraMatches\(map, map\.__opdRasterCamera\)\.ok\) map\.jumpTo\(map\.__opdRasterCamera\);/);
 });
 
 test('a loading in-view raster tile omitted from the renderable list holds the gate', async () => {
