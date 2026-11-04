@@ -35,7 +35,7 @@ function loadedManager(zoom) {
 }
 
 function waitingMap({ idle, unloadAfterRepaint, idleAfterMs = 0, center = { lng: 2, lat: 46 } }) {
-  let loaded = true;
+  let tilesReady = true;
   const zoom = center.lng === 37 ? 6.5 : 2;
   const z = Math.max(0, Math.round(zoom + 1));
   const n = 2 ** z;
@@ -44,13 +44,14 @@ function waitingMap({ idle, unloadAfterRepaint, idleAfterMs = 0, center = { lng:
   const yRaw = Math.floor((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2 * n);
   const y = Math.max(0, Math.min(n - 1, yRaw));
   const coord = { canonical: { z, x, y } };
-  const manager = { getVisibleCoordinates: () => [coord], getTile: () => ({ state: loaded ? 'loaded' : 'loading' }) };
+  const manager = { getVisibleCoordinates: () => [coord], getTile: () => ({ state: tilesReady ? 'loaded' : 'loading' }) };
   let pending = null;
   let listeners = 0;
   return {
     getZoom: () => zoom,
     getCenter: () => center,
-    areTilesLoaded: () => loaded,
+    areTilesLoaded: () => tilesReady,
+    loaded: () => tilesReady,
     getCanvas: () => ({ clientWidth: 400, clientHeight: 300, getBoundingClientRect: () => ({ left: 0, top: 0, right: 400, bottom: 300, width: 400, height: 300 }) }),
     getStyle: () => ({ sources: {}, layers: [] }),
     project: () => ({ x: 10, y: 10 }),
@@ -62,7 +63,7 @@ function waitingMap({ idle, unloadAfterRepaint, idleAfterMs = 0, center = { lng:
       if (!idle) return;
       pending = setTimeout(() => {
         pending = null;
-        if (unloadAfterRepaint) loaded = false;
+        if (unloadAfterRepaint) tilesReady = false;
         callback();
       }, idleAfterMs);
     },
@@ -99,6 +100,7 @@ function cappedFranceMap(zoom) {
     getZoom: () => zoom,
     getCenter: () => ({ lng: 2, lat: 46 }),
     areTilesLoaded: () => true,
+    loaded: () => true,
     getCanvas: () => ({
       clientWidth: 800,
       clientHeight: 600,
@@ -188,7 +190,7 @@ test('Kenya west settles inside the repaint idle limit and drops the listener', 
   assert.ok(waited.repaintMs >= 900 && waited.repaintMs < 1500, waited.repaintMs);
 });
 
-test('a render settles the gate when raster tiles are loaded and another source never goes idle', async () => {
+test('two repaints do not settle a map until it is loaded and its tiles are loaded', async () => {
   const { planWaitTiles } = loadHelpers();
   const map = waitingMap({ idle: false });
   map.loaded = () => false;
@@ -208,8 +210,8 @@ test('a render settles the gate when raster tiles are loaded and another source 
   };
   const started = Date.now();
   const waited = await planWaitTiles(map);
-  assert.equal(waited.tilesOk, true, JSON.stringify(waited.detail));
-  assert.ok(Date.now() - started < 800, Date.now() - started);
+  assert.equal(waited.tilesOk, false, JSON.stringify(waited.detail));
+  assert.ok(Date.now() - started >= 1500, Date.now() - started);
   assert.equal(map.listeners(), 0);
 });
 
@@ -236,10 +238,11 @@ test('a map that is not loaded and never goes idle is still a tile failure', asy
   assert.equal(map.listeners(), 0);
 });
 
-test('two renders do not settle a loaded map before idle', async () => {
+test('a render settles only when the map and its tiles are both loaded', async () => {
   const { planWaitTiles } = loadHelpers();
   const map = waitingMap({ idle: true, idleAfterMs: 400 });
   map.loaded = () => true;
+  map.areTilesLoaded = () => true;
   const renderListeners = [];
   const baseOn = map.on;
   map.on = (event, callback) => {
@@ -255,7 +258,7 @@ test('two renders do not settle a loaded map before idle', async () => {
   const started = Date.now();
   const waited = await planWaitTiles(map);
   assert.equal(waited.tilesOk, true, JSON.stringify(waited.detail));
-  assert.ok(Date.now() - started >= 350, Date.now() - started);
+  assert.ok(Date.now() - started < 350, Date.now() - started);
   assert.equal(map.listeners(), 0);
 });
 

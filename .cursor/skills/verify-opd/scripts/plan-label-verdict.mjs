@@ -275,11 +275,54 @@ function boxDiffers(left, right, box) {
   return !(seen > 0) || differ / seen > 0.08;
 }
 
-/** France and Kenya controls expect no symbol labels. Canada below zoom 3 is the raster duplicate. */
-export function planCameraContract(country, zoom) {
+/** Countries the live plan column places at France, zoom 1.2, on both engines. */
+export const FRANCE_Z12_NAMES = ['Argentina', 'Brazil', 'Egypt', 'France', 'India', 'Kenya', 'Nigeria'];
+
+/** Kenya-west imagery words, in the 478 by 690 frame. The camera scales and places them. */
+const KENYA_WEST_SLOTS = [[180, 300, 54, 18], [180, 360, 54, 18], [180, 420, 54, 18]];
+
+/** Strict crops for the Kenya-west imagery labels. Another camera returns no crops. */
+export function imageryLabelRegions(camera) {
+  const width = Number(camera && camera.width);
+  const height = Number(camera && camera.height);
+  const center = camera && camera.center;
+  const zoom = Number(camera && camera.zoom);
+  if (!(width > 0) || !(height > 0) || !Array.isArray(center) || center.length < 2) return [];
+  if (Math.abs(center[0] - 37) > 0.25 || Math.abs(center[1] - 1) > 0.25) return [];
+  if (!(zoom >= 6.5 && zoom < 7)) return [];
+  const scaleX = width / 478;
+  const scaleY = height / 690;
+  return KENYA_WEST_SLOTS.map(([x, y, slotWidth, slotHeight]) => [
+    (x - 2) * scaleX,
+    (y - 2) * scaleY,
+    (x + slotWidth) * scaleX,
+    (y + slotHeight) * scaleY,
+  ]);
+}
+
+function near(value, target, slack) {
+  return Math.abs(Number(value) - target) <= slack;
+}
+
+function nearCenter(center, lng, lat) {
+  return Array.isArray(center) && Math.abs(center[0] - lng) <= 0.25 && Math.abs(center[1] - lat) <= 0.25;
+}
+
+/** Each camera has its own expected names and, only for the Canada duplicate, a raster read. */
+export function planCameraContract(country, zoom, center) {
   const z = Number(zoom);
-  if (country === 'Canada' && z < 3) return { expectedNames: [], raster: 'CANADA' };
-  return { expectedNames: [], raster: null };
+  if (country === 'France' && near(z, 1.2, 0.05) && nearCenter(center, 2, 46)) {
+    return { expectedNames: FRANCE_Z12_NAMES.slice(), raster: null };
+  }
+  if (country === 'Canada' && near(z, 2.99, 0.02) && nearCenter(center, -100, 50)) {
+    return { expectedNames: ['Canada'], raster: null };
+  }
+  if (country === 'Canada' && near(z, 1.5, 0.02) && nearCenter(center, -100, 50)) {
+    return { expectedNames: [], raster: 'CANADA' };
+  }
+  if (z >= 3 && (country === 'France' || country === 'Kenya')) return { expectedNames: [], raster: null };
+  if (z >= 3) return { expectedNames: [], raster: null };
+  return { expectedNames: null, raster: null };
 }
 
 function labelCounts(labels) {
@@ -323,6 +366,7 @@ export function labelScreenVerdict({ head, main, expectedNames }) {
     const canvas = side && side.canvas;
     const chrome = (side && side.chrome) || [];
     for (const label of (side && side.labels) || []) {
+      if (!label.box) return { ok: false, reason: 'position', name: label.name };
       if (!canvas || !boxInside(label.box, canvas)) {
         return { ok: false, reason: 'canvas', name: label.name, box: label.box };
       }
@@ -334,17 +378,45 @@ export function labelScreenVerdict({ head, main, expectedNames }) {
   return { ok: true, counts: headCounts };
 }
 
-/** One horizontal OCR read confirms the declared raster name. Our label for it must be opacity 0. */
-export function rasterDuplicateVerdict({ declared, text, opacity }) {
+/** One horizontal OCR read confirms the declared raster name. Missing text, opacity, or position fails closed. */
+export function rasterDuplicateVerdict({ declared, text, opacity, position }) {
   if (!declared) return { ok: true, skipped: true };
-  const tokens = String(text || '').toUpperCase().split(/[^A-Z]+/).filter(Boolean);
+  if (position == null) return { ok: false, reason: 'position', declared };
+  if (opacity == null || !Number.isFinite(Number(opacity))) return { ok: false, reason: 'opacity', declared };
+  if (text == null) return { ok: false, reason: 'raster', declared };
+  const tokens = String(text).toUpperCase().split(/[^A-Z]+/).filter(Boolean);
   if (!tokens.includes(String(declared).toUpperCase())) {
     return { ok: false, reason: 'raster', declared, opacity };
   }
-  if (Number(opacity) !== 0) {
-    return { ok: false, reason: 'opacity', declared, opacity };
-  }
+  if (Number(opacity) !== 0) return { ok: false, reason: 'opacity', declared, opacity: Number(opacity) };
   return { ok: true, declared, opacity: 0 };
+}
+
+function regionChanged(left, right, box) {
+  if (!left || !right || !left.data || !right.data || left.width !== right.width || left.height !== right.height) return true;
+  const x0 = Math.max(0, Math.floor(box[0]));
+  const y0 = Math.max(0, Math.floor(box[1]));
+  const x1 = Math.min(left.width, Math.ceil(box[2]));
+  const y1 = Math.min(left.height, Math.ceil(box[3]));
+  for (let y = y0; y < y1; y += 1) {
+    for (let x = x0; x < x1; x += 1) {
+      const index = (y * left.width + x) * 4;
+      const delta = Math.abs(left.data[index] - right.data[index])
+        + Math.abs(left.data[index + 1] - right.data[index + 1])
+        + Math.abs(left.data[index + 2] - right.data[index + 2]);
+      if (delta > 48) return true;
+    }
+  }
+  return false;
+}
+
+/** Strict pixel compare of the imagery-label crops. An ignore rectangle does not apply. */
+export function imageryRegionDiff(head, main, regions) {
+  if (!head || !main || !regions || regions.length === 0) return { ok: false, reason: 'region' };
+  for (const box of regions) {
+    if (regionChanged(head, main, box)) return { ok: false, reason: 'region', box };
+  }
+  return { ok: true };
 }
 
 /** A new capture needs browser, OS, and device. Historical files stay incomplete and are not filled in. */

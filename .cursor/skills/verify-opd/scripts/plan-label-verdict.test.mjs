@@ -5,11 +5,12 @@ import { readdirSync, readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { decodePng } from './decode-png.mjs';
 import { readableRasterName } from './raster-ocr.mjs';
 import { letteringOccluded } from '../../../../frontend/src/map/adapters/maplibre/country-label-size.ts';
 import {
   AUDITED_RASTER_LEVELS, auditRasterLevels, captureEnvironmentOk, countryStyleVerdict, countrySweepZooms,
-  anchorOnPlan, auditedNameCandidates, auditedNameReadable, clippedRasterRemnant, completeNameCount, labelScreenVerdict, labelTile, loadCountryRasterLevels, loadCountrySymbolLayers, nameCountOk, oneNameSource, pairedRasterNames, planCameraContract, planLabelReaders, planLabelVerdict, rasterDuplicateVerdict, rasterNameEvidence, rasterPainted, RASTER_PAIR_TOLERANCE, symbolCrossesEdge,
+  anchorOnPlan, auditedNameCandidates, auditedNameReadable, clippedRasterRemnant, completeNameCount, imageryRegionDiff, imageryLabelRegions, labelScreenVerdict, labelTile, loadCountryRasterLevels, loadCountrySymbolLayers, nameCountOk, oneNameSource, pairedRasterNames, planCameraContract, planLabelReaders, planLabelVerdict, rasterDuplicateVerdict, rasterNameEvidence, rasterPainted, RASTER_PAIR_TOLERANCE, symbolCrossesEdge,
 } from './plan-label-verdict.mjs';
 import { acceptPlanSweepRow } from './drive.mjs';
 
@@ -375,6 +376,7 @@ test('glyph ink, not the padded OCR box, meets the shared one-pixel clock rule',
   assert.ok(openMain.indexOf('finally {') > openMain.indexOf('leaseMainFixture'), 'the lease release covers setup after registration');
   assert.match(openMain, /if \(!handed\) await releaseMainLease\(lease\)/);
   assert.match(check, /rasterDuplicateVerdict\(/);
+  assert.doesNotMatch(check, /row\.centered === true && row\.country === 'Canada'/);
   assert.doesNotMatch(drive, /KENYA_WEST_RASTER_COUNT|countCountryGlyphs|frameNameVerdict/);
   const rasterRead = drive.slice(drive.indexOf('function rasterNameVerdict'), drive.indexOf('export function acceptPlanSweepRow'));
   assert.doesNotMatch(rasterRead, /ignoreRects/);
@@ -489,10 +491,12 @@ test('label placement mutants fail and the healthy controls pass on both engines
       const verdict = labelScreenVerdict({ head: open, main: { ...open }, expectedNames: contract.expectedNames });
       if (!verdict.ok || contract.raster !== null || contract.expectedNames.length !== 0) controls.push(`${engine} ${country}`);
     }
-    const canada = planCameraContract('Canada', 2.5);
-    const clear = labelScreenVerdict({ head: open, main: { ...open }, expectedNames: canada.expectedNames });
-    const raster = rasterDuplicateVerdict({ declared: canada.raster, text: 'CANADA', opacity: 0 });
-    if (!clear.ok || !raster.ok) controls.push(`${engine} Canada`);
+    const canada = planCameraContract('Canada', 2.99, [-100, 50]);
+    if (!canada.expectedNames.includes('Canada') || canada.raster !== null) controls.push(`${engine} Canada`);
+    const fitted = planCameraContract('Canada', 1.2);
+    if (fitted.raster !== null || fitted.expectedNames !== null) controls.push(`${engine} fitted`);
+    const france = planCameraContract('France', 1.2, [2, 46]);
+    if (france.expectedNames.length !== 7 || france.raster !== null) controls.push(`${engine} France`);
   }
   assert.deepEqual(controls, []);
   const extra = labelScreenVerdict({
@@ -516,15 +520,94 @@ test('label placement mutants fail and the healthy controls pass on both engines
   });
   assert.equal(covered.ok, false);
   assert.equal(covered.reason, 'chrome');
-  const missing = rasterDuplicateVerdict({ declared: 'CANADA', text: 'MEXICO BRAZIL', opacity: 0 });
+  const spot = { left: 1, top: 1, right: 8, bottom: 8 };
+  const missing = rasterDuplicateVerdict({ declared: 'CANADA', text: 'MEXICO', opacity: 0, position: spot });
   assert.equal(missing.ok, false);
   assert.equal(missing.reason, 'raster');
-  const painted = rasterDuplicateVerdict({ declared: 'CANADA', text: 'CANADA', opacity: 1 });
+  const painted = rasterDuplicateVerdict({ declared: 'CANADA', text: 'CANADA', opacity: 1, position: spot });
   assert.equal(painted.ok, false);
   assert.equal(painted.reason, 'opacity');
-  const ignored = rasterDuplicateVerdict({ declared: 'CANADA', text: 'MEXICO', opacity: 0 });
-  assert.equal(ignored.ok, false);
-  assert.equal(ignored.reason, 'raster');
+  const noOpacity = rasterDuplicateVerdict({ declared: 'CANADA', text: 'CANADA', opacity: null, position: spot });
+  assert.equal(noOpacity.ok, false);
+  assert.equal(noOpacity.reason, 'opacity');
+  const noPosition = rasterDuplicateVerdict({ declared: 'CANADA', text: 'CANADA', opacity: 0, position: null });
+  assert.equal(noPosition.ok, false);
+  assert.equal(noPosition.reason, 'position');
+});
+
+function rotateImage(image, degrees) {
+  const radians = degrees * Math.PI / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const width = image.width;
+  const height = image.height;
+  const out = new Uint8Array(width * height * 4);
+  const cx = width / 2;
+  const cy = height / 2;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const dx = x - cx;
+      const dy = y - cy;
+      const sx = Math.round(cx + dx * cos + dy * sin);
+      const sy = Math.round(cy - dx * sin + dy * cos);
+      if (sx < 0 || sy < 0 || sx >= width || sy >= height) continue;
+      const from = (sy * width + sx) * 4;
+      const to = (y * width + x) * 4;
+      out[to] = image.data[from];
+      out[to + 1] = image.data[from + 1];
+      out[to + 2] = image.data[from + 2];
+      out[to + 3] = image.data[from + 3];
+    }
+  }
+  return { ...image, data: out };
+}
+
+test('a low-zoom sweep rejects an empty list only on a camera that expects names', () => {
+  const row = (extra) => ({
+    cameraOk: true,
+    tilesOk: true,
+    tileZ: labelTile(extra.zoom),
+    names: [],
+    ...extra,
+    requestedZoom: extra.zoom,
+  });
+  assert.throws(() => acceptPlanSweepRow(row({ country: 'Canada', zoom: 2.99, center: [-100, 50] })), /plan label names/);
+  assert.throws(() => acceptPlanSweepRow(row({ country: 'France', zoom: 1.2, center: [2, 46] })), /plan label names/);
+  acceptPlanSweepRow(row({ country: 'Canada', zoom: 1.2, center: [-100, 50] }));
+  acceptPlanSweepRow(row({ country: 'Kenya', zoom: 1.2, center: [38, 1] }));
+  assert.equal(planCameraContract('Canada', 1.5, [-100, 50]).raster, 'CANADA');
+  assert.equal(planCameraContract('Canada', 2.5, [-100, 50]).raster, null);
+  assert.equal(planCameraContract('Canada', 1.5).raster, null);
+});
+
+test('imagery label regions fail the Kenya edits, towns, and rotated look-alikes', () => {
+  const load = (dir, name) => {
+    const png = readFileSync(new URL(`./fixtures/${dir}/${name}.png`, import.meta.url));
+    return { ...decodePng(png), png };
+  };
+  const regions = imageryLabelRegions({ width: 478, height: 690, center: [37, 1], zoom: 6.5 });
+  const missed = [];
+  for (const engine of ['chromium', 'webkit']) {
+    const main = load('plan-label-regression', `${engine}-main`);
+    if (!imageryRegionDiff(main, main, regions).ok) missed.push(`${engine} main`);
+    for (const name of ['removed', 'egypt', 'three', 'nya', 'chrome']) {
+      const head = load('plan-label-regression', `${engine}-${name}`);
+      const region = imageryRegionDiff(head, main, regions);
+      const global = pairedRasterNames(head, main);
+      if (region.ok) missed.push(`${engine} ${name} region passed`);
+      if (!global.ok) missed.push(`${engine} ${name} global ${global.reason}`);
+    }
+    const towns = load('plan-label-foreign', 'towns');
+    const foreignMain = load('plan-label-foreign', `${engine}-main`);
+    if (imageryRegionDiff(towns, foreignMain, regions).ok) missed.push(`${engine} towns`);
+    if (imageryRegionDiff(towns, foreignMain, regions, [{ left: 0, top: 0, right: 478, bottom: 690 }]).ok) missed.push(`${engine} towns ignored`);
+    for (const name of ['greek', 'accent']) {
+      const straight = load('plan-label-foreign', `${engine}-${name}`);
+      const turned = rotateImage(straight, 20);
+      if (imageryRegionDiff(turned, foreignMain, regions).ok) missed.push(`${engine} ${name} rotated`);
+    }
+  }
+  assert.deepEqual(missed, []);
 });
 
 test('historical plan captures stay incomplete and a new capture needs a full environment record', () => {
