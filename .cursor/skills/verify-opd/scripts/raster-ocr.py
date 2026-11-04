@@ -31,7 +31,7 @@ def _stop_child(signum, _frame):
 signal.signal(signal.SIGTERM, _stop_child)
 
 
-def run_tesseract(png_bytes, psm):
+def run_tesseract(png_bytes, psm, whitelist=False):
     # tesseract's stdin reader blocks until EOF while its stderr fills the pipe,
     # so the parent waits out the whole limit and the orphan keeps the next call
     # from finishing. A file has an end, and the child's session dies with it.
@@ -45,8 +45,12 @@ def run_tesseract(png_bytes, psm):
     try:
         with open(path, 'wb') as image_file:
             image_file.write(png_bytes)
+        command = [os.environ.get('OPD_VERIFY_TESSERACT', 'tesseract'), path, 'stdout', '-l', 'eng', '--psm', str(psm)]
+        if whitelist:
+            command.extend(['-c', 'tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ'])
+        command.append('tsv')
         proc = subprocess.Popen(
-            [os.environ.get('OPD_VERIFY_TESSERACT', 'tesseract'), path, 'stdout', '-l', 'eng', '--psm', str(psm), 'tsv'],
+            command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             start_new_session=True,
@@ -99,12 +103,13 @@ def recognize(image, psm=11):
     return output
 
 
-def read_line(image):
+def read_line(image, psm=7, whitelist=False):
     comp = Image.alpha_composite(Image.new('RGBA', image.size, (24, 26, 28, 255)), image.convert('RGBA')).convert('L')
     large = ImageOps.autocontrast(comp.resize((max(1, comp.width * 3), max(1, comp.height * 3)), Image.Resampling.LANCZOS))
     buf = io.BytesIO()
     large.save(buf, format='PNG')
-    rows = csv.DictReader(io.StringIO(run_tesseract(buf.getvalue(), 7).decode('utf8', 'replace')), delimiter='\t', quoting=csv.QUOTE_NONE)
+    output = run_tesseract(buf.getvalue(), psm, whitelist)
+    rows = csv.DictReader(io.StringIO(output.decode('utf8', 'replace')), delimiter='\t', quoting=csv.QUOTE_NONE)
     words = []
     for row in rows:
         text = row.get('text', '').strip()
@@ -113,7 +118,54 @@ def read_line(image):
     return ' '.join(words)
 
 
-def leveled_text(image, angle):
+def ocr_whitelist(image, psm):
+    gray = image.convert('L')
+    large = ImageOps.autocontrast(gray.resize((max(1, gray.width * 6), max(1, gray.height * 6)), Image.Resampling.LANCZOS))
+    buf = io.BytesIO()
+    large.save(buf, format='PNG')
+    output = run_tesseract(buf.getvalue(), psm, True)
+    rows = csv.DictReader(io.StringIO(output.decode('utf8', 'replace')), delimiter='\t', quoting=csv.QUOTE_NONE)
+    words = [row.get('text', '').strip() for row in rows if row.get('text', '').strip() and row.get('level') == '5']
+    return ' '.join(words)
+
+
+def text_bands(image):
+    solid = Image.alpha_composite(Image.new('RGBA', image.size, (24, 26, 28, 255)), image.convert('RGBA')).convert('L')
+    width, height = solid.size
+    sums = [sum(solid.getpixel((x, y)) for x in range(width)) for y in range(height)]
+    if not sums:
+        return [solid]
+    border = max(range(height), key=lambda row: sums[row])
+    median = sorted(sums)[len(sums) // 2] or 1
+    if sums[border] < median * 2.2 or border < 6 or height - border < 4:
+        return [solid]
+    bands = []
+    if border - 2 >= 6:
+        bands.append(solid.crop((0, 0, width, border - 2)))
+    if height - (border + 2) >= 6:
+        bands.append(solid.crop((0, border + 2, width, height)))
+    return bands or [solid]
+
+
+def read_prepared(image):
+    readings = []
+    for psm in (7, 8):
+        found = False
+        for band in text_bands(image):
+            text = ocr_whitelist(band, psm)
+            if not text:
+                continue
+            readings.append(text)
+            if any(len(token) >= 4 for token in text.split()):
+                found = True
+        if found:
+            break
+    return ' '.join(readings)
+
+
+def leveled_text(image, angle, prepared=False):
+    if prepared:
+        return read_prepared(image)
     turned = image.rotate(angle, expand=True, resample=Image.Resampling.BICUBIC, fillcolor=(0, 0, 0, 0)) if angle else image
     bands = [turned]
     if angle:
@@ -156,11 +208,12 @@ def emit_crops():
     data = json.load(sys.stdin)
     crops = data.get('crops') or []
     angles = data.get('angles') or []
+    prepared = data.get('prepared') or []
     texts = []
     for index, crop in enumerate(crops):
         angle = float(angles[index]) if index < len(angles) else 0
         image = Image.open(io.BytesIO(base64.b64decode(crop))).convert('RGBA')
-        texts.append(leveled_text(image, angle))
+        texts.append(leveled_text(image, angle, index < len(prepared) and prepared[index] is True))
     print(json.dumps({'texts': texts}))
 
 

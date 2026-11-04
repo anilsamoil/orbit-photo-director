@@ -561,19 +561,85 @@ function axisDegrees(line) {
 }
 
 /** The crop counts only when one OCR word is that country. A fragment, a miss, or another word does not. */
-function readsAsCountry(text, country, box, pixels, width, height) {
+function readsAsCountry(text, country, box, pixels, width, height, degrees) {
   const name = String(country || '').replace(/[^a-z]/gi, '').toUpperCase();
   const tokens = String(text || '').toUpperCase().split(/[^A-Z]+/).filter((token) => token.length > 0);
   if (!name || !tokens.includes(name)) return false;
+  if (Math.abs(degrees) >= 8) return true;
   return latinLetterMatches(pixels, width, height, box, name);
 }
 
-function uprightCrops(pixels, width, height, box, degrees) {
-  const crop = cropPixels(pixels, width, height, box);
-  if (!crop) return [];
-  const png = encodePng(crop.pixels, crop.width, crop.height);
-  if (Math.abs(degrees) < 8) return [{ png, angle: 0 }];
-  return [-4, -2, 0, 2, 4].map((delta) => ({ png, angle: degrees + delta }));
+function samplePixel(pixels, width, height, x, y) {
+  if (x < 0 || y < 0 || x > width - 1 || y > height - 1) return [0, 0, 0, 0];
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const x1 = Math.min(width - 1, x0 + 1);
+  const y1 = Math.min(height - 1, y0 + 1);
+  const tx = x - x0;
+  const ty = y - y0;
+  const weights = [[(1 - tx) * (1 - ty), x0, y0], [tx * (1 - ty), x1, y0], [(1 - tx) * ty, x0, y1], [tx * ty, x1, y1]];
+  const out = [0, 0, 0, 0];
+  for (const [weight, sx, sy] of weights) {
+    const index = (sy * width + sx) * 4;
+    for (let channel = 0; channel < 4; channel += 1) out[channel] += pixels[index + channel] * weight;
+  }
+  return out;
+}
+
+function lineStrip(pixels, width, height, line, degrees, flip) {
+  const radians = degrees * Math.PI / 180;
+  const dirX = Math.cos(radians);
+  const dirY = Math.sin(radians);
+  const sideX = -dirY;
+  const sideY = dirX;
+  const cx = line.reduce((sum, letter) => sum + letter.x, 0) / line.length;
+  const cy = line.reduce((sum, letter) => sum + letter.y, 0) / line.length;
+  let minAlong = Infinity;
+  let maxAlong = -Infinity;
+  let minSide = Infinity;
+  let maxSide = -Infinity;
+  for (const letter of line) {
+    const along = (letter.x - cx) * dirX + (letter.y - cy) * dirY;
+    const side = (letter.x - cx) * sideX + (letter.y - cy) * sideY;
+    const reach = Math.max(4, letter.size * 0.75);
+    minAlong = Math.min(minAlong, along - reach);
+    maxAlong = Math.max(maxAlong, along + reach);
+    minSide = Math.min(minSide, side - reach);
+    maxSide = Math.max(maxSide, side + reach);
+  }
+  const pad = 4;
+  minAlong -= pad;
+  maxAlong += pad;
+  minSide -= pad;
+  maxSide += pad;
+  const outWidth = Math.max(8, Math.ceil(maxAlong - minAlong));
+  const outHeight = Math.max(8, Math.ceil(maxSide - minSide));
+  const out = new Uint8Array(outWidth * outHeight * 4);
+  for (let y = 0; y < outHeight; y += 1) {
+    for (let x = 0; x < outWidth; x += 1) {
+      const sourceX = flip ? outWidth - 1 - x : x;
+      const sourceY = flip ? outHeight - 1 - y : y;
+      const along = minAlong + sourceX;
+      const side = minSide + sourceY;
+      const color = samplePixel(pixels, width, height, cx + along * dirX + side * sideX, cy + along * dirY + side * sideY);
+      const index = (y * outWidth + x) * 4;
+      for (let channel = 0; channel < 4; channel += 1) out[index + channel] = Math.round(color[channel]);
+    }
+  }
+  return encodePng(out, outWidth, outHeight);
+}
+
+function uprightCrops(pixels, width, height, candidate) {
+  if (Math.abs(candidate.angle) < 8) {
+    const crop = cropPixels(pixels, width, height, candidate.box);
+    if (!crop) return [];
+    return [{ png: encodePng(crop.pixels, crop.width, crop.height), angle: 0, prep: false }];
+  }
+  return [false, true].map((flip) => ({
+    png: lineStrip(pixels, width, height, candidate.line, candidate.angle, flip),
+    angle: 0,
+    prep: true,
+  }));
 }
 
 export function countryGlyphBoxes(pixels, width, height, country, options = {}) {
@@ -617,6 +683,7 @@ export function countryGlyphBoxes(pixels, width, height, country, options = {}) 
         box: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)],
         angle: axisDegrees(line),
         letters: line.length,
+        line,
       });
     }
   }
@@ -624,15 +691,15 @@ export function countryGlyphBoxes(pixels, width, height, country, options = {}) 
     return mergeBoxes(candidates.filter((candidate) => options.confirmName(candidate)).map((candidate) => candidate.box));
   }
   if (!candidates.length) return [];
-  const jobs = candidates.map((candidate) => uprightCrops(pixels, width, height, candidate.box, candidate.angle));
+  const jobs = candidates.map((candidate) => uprightCrops(pixels, width, height, candidate));
   if (jobs.some((crops) => crops.length === 0)) return [];
   const flat = jobs.flat();
-  const texts = ocrCropTexts(flat.map((job) => job.png), flat.map((job) => job.angle));
+  const texts = ocrCropTexts(flat.map((job) => job.png), flat.map((job) => job.angle), flat.map((job) => job.prep));
   let cursor = 0;
   const accepted = candidates.filter((candidate, index) => {
     const readings = texts.slice(cursor, cursor + jobs[index].length);
     cursor += jobs[index].length;
-    return readings.some((text) => readsAsCountry(text, country, candidate.box, pixels, width, height));
+    return readings.some((text) => readsAsCountry(text, country, candidate.box, pixels, width, height, candidate.angle));
   });
   return mergeBoxes(accepted.map((candidate) => candidate.box));
 }

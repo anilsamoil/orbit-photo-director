@@ -513,23 +513,24 @@ test('edited Kenya-west frames fail the name count in both engines while staying
         const body = text.replace(/^plan label \w+ /, '');
         let parsed = null;
         try { parsed = JSON.parse(body); } catch { parsed = null; }
-        if (!parsed || parsed.reason !== 'name') missed.push(`${label} ${text}`);
-        else reasons.push(`${label} ${JSON.stringify(parsed.head)} vs ${JSON.stringify(parsed.main)}`);
+        if (!parsed || (parsed.reason !== 'count' && parsed.reason !== 'name')) missed.push(`${label} ${text}`);
+        else if (name === 'three' && (parsed.count !== 3 || parsed.expected !== 2 || !(parsed.head && parsed.head.KENYA) || !(parsed.main && parsed.main.KENYA))) missed.push(`${label} unread ${text}`);
+        else reasons.push(`${label} ${parsed.reason} ${parsed.count} vs ${parsed.expected} ${JSON.stringify(parsed.head)} vs ${JSON.stringify(parsed.main)}`);
       }
     }
   }
   assert.deepEqual(missed, []);
   assert.deepEqual(reasons, [
-    'chromium removed {} vs {"KENYA":1}',
-    'chromium egypt {"EGYPT":1} vs {"KENYA":1}',
-    'chromium three {"KENYA":1} vs {}',
-    'chromium nya {} vs {"KENYA":1}',
-    'chromium chrome {} vs {"KENYA":1}',
-    'webkit removed {} vs {"KENYA":1}',
-    'webkit egypt {"EGYPT":1} vs {"KENYA":1}',
-    'webkit three {"KENYA":1} vs {}',
-    'webkit nya {} vs {"KENYA":1}',
-    'webkit chrome {} vs {"KENYA":1}',
+    'chromium removed count 1 vs 2 {"KENYA":1} vs {"KENYA":2}',
+    'chromium egypt count 1 vs 2 {"KENYA":1,"EGYPT":1} vs {"KENYA":2}',
+    'chromium three count 3 vs 2 {"KENYA":3} vs {"KENYA":2}',
+    'chromium nya count 1 vs 2 {"KENYA":1} vs {"KENYA":2}',
+    'chromium chrome count 1 vs 2 {"KENYA":1} vs {"KENYA":2}',
+    'webkit removed count 1 vs 2 {"KENYA":1} vs {"KENYA":2}',
+    'webkit egypt count 1 vs 2 {"KENYA":1,"EGYPT":1} vs {"KENYA":2}',
+    'webkit three count 3 vs 2 {"KENYA":3} vs {"KENYA":2}',
+    'webkit nya count 1 vs 2 {"KENYA":1} vs {"KENYA":2}',
+    'webkit chrome count 1 vs 2 {"KENYA":1} vs {"KENYA":2}',
   ]);
   const kenyaPng = readFileSync(new URL('./fixtures/label-cameras/kenya-west-37-1.png', import.meta.url));
   const kenyaFrame = { ...decodePng(kenyaPng), png: kenyaPng };
@@ -630,9 +631,13 @@ test('foreign-language Kenya frames fail, and WebKit counts the two visible Lati
   assert.equal(countCountryGlyphs(towns.data, towns.width, towns.height, 'Kenya'), 0);
   const alone = frameNameVerdict(towns, towns, 'Kenya', { kenyaWest: true });
   const against = frameNameVerdict(towns, webkitMain, 'Kenya', { kenyaWest: true });
+  const unread = frameNameVerdict(towns, towns, 'Kenya');
   assert.equal(alone.ok, false, JSON.stringify(alone));
   assert.equal(against.ok, false, JSON.stringify(against));
-  assert.notEqual(alone.reason, undefined);
+  assert.equal(unread.ok, false, JSON.stringify(unread));
+  assert.equal(unread.reason, 'unread');
+  assert.equal(unread.count, 0);
+  assert.equal(unread.expected, 0);
 });
 
 test('docs do not keep the calib fixture value', () => {

@@ -300,6 +300,7 @@ export function frameCountryNames(image, options = {}) {
     words.push({ text, box });
     counts[text] = (counts[text] || 0) + 1;
   }
+  if (Object.keys(counts).length === 0) return { ok: false, reason: 'unread', counts, words };
   return { ok: true, counts, words };
 }
 
@@ -323,8 +324,23 @@ export function frameNameVerdict(head, main, country, options = {}) {
   const key = String(country || '').toUpperCase();
   const headCount = leftCounts[key] || 0;
   const mainCount = rightCounts[key] || 0;
-  if (!leftFound.ok || !rightFound.ok) {
-    return { ok: false, check: 'name', reason: 'unread', count: headCount, expected: mainCount, head: leftCounts, main: rightCounts };
+  if (options.kenyaWest && head.data && main.data) {
+    const headBlocked = [...chrome, ...(options.ignoreRects || [])];
+    const mainBlocked = [...mainChrome, ...(options.mainIgnoreRects || [])];
+    const headGlyphs = countCountryGlyphs(head.data, head.width, head.height, country, { ignoreRects: headBlocked });
+    const mainGlyphs = countCountryGlyphs(main.data, main.width, main.height, country, { ignoreRects: mainBlocked });
+    if (headGlyphs < 1 || mainGlyphs < 1) {
+      return { ok: false, check: 'name', reason: 'unread', count: headGlyphs, expected: mainGlyphs, head: leftFound.counts, main: rightFound.counts };
+    }
+    const same = occurrenceCount(headGlyphs, mainGlyphs);
+    if (!same.ok) return { ok: false, check: 'count', reason: 'count', count: headGlyphs, expected: mainGlyphs, head: leftFound.counts, main: rightFound.counts };
+    return { ok: true, check: 'count', count: headGlyphs, expected: mainGlyphs, head: leftFound.counts, main: rightFound.counts };
+  }
+  const masks = chrome.length > 0 || mainChrome.length > 0;
+  const namedLeft = Object.keys(leftFound.counts).length > 0;
+  const namedRight = Object.keys(rightFound.counts).length > 0;
+  if ((!leftFound.ok || !rightFound.ok || !namedLeft || !namedRight) && !masks) {
+    return { ok: false, check: 'name', reason: 'unread', count: headCount, expected: mainCount, head: leftFound.counts, main: rightFound.counts };
   }
   const stable = (counts) => JSON.stringify(Object.fromEntries(Object.entries(counts).sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))));
   if (stable(leftCounts) !== stable(rightCounts)) {
@@ -332,18 +348,6 @@ export function frameNameVerdict(head, main, country, options = {}) {
   }
   const count = occurrenceCount(headCount, mainCount);
   if (!count.ok) return { ok: false, check: 'count', reason: 'count', count: headCount, expected: mainCount, head: leftCounts, main: rightCounts };
-  if (options.kenyaWest && head.data && main.data) {
-    const headBlocked = [...chrome, ...(options.ignoreRects || [])];
-    const mainBlocked = [...mainChrome, ...(options.mainIgnoreRects || [])];
-    const headGlyphs = countCountryGlyphs(head.data, head.width, head.height, country, { ignoreRects: headBlocked });
-    const mainGlyphs = countCountryGlyphs(main.data, main.width, main.height, country, { ignoreRects: mainBlocked });
-    if (headGlyphs < 1 || mainGlyphs < 1) {
-      return { ok: false, check: 'name', reason: 'unread', count: headGlyphs, expected: mainGlyphs, head: leftCounts, main: rightCounts };
-    }
-    const same = occurrenceCount(headGlyphs, mainGlyphs);
-    if (!same.ok) return { ok: false, check: 'count', reason: 'count', count: headGlyphs, expected: mainGlyphs, head: leftCounts, main: rightCounts };
-    return { ok: true, check: 'count', count: headGlyphs, expected: mainGlyphs, head: leftCounts, main: rightCounts };
-  }
   return { ok: true, check: 'name', count: headCount, expected: mainCount, head: leftCounts, main: rightCounts };
 }
 
