@@ -15,12 +15,32 @@ except ImportError as error:
     raise SystemExit('raster OCR needs Pillow in OPD_VERIFY_OCR_PYTHON') from error
 
 
+CURRENT_PROC = None
+
+
+def _stop_child(signum, _frame):
+    proc = CURRENT_PROC
+    if proc is not None and proc.poll() is None:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    raise SystemExit(128 + signum)
+
+
+signal.signal(signal.SIGTERM, _stop_child)
+
+
 def run_tesseract(png_bytes, psm):
     # tesseract's stdin reader blocks until EOF while its stderr fills the pipe,
     # so the parent waits out the whole limit and the orphan keeps the next call
     # from finishing. A file has an end, and the child's session dies with it.
+    # macOS /tmp is a symlink to /private/tmp, and tesseract cannot open the
+    # unresolved path. realpath is the directory it can read.
+    global CURRENT_PROC
     handle, path = tempfile.mkstemp(prefix='opd-ocr-', suffix='.png')
     os.close(handle)
+    path = os.path.realpath(path)
     proc = None
     try:
         with open(path, 'wb') as image_file:
@@ -32,6 +52,7 @@ def run_tesseract(png_bytes, psm):
             start_new_session=True,
             env={**os.environ, 'OMP_THREAD_LIMIT': '1'},
         )
+        CURRENT_PROC = proc
         try:
             stdout, stderr = proc.communicate(timeout=float(os.environ.get('OPD_VERIFY_OCR_PASS_TIMEOUT', '60')))
         except subprocess.TimeoutExpired:
@@ -45,6 +66,7 @@ def run_tesseract(png_bytes, psm):
         if proc and proc.poll() is None:
             os.killpg(proc.pid, signal.SIGKILL)
             proc.wait(timeout=5)
+        CURRENT_PROC = None
         try:
             os.remove(path)
         except OSError:
