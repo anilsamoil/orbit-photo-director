@@ -7499,7 +7499,9 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
     const audited = auditRasterLevels(loadCountryRasterLevels());
     if (!audited.ok) throw new Error(`plan label raster audit ${JSON.stringify(audited)}`);
     for (const country of fitted.inside) {
-      assertPlanLabelChecks({ ...fitted, country, names: fitted.names, hidden: fitted.hidden || [] });
+      const fittedRow = { ...fitted, country, names: fitted.names, hidden: fitted.hidden || [] };
+      if (Number(fitted.zoom) < 3) assertLowZoomNames(fittedRow);
+      else assertPlanLabelChecks(fittedRow);
     }
     recordMainCheckout();
     mainSend = await openPlanMain(send);
