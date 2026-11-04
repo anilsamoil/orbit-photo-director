@@ -5,7 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 import { ocrFrame } from './raster-ocr.mjs';
-import { countCountryGlyphs } from './rotated-name-count.mjs';
+import { countCountryGlyphs, latinLetterMatches } from './rotated-name-count.mjs';
 
 const COUNTRY_NAMES = ['Canada', 'Mexico', 'Brazil', 'Argentina'];
 
@@ -292,10 +292,11 @@ export function frameCountryNames(image, options = {}) {
   const words = [];
   const counts = {};
   for (const word of recognized.words) {
-    const text = String(word.text || '').toUpperCase().replace(/[^A-Z]/g, '');
-    if (!names.has(text) || word.uppercase === false) continue;
+    const text = String(word.text || '').trim().toUpperCase();
+    if (!/^[A-Z]+$/.test(text) || !names.has(text) || word.uppercase === false) continue;
     const box = word.box || [0, 0, 0, 0];
     if (chrome.some((rect) => boxHitsRect(box, rect))) continue;
+    if (image.data && !latinLetterMatches(image.data, image.width, image.height, box, text)) continue;
     words.push({ text, box });
     counts[text] = (counts[text] || 0) + 1;
   }

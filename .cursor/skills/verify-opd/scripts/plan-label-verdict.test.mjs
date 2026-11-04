@@ -6,7 +6,7 @@ import { countCountryGlyphs, countryGlyphBoxes, decodePng } from './rotated-name
 import vm from 'node:vm';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readableRasterName } from './raster-ocr.mjs';
+import { ocrFrame, readableRasterName } from './raster-ocr.mjs';
 import { letteringOccluded } from '../../../../frontend/src/map/adapters/maplibre/country-label-size.ts';
 import {
   AUDITED_RASTER_LEVELS, auditRasterLevels, countryStyleVerdict, countrySweepZooms,
@@ -596,6 +596,36 @@ test('painted-out and duplicated CANADA fail the name check inside the pixel lim
   if (shared.ok !== true) missed.push(`shared clock mask ${shared.reason}`);
   if (separate.ok !== false) missed.push('separate clock mask passed');
   assert.deepEqual(missed, []);
+});
+
+test('foreign-language Kenya frames fail, and WebKit counts the two visible Latin names', () => {
+  const dir = new URL('./fixtures/plan-label-foreign/', import.meta.url);
+  const load = (name) => {
+    const png = readFileSync(new URL(`${name}.png`, dir));
+    return { ...decodePng(png), png };
+  };
+  const stripped = (image) => (ocrFrame(image.png).words || [])
+    .filter((word) => String(word.text || '').toUpperCase().replace(/[^A-Z]/g, '') === 'KENYA').length;
+  const mutantPassed = [];
+  const missed = [];
+  for (const engine of ['chromium', 'webkit']) {
+    const main = load(`${engine}-main`);
+    for (const name of ['greek', 'accent', 'cyrillic', 'arabic', 'cjk']) {
+      const head = load(`${engine}-${name}`);
+      const verdict = frameNameVerdict(head, main, 'Kenya', { kenyaWest: true });
+      if (verdict.ok !== false) missed.push(`${engine} ${name} passed`);
+      if (stripped(head) === stripped(main)) mutantPassed.push(`${engine} ${name}`);
+    }
+  }
+  assert.deepEqual(missed, []);
+  assert.deepEqual(mutantPassed, ['chromium greek', 'chromium accent', 'webkit greek', 'webkit accent']);
+  const visible = load('webkit-two-plus-greek');
+  const blobs = countryGlyphBoxes(visible.data, visible.width, visible.height, 'Kenya', { confirmName: () => true }).length;
+  const names = countCountryGlyphs(visible.data, visible.width, visible.height, 'Kenya');
+  assert.equal(blobs, 3);
+  assert.equal(names, 2);
+  const webkitMain = load('webkit-main');
+  assert.equal(countCountryGlyphs(webkitMain.data, webkitMain.width, webkitMain.height, 'Kenya'), 2);
 });
 
 test('docs do not keep the calib fixture value', () => {

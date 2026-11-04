@@ -459,15 +459,104 @@ function countryLetters(text) {
   return String(text || '').toUpperCase().replace(/[^A-Z]/g, '');
 }
 
+const LATIN_LAST_LETTERS = {
+  KENYA: [
+    { width: 17, height: 10, rows: ['11000011101110000', '11100011001111000', '01110110001111000', '00111110011011000', '00011100011001100', '00011000111001100', '00011000111111110', '00011000110000110', '00011001100000110', '00011001100000111'] },
+    { width: 18, height: 11, rows: ['110000011000110000', '011000110001111000', '011000110001111000', '001101100001101100', '000111000011001100', '000111000011001100', '000011000011000110', '000011000111111110', '000011000110000010', '000011001100000011', '000011001100000011'] },
+  ],
+};
+
+function inkParts(pixels, width, height, box) {
+  const padX = 8;
+  const padY = 18;
+  const x0 = Math.max(0, Math.floor(Math.min(box[0], box[2])) - padX);
+  const y0 = Math.max(0, Math.floor(Math.min(box[1], box[3])) - padY);
+  const x1 = Math.min(width, Math.ceil(Math.max(box[0], box[2])) + padX);
+  const y1 = Math.min(height, Math.ceil(Math.max(box[1], box[3])) + padY);
+  const columns = [];
+  let open = false;
+  let start = 0;
+  for (let x = x0; x < x1; x += 1) {
+    let ink = false;
+    for (let y = y0; y < y1; y += 1) {
+      const index = (y * width + x) * 4;
+      if (pixels[index] > 80) { ink = true; break; }
+    }
+    if (ink && !open) { start = x; open = true; }
+    else if (!ink && open) { columns.push([start, x]); open = false; }
+  }
+  if (open) columns.push([start, x1]);
+  return columns.map(([left, right]) => {
+    let top = y1;
+    let bottom = y0;
+    for (let y = y0; y < y1; y += 1) {
+      for (let x = left; x < right; x += 1) {
+        if (pixels[(y * width + x) * 4] > 80) {
+          if (y < top) top = y;
+          if (y + 1 > bottom) bottom = y + 1;
+        }
+      }
+    }
+    const rows = [];
+    for (let y = top; y < bottom; y += 1) {
+      let bits = '';
+      for (let x = left; x < right; x += 1) bits += pixels[(y * width + x) * 4] > 80 ? '1' : '0';
+      rows.push(bits);
+    }
+    return { width: right - left, height: bottom - top, rows };
+  }).filter((part) => part.height > 0 && part.width > 0);
+}
+
+function maskAt(mask, x, y) {
+  if (y < 0 || y >= mask.height || x < 0 || x >= mask.width) return false;
+  return mask.rows[y][x] === '1';
+}
+
+function letterDiff(part, reference) {
+  let best = 255;
+  for (let dy = -1; dy <= 1; dy += 1) {
+    for (let dx = -1; dx <= 1; dx += 1) {
+      const height = Math.max(part.height, reference.height);
+      const width = Math.max(part.width, reference.width);
+      let seen = 0;
+      let differ = 0;
+      for (let y = 0; y < height; y += 1) {
+        for (let x = 0; x < width; x += 1) {
+          seen += 1;
+          if (maskAt(part, x, y) !== maskAt(reference, x + dx, y + dy)) differ += 1;
+        }
+      }
+      const score = seen ? (differ / seen) * 255 : 255;
+      if (score < best) best = score;
+    }
+  }
+  return best;
+}
+
+/** DejaVu Latin ink matches the reference. A Greek or accented lookalike that OCR calls KENYA does not. */
+export function latinLetterMatches(pixels, width, height, box, name) {
+  const masks = LATIN_LAST_LETTERS[String(name || '').toUpperCase()];
+  if (!masks || !pixels) return true;
+  const parts = inkParts(pixels, width, height, box);
+  if (!parts.length) return false;
+  const letter = parts[parts.length - 1];
+  const reference = masks.find((mask) => mask.height === letter.height);
+  if (!reference) return true;
+  const heights = parts.map((part) => part.height);
+  if (Math.max(...heights) - Math.min(...heights) >= 3) return false;
+  return letterDiff(letter, reference) <= 20;
+}
+
 function nearDot(box, dots) {
   return (dots || []).some((dot) => dot.x >= box[0] - 16 && dot.x <= box[2] + 16 && dot.y >= box[1] - 16 && dot.y <= box[3] + 16);
 }
 
 /** A blob counts only when its letters are that country. Empty noise can be a rotated border name; a different word cannot. */
-function readsAsCountry(text, country, candidate, dots) {
+function readsAsCountry(text, country, candidate, dots, pixels, width, height) {
   const name = String(country || '').replace(/[^a-z]/gi, '').toUpperCase();
-  const letters = countryLetters(text);
-  if (name && letters === name) return true;
+  const raw = String(text || '').trim().toUpperCase();
+  const letters = countryLetters(raw);
+  if (raw === name) return latinLetterMatches(pixels, width, height, candidate.box, name);
   if (letters.length >= 3) return false;
   if (!name || candidate.letters < name.length - 1 || candidate.letters > name.length + 1) return false;
   if (candidate.angle < 18 || candidate.angle > 75) return false;
@@ -530,7 +619,8 @@ export function countryGlyphBoxes(pixels, width, height, country, options = {}) 
   const crops = candidates.map((candidate) => cropPng(pixels, width, height, candidate.box));
   if (crops.some((crop) => !crop)) return [];
   const texts = ocrCropTexts(crops);
-  return mergeBoxes(candidates.filter((candidate, index) => readsAsCountry(texts[index], country, candidate, dots)).map((candidate) => candidate.box));
+  const accepted = candidates.filter((candidate, index) => readsAsCountry(texts[index], country, candidate, dots, pixels, width, height));
+  return mergeBoxes(accepted.map((candidate) => candidate.box));
 }
 
 export function countCountryGlyphs(pixels, width, height, country, options = {}) {
