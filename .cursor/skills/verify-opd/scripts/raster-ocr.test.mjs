@@ -112,8 +112,8 @@ test('a stuck tesseract is killed with its session and does not hold the node ti
   assert.match(helper, /os\.killpg\(proc\.pid, signal\.SIGKILL\)/);
   assert.match(helper, /os\.path\.realpath\(path\)/);
   assert.match(helper, /signal\.signal\(signal\.SIGTERM, _stop_child\)/);
-  assert.match(source, /runHelper\(\['--crops'\], input, pngs\.length/);
-  assert.doesNotMatch(source, /prep \? 4/);
+  assert.doesNotMatch(source, /ocrCropTexts|prep \? 4|--crops/);
+  assert.doesNotMatch(helper, /emit_crops|read_prepared|image\.rotate/);
   const dir = mkdtempSync(join(tmpdir(), 'opd-ocr-hang-'));
   const fake = join(dir, 'tesseract');
   const pidfile = join(dir, 'pid');

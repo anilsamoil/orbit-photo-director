@@ -73,6 +73,30 @@ function runHelper(args, input, passes, maxBuffer) {
   return result;
 }
 
+const cropScript = `
+import sys
+from PIL import Image, ImageOps
+import io
+left, top, right, bottom = (float(arg) for arg in sys.argv[1:5])
+image = Image.open(sys.stdin.buffer).convert('RGBA')
+pad = 12
+box = (max(0, left - pad), max(0, top - pad), min(image.width, right + pad), min(image.height, bottom + pad))
+crop = image.crop(box)
+large = ImageOps.autocontrast(crop.convert('L').resize((max(1, crop.width * 4), max(1, crop.height * 4)), Image.Resampling.LANCZOS))
+buf = io.BytesIO()
+large.save(buf, format='PNG')
+sys.stdout.buffer.write(buf.getvalue())
+`;
+
+export function ocrFrameBox(bytes, box) {
+  const result = spawnSync(ocrPython(), ['-c', cropScript, String(box.left), String(box.top), String(box.right), String(box.bottom)], {
+    input: Buffer.from(bytes),
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  if (result.status !== 0) throw new Error(`frame crop failed: ${(result.stderr || result.error || '').toString().slice(0, 500)}`);
+  return ocrFrame(result.stdout);
+}
+
 export function ocrFrame(bytes) {
   const dir = mkdtempSync(join(tmpdir(), 'opd-ocr-frame-'));
   const file = join(dir, 'frame.png');
@@ -84,18 +108,6 @@ export function ocrFrame(bytes) {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
-}
-
-export function ocrCropTexts(pngs) {
-  if (!pngs.length) return [];
-  const input = JSON.stringify({ crops: pngs.map((png) => Buffer.from(png).toString('base64')) });
-  const result = runHelper(['--crops'], input, pngs.length, 8 * 1024 * 1024);
-  if (result.status !== 0) throw new Error(`line OCR failed: ${(result.stderr || result.error || '').toString().slice(0, 500)}`);
-  const parsed = JSON.parse(result.stdout);
-  if (!parsed || !Array.isArray(parsed.texts) || parsed.texts.length !== pngs.length) {
-    throw new Error('line OCR returned no reading');
-  }
-  return parsed.texts;
 }
 
 export function ocrRasterTile(tiles) {

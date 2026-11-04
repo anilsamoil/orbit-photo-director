@@ -278,26 +278,57 @@ function boxDiffers(left, right, box) {
 /** Countries the live plan column places at France, zoom 1.2, on both engines. */
 export const FRANCE_Z12_NAMES = ['Argentina', 'Brazil', 'Egypt', 'France', 'India', 'Kenya', 'Nigeria'];
 
-/** Kenya-west imagery words, in the 478 by 690 frame. The camera scales and places them. */
-const KENYA_WEST_SLOTS = [[180, 300, 54, 18], [180, 360, 54, 18], [180, 420, 54, 18]];
+/** Screen origin for a camera centered in a frame, using the same web-mercator world as the plan. */
+export function imageryViewport(center, zoom, width, height) {
+  const world = 512 * (2 ** Number(zoom));
+  const mercX = (Number(center[0]) + 180) / 360;
+  const lat = Number(center[1]) * Math.PI / 180;
+  const mercY = (1 - Math.log(Math.tan(lat) + 1 / Math.cos(lat)) / Math.PI) / 2;
+  return {
+    width,
+    height,
+    origin: { x: width / 2 - mercX * world, y: height / 2 - mercY * world },
+    occlusions: [],
+  };
+}
 
-/** Strict crops for the Kenya-west imagery labels. Another camera returns no crops. */
-export function imageryLabelRegions(camera) {
-  const width = Number(camera && camera.width);
-  const height = Number(camera && camera.height);
-  const center = camera && camera.center;
+/** Reference-raster label boxes for this camera, in screenshot pixels. */
+export function imageryLabelRegions(camera, levels = loadCountryRasterLevels()) {
   const zoom = Number(camera && camera.zoom);
-  if (!(width > 0) || !(height > 0) || !Array.isArray(center) || center.length < 2) return [];
-  if (Math.abs(center[0] - 37) > 0.25 || Math.abs(center[1] - 1) > 0.25) return [];
-  if (!(zoom >= 6.5 && zoom < 7)) return [];
-  const scaleX = width / 478;
-  const scaleY = height / 690;
-  return KENYA_WEST_SLOTS.map(([x, y, slotWidth, slotHeight]) => [
-    (x - 2) * scaleX,
-    (y - 2) * scaleY,
-    (x + slotWidth) * scaleX,
-    (y + slotHeight) * scaleY,
-  ]);
+  const country = camera && camera.country;
+  const viewport = camera && camera.viewport
+    ? camera.viewport
+    : (camera && camera.origin
+      ? camera
+      : (camera && camera.center && camera.width && camera.height
+        ? imageryViewport(camera.center, zoom, camera.width, camera.height)
+        : null));
+  if (!viewport || !viewport.origin || !country || !Number.isFinite(zoom) || !(viewport.width > 0) || !(viewport.height > 0)) return [];
+  const world = 512 * (2 ** zoom);
+  const drawn = Math.min(levels.through, Math.max(0, Math.round(zoom + 1)));
+  const painted = levels.countries?.[country] || [];
+  if (!painted.includes(drawn)) return [];
+  const regions = [];
+  for (const tile of [drawn]) {
+    for (const entry of levels.bounds?.[country]?.[String(tile)] || []) {
+      if (entry.service !== 'reference') continue;
+      const glyph = entry.ink || entry.box;
+      if (!glyph || glyph.length < 4) continue;
+      const box = [
+        viewport.origin.x + glyph[0] * world,
+        viewport.origin.y + glyph[1] * world,
+        viewport.origin.x + glyph[2] * world,
+        viewport.origin.y + glyph[3] * world,
+      ];
+      const left = Math.max(box[0], 0);
+      const top = Math.max(box[1], 0);
+      const right = Math.min(box[2], viewport.width);
+      const bottom = Math.min(box[3], viewport.height);
+      if (right - left < 2 || bottom - top < 2) continue;
+      regions.push([left, top, right, bottom]);
+    }
+  }
+  return regions;
 }
 
 function near(value, target, slack) {
@@ -308,17 +339,17 @@ function nearCenter(center, lng, lat) {
   return Array.isArray(center) && Math.abs(center[0] - lng) <= 0.25 && Math.abs(center[1] - lat) <= 0.25;
 }
 
-/** Each camera has its own expected names and, only for the Canada duplicate, a raster read. */
+/** Each camera has its own expected names. Below zoom 3, Canada may hide behind the raster name. */
 export function planCameraContract(country, zoom, center) {
   const z = Number(zoom);
   if (country === 'France' && near(z, 1.2, 0.05) && nearCenter(center, 2, 46)) {
     return { expectedNames: FRANCE_Z12_NAMES.slice(), raster: null };
   }
-  if (country === 'Canada' && near(z, 2.99, 0.02) && nearCenter(center, -100, 50)) {
-    return { expectedNames: ['Canada'], raster: null };
+  if (country === 'Canada' && z < 3 && near(z, 2.99, 0.02) && nearCenter(center, -100, 50)) {
+    return { expectedNames: ['Canada'], raster: null, hide: 'Canada' };
   }
-  if (country === 'Canada' && near(z, 1.5, 0.02) && nearCenter(center, -100, 50)) {
-    return { expectedNames: [], raster: 'CANADA' };
+  if (country === 'Canada' && z < 3) {
+    return { expectedNames: null, raster: 'CANADA', hide: 'Canada' };
   }
   if (z >= 3 && (country === 'France' || country === 'Kenya')) return { expectedNames: [], raster: null };
   if (z >= 3) return { expectedNames: [], raster: null };
@@ -330,6 +361,7 @@ function labelCounts(labels) {
   for (const label of labels || []) {
     const name = label && label.name;
     if (typeof name !== 'string' || !name) continue;
+    if (Number(label.opacity) === 0) continue;
     counts[name] = (counts[name] || 0) + 1;
   }
   return counts;
@@ -348,11 +380,17 @@ function boxHits(box, rect) {
   return box.left < rect.right && box.right > rect.left && box.top < rect.bottom && box.bottom > rect.top;
 }
 
-/** Names and counts come from queryRenderedFeatures. Boxes are checked against the DOM rectangles. */
-export function labelScreenVerdict({ head, main, expectedNames }) {
+/** Names and counts come from placed labels. One declared hide is the only allowed difference from main. */
+export function labelScreenVerdict({ head, main, expectedNames, hide }) {
   const headCounts = labelCounts(head && head.labels);
   const mainCounts = labelCounts(main && main.labels);
-  if (stableCounts(headCounts) !== stableCounts(mainCounts)) {
+  if (hide) {
+    const same = stableCounts(headCounts) === stableCounts(mainCounts);
+    const hidden = !headCounts[hide] && stableCounts({ ...headCounts, [hide]: 1 }) === stableCounts(mainCounts);
+    if (!same && !hidden) {
+      return { ok: false, reason: 'parity', head: headCounts, main: mainCounts };
+    }
+  } else if (stableCounts(headCounts) !== stableCounts(mainCounts)) {
     return { ok: false, reason: 'parity', head: headCounts, main: mainCounts };
   }
   if (expectedNames) {

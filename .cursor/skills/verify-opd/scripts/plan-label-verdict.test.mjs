@@ -10,9 +10,9 @@ import { readableRasterName } from './raster-ocr.mjs';
 import { letteringOccluded } from '../../../../frontend/src/map/adapters/maplibre/country-label-size.ts';
 import {
   AUDITED_RASTER_LEVELS, auditRasterLevels, captureEnvironmentOk, countryStyleVerdict, countrySweepZooms,
-  anchorOnPlan, auditedNameCandidates, auditedNameReadable, clippedRasterRemnant, completeNameCount, imageryRegionDiff, imageryLabelRegions, labelScreenVerdict, labelTile, loadCountryRasterLevels, loadCountrySymbolLayers, nameCountOk, oneNameSource, pairedRasterNames, planCameraContract, planLabelReaders, planLabelVerdict, rasterDuplicateVerdict, rasterNameEvidence, rasterPainted, RASTER_PAIR_TOLERANCE, symbolCrossesEdge,
+  anchorOnPlan, auditedNameCandidates, auditedNameReadable, clippedRasterRemnant, completeNameCount, imageryRegionDiff, imageryLabelRegions, imageryViewport, labelScreenVerdict, labelTile, loadCountryRasterLevels, loadCountrySymbolLayers, nameCountOk, oneNameSource, pairedRasterNames, planCameraContract, planLabelReaders, planLabelVerdict, rasterDuplicateVerdict, rasterNameEvidence, rasterPainted, RASTER_PAIR_TOLERANCE, symbolCrossesEdge,
 } from './plan-label-verdict.mjs';
-import { acceptPlanSweepRow } from './drive.mjs';
+import { acceptPlanSweepRow, assertPlanLabelChecks } from './drive.mjs';
 
 test('an exact sovereign name is not vetoed by an unrelated adjective', () => {
   assert.equal(rasterPainted('AUSTRALIA\nGreat Australian Bight', 'Australia'), true);
@@ -575,9 +575,77 @@ test('a low-zoom sweep rejects an empty list only on a camera that expects names
   assert.throws(() => acceptPlanSweepRow(row({ country: 'France', zoom: 1.2, center: [2, 46] })), /plan label names/);
   acceptPlanSweepRow(row({ country: 'Canada', zoom: 1.2, center: [-100, 50] }));
   acceptPlanSweepRow(row({ country: 'Kenya', zoom: 1.2, center: [38, 1] }));
+  const duplicate = planCameraContract('Canada', 1.5, [-100, 50]);
+  assert.equal(duplicate.expectedNames, null);
+  assert.equal(duplicate.hide, 'Canada');
+  assert.equal(duplicate.raster, 'CANADA');
+  const wider = planCameraContract('Canada', 2, [2, 46]);
+  assert.equal(wider.hide, 'Canada');
+  assert.equal(wider.raster, 'CANADA');
+  const filtered = {
+    cameraOk: true,
+    tilesOk: true,
+    tileZ: labelTile(2.99),
+    zoom: 2.99,
+    requestedZoom: 2.99,
+    center: [-100, 50],
+    country: 'Canada',
+    names: ['Canada'],
+    headPlacement: { labels: [{ name: 'Canada', opacity: 0, box: { left: 10, top: 10, right: 40, bottom: 24 } }], canvas: { left: 0, top: 0, right: 400, bottom: 800 }, chrome: [] },
+  };
+  assert.throws(() => acceptPlanSweepRow(filtered), /plan label names/);
   assert.equal(planCameraContract('Canada', 1.5, [-100, 50]).raster, 'CANADA');
-  assert.equal(planCameraContract('Canada', 2.5, [-100, 50]).raster, null);
-  assert.equal(planCameraContract('Canada', 1.5).raster, null);
+  assert.equal(planCameraContract('Canada', 2.5, [-100, 50]).hide, 'Canada');
+  assert.equal(planCameraContract('Canada', 3, [-100, 50]).hide, undefined);
+});
+
+test('the Canada duplicate allows only the declared hide, and a half-off label fails', () => {
+  const canvas = { left: 0, top: 0, right: 400, bottom: 800 };
+  const mexico = { name: 'Mexico', opacity: 1, box: { left: 40, top: 200, right: 90, bottom: 220 } };
+  const brazil = { name: 'Brazil', opacity: 1, box: { left: 40, top: 260, right: 90, bottom: 280 } };
+  const canada = { name: 'Canada', opacity: 1, box: { left: 30, top: 120, right: 80, bottom: 140 } };
+  const head = { labels: [mexico, brazil], canvas, chrome: [] };
+  const main = { labels: [canada, mexico, brazil], canvas, chrome: [] };
+  const contract = planCameraContract('Canada', 1.5, [-100, 50]);
+  const healthy = labelScreenVerdict({ head, main, expectedNames: contract.expectedNames, hide: contract.hide });
+  assert.equal(healthy.ok, true);
+  const otherSize = labelScreenVerdict({
+    head: { labels: [mexico], canvas, chrome: [] },
+    main: { labels: [canada, mexico], canvas, chrome: [] },
+    hide: planCameraContract('Canada', 2, [-80, 55]).hide,
+  });
+  assert.equal(otherSize.ok, true);
+  const faded = labelScreenVerdict({
+    head: { labels: [mexico, brazil, { name: 'Canada', opacity: 0, box: canada.box }], canvas, chrome: [] },
+    main,
+    hide: 'Canada',
+  });
+  assert.equal(faded.ok, true);
+  const extra = labelScreenVerdict({
+    head: { labels: [mexico, brazil, { name: 'Argentina', opacity: 1, box: mexico.box }], canvas, chrome: [] },
+    main,
+    expectedNames: contract.expectedNames,
+    hide: contract.hide,
+  });
+  assert.equal(extra.ok, false);
+  assert.equal(extra.reason, 'parity');
+  const half = { left: 380, top: 200, right: 430, bottom: 220 };
+  const clipped = labelScreenVerdict({
+    head: { labels: [{ name: 'Canada', opacity: 1, box: half }], canvas, chrome: [] },
+    main: { labels: [{ name: 'Canada', opacity: 1, box: half }], canvas, chrome: [] },
+    expectedNames: ['Canada'],
+  });
+  assert.equal(clipped.ok, false);
+  assert.equal(clipped.reason, 'canvas');
+  assert.throws(() => assertPlanLabelChecks({
+    tilesOk: true,
+    tileZ: labelTile(1.5),
+    zoom: 1.5,
+    country: 'Canada',
+    center: [-100, 50],
+    names: ['Mexico', 'Brazil'],
+    contract,
+  }), /plan label raster-name/);
 });
 
 test('imagery label regions fail the Kenya edits, towns, and rotated look-alikes', () => {
@@ -585,26 +653,66 @@ test('imagery label regions fail the Kenya edits, towns, and rotated look-alikes
     const png = readFileSync(new URL(`./fixtures/${dir}/${name}.png`, import.meta.url));
     return { ...decodePng(png), png };
   };
-  const regions = imageryLabelRegions({ width: 478, height: 690, center: [37, 1], zoom: 6.5 });
+  const stock = (head, main) => {
+    const zoom = 7.7;
+    const levels = loadCountryRasterLevels();
+    const drawn = Math.min(levels.through, Math.round(zoom + 1));
+    const ink = levels.bounds.Kenya[String(drawn)].find((entry) => entry.service === 'reference').ink;
+    const world = 512 * (2 ** zoom);
+    return {
+    tilesOk: true,
+    tileZ: labelTile(zoom),
+    zoom,
+    country: 'Kenya',
+    center: [37, 1],
+    names: [],
+    viewport: { width: head.width, height: head.height, origin: { x: 150 - ink[0] * world, y: 360 - ink[1] * world } },
+    headShot: head,
+    mainShot: main,
+    headPlacement: { labels: [], canvas: { left: 0, top: 0, right: head.width, bottom: head.height }, chrome: [] },
+    mainPlacement: { labels: [], canvas: { left: 0, top: 0, right: main.width, bottom: main.height }, chrome: [] },
+  };
+  };
   const missed = [];
   for (const engine of ['chromium', 'webkit']) {
     const main = load('plan-label-regression', `${engine}-main`);
-    if (!imageryRegionDiff(main, main, regions).ok) missed.push(`${engine} main`);
+    try {
+      assertPlanLabelChecks(stock(main, main));
+    } catch (error) {
+      missed.push(`${engine} main ${error.message}`);
+    }
     for (const name of ['removed', 'egypt', 'three', 'nya', 'chrome']) {
       const head = load('plan-label-regression', `${engine}-${name}`);
-      const region = imageryRegionDiff(head, main, regions);
-      const global = pairedRasterNames(head, main);
-      if (region.ok) missed.push(`${engine} ${name} region passed`);
-      if (!global.ok) missed.push(`${engine} ${name} global ${global.reason}`);
+      try {
+        assertPlanLabelChecks(stock(head, main));
+        missed.push(`${engine} ${name} passed`);
+      } catch (error) {
+        if (!/plan label region/.test(error.message)) missed.push(`${engine} ${name} ${error.message}`);
+      }
     }
     const towns = load('plan-label-foreign', 'towns');
     const foreignMain = load('plan-label-foreign', `${engine}-main`);
-    if (imageryRegionDiff(towns, foreignMain, regions).ok) missed.push(`${engine} towns`);
-    if (imageryRegionDiff(towns, foreignMain, regions, [{ left: 0, top: 0, right: 478, bottom: 690 }]).ok) missed.push(`${engine} towns ignored`);
+    for (const ignore of [false, true]) {
+      const row = stock(towns, foreignMain);
+      if (ignore) row.ignoreRects = [{ left: 170, top: 290, right: 250, bottom: 480 }];
+      try {
+        assertPlanLabelChecks(row);
+        missed.push(`${engine} towns${ignore ? ' ignored' : ''} passed`);
+      } catch (error) {
+        if (!/plan label region/.test(error.message)) missed.push(`${engine} towns ${error.message}`);
+      }
+    }
     for (const name of ['greek', 'accent']) {
       const straight = load('plan-label-foreign', `${engine}-${name}`);
       const turned = rotateImage(straight, 20);
-      if (imageryRegionDiff(turned, foreignMain, regions).ok) missed.push(`${engine} ${name} rotated`);
+      const regions = imageryLabelRegions({ country: 'Kenya', zoom: 7.7, viewport: stock(foreignMain, foreignMain).viewport });
+      if (imageryRegionDiff(turned, foreignMain, regions).ok) missed.push(`${engine} ${name} region passed`);
+      try {
+        assertPlanLabelChecks(stock(turned, foreignMain));
+        missed.push(`${engine} ${name} rotated passed`);
+      } catch (error) {
+        if (!/plan label (region|raster)/.test(error.message)) missed.push(`${engine} ${name} ${error.message}`);
+      }
     }
   }
   assert.deepEqual(missed, []);

@@ -4,8 +4,9 @@ import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PLAN_TILE_HELPERS } from './drive.mjs';
-import { imageryLabelRegions, FRANCE_Z12_NAMES, labelScreenVerdict, rasterDuplicateVerdict } from './plan-label-verdict.mjs';
+import { assertPlanLabelChecks, PLAN_TILE_HELPERS } from './drive.mjs';
+import { decodePng } from './decode-png.mjs';
+import { FRANCE_Z12_NAMES, labelScreenVerdict, labelTile, loadCountryRasterLevels, rasterDuplicateVerdict } from './plan-label-verdict.mjs';
 import { ocrFrame } from './raster-ocr.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
@@ -18,8 +19,6 @@ const engines = [
   { name: 'chromium', type: chromium, executablePath: chromePath },
   { name: 'webkit', type: webkit },
 ];
-const kenyaCamera = { center: [37, 1], zoom: 6.5 };
-
 async function waitSettled(page) {
   await page.waitForFunction(() => {
     const map = window.__planMap;
@@ -75,50 +74,56 @@ function loadPng(dir, name) {
   return readFileSync(new URL(`./fixtures/${dir}/${name}.png`, import.meta.url)).toString('base64');
 }
 
-async function browserRegionChanged(page, head, main, degrees, ignore) {
-  return page.evaluate(async ({ head, main, degrees, regions, ignore }) => {
-    void ignore;
-    const load = (encoded) => new Promise((resolve, reject) => {
-      const image = new Image();
-      image.onload = () => resolve(image);
-      image.onerror = () => reject(new Error('image'));
-      image.src = `data:image/png;base64,${encoded}`;
+function loadDecoded(dir, name) {
+  const png = readFileSync(new URL(`./fixtures/${dir}/${name}.png`, import.meta.url));
+  return { ...decodePng(png), png };
+}
+
+function stockPair(head, main, ignoreRects) {
+  const zoom = 7.7;
+  const levels = loadCountryRasterLevels();
+  const drawn = Math.min(levels.through, Math.round(zoom + 1));
+  const ink = levels.bounds.Kenya[String(drawn)].find((entry) => entry.service === 'reference').ink;
+  const world = 512 * (2 ** zoom);
+  return {
+    tilesOk: true,
+    tileZ: labelTile(zoom),
+    zoom,
+    country: 'Kenya',
+    center: [37, 1],
+    names: [],
+    viewport: { width: head.width, height: head.height, origin: { x: 150 - ink[0] * world, y: 360 - ink[1] * world } },
+    headShot: head,
+    mainShot: main,
+    ignoreRects,
+    headPlacement: { labels: [], canvas: { left: 0, top: 0, right: head.width, bottom: head.height }, chrome: [] },
+    mainPlacement: { labels: [], canvas: { left: 0, top: 0, right: main.width, bottom: main.height }, chrome: [] },
+  };
+}
+
+async function browserTurn(page, encoded, degrees) {
+  const url = await page.evaluate(async ({ encoded, degrees }) => {
+    const image = await new Promise((resolve, reject) => {
+      const picture = new Image();
+      picture.onload = () => resolve(picture);
+      picture.onerror = () => reject(new Error('image'));
+      picture.src = `data:image/png;base64,${encoded}`;
     });
-    const paint = async (encoded, turn) => {
-      const image = await load(encoded);
-      const canvas = document.createElement('canvas');
-      canvas.width = image.width;
-      canvas.height = image.height;
-      const context = canvas.getContext('2d', { willReadFrequently: true });
-      context.fillStyle = '#181a1c';
-      context.fillRect(0, 0, canvas.width, canvas.height);
-      if (turn) {
-        context.translate(canvas.width / 2, canvas.height / 2);
-        context.rotate(turn * Math.PI / 180);
-        context.drawImage(image, -image.width / 2, -image.height / 2);
-      } else context.drawImage(image, 0, 0);
-      return context.getImageData(0, 0, canvas.width, canvas.height);
-    };
-    const left = await paint(head, degrees || 0);
-    const right = await paint(main, 0);
-    const changed = (box) => {
-      const x0 = Math.max(0, Math.floor(box[0]));
-      const y0 = Math.max(0, Math.floor(box[1]));
-      const x1 = Math.min(left.width, Math.ceil(box[2]));
-      const y1 = Math.min(left.height, Math.ceil(box[3]));
-      for (let y = y0; y < y1; y += 1) {
-        for (let x = x0; x < x1; x += 1) {
-          const index = (y * left.width + x) * 4;
-          const delta = Math.abs(left.data[index] - right.data[index])
-            + Math.abs(left.data[index + 1] - right.data[index + 1])
-            + Math.abs(left.data[index + 2] - right.data[index + 2]);
-          if (delta > 48) return true;
-        }
-      }
-      return false;
-    };
-    return regions.some(changed);
-  }, { head, main, degrees, ignore: ignore || null, regions: imageryLabelRegions({ width: 478, height: 690, ...kenyaCamera }) });
+    const canvas = document.createElement('canvas');
+    canvas.width = image.width;
+    canvas.height = image.height;
+    const context = canvas.getContext('2d');
+    context.fillStyle = '#181a1c';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    if (degrees) {
+      context.translate(canvas.width / 2, canvas.height / 2);
+      context.rotate(degrees * Math.PI / 180);
+      context.drawImage(image, -image.width / 2, -image.height / 2);
+    } else context.drawImage(image, 0, 0);
+    return canvas.toDataURL('image/png');
+  }, { encoded, degrees });
+  const png = Buffer.from(url.slice(url.indexOf(',') + 1), 'base64');
+  return { ...decodePng(png), png };
 }
 
 for (const engine of engines) {
@@ -144,7 +149,12 @@ for (const engine of engines) {
       const france = await readPlacement(page);
       const franceNames = placedNames(france);
       assert.deepEqual(franceNames, [...FRANCE_Z12_NAMES].sort(), `${engine.name} France ${JSON.stringify(franceNames)}`);
-      assert.equal(labelScreenVerdict({ head: france, main: france, expectedNames: franceNames }).ok, true);
+      const franceVerdict = labelScreenVerdict({ head: france, main: france, expectedNames: franceNames });
+      const crosses = france.labels.some((label) => label.box && france.canvas && (
+        label.box.left < france.canvas.left || label.box.top < france.canvas.top
+        || label.box.right > france.canvas.right || label.box.bottom > france.canvas.bottom
+      ));
+      assert.equal(crosses ? franceVerdict.reason : franceVerdict.ok, crosses ? 'canvas' : true, JSON.stringify(franceVerdict));
 
       await page.evaluate(() => {
         window.__planMap.setLayoutProperty('inset-countries', 'text-field', 'Mexico');
@@ -198,6 +208,8 @@ for (const engine of engines) {
 
       await go(page, [-100, 50], 1.5);
       const duplicate = await readPlacement(page);
+      assert.deepEqual(placedNames(duplicate), ['Brazil', 'Mexico'], `${engine.name} duplicate ${JSON.stringify(placedNames(duplicate))}`);
+      assert.equal(duplicate.labels.some((label) => label.name === 'Canada'), false);
       const readWord = async (word) => {
         const painted = await page.evaluate(async (word) => {
         const canvas = document.createElement('canvas');
@@ -270,20 +282,41 @@ for (const engine of engines) {
     const browser = await engine.type.launch({ headless: true, executablePath: engine.executablePath });
     try {
       const page = await browser.newPage();
-      const main = loadPng('plan-label-regression', `${engine.name}-main`);
+      const paint = (dir, name, degrees) => browserTurn(page, loadPng(dir, name), degrees || 0);
+      const main = await paint('plan-label-regression', `${engine.name}-main`);
       const missed = [];
-      if (await browserRegionChanged(page, main, main, 0)) missed.push('main');
-      for (const name of ['removed', 'egypt', 'three', 'nya', 'chrome']) {
-        const head = loadPng('plan-label-regression', `${engine.name}-${name}`);
-        if (!await browserRegionChanged(page, head, main, 0)) missed.push(name);
+      try {
+        assertPlanLabelChecks(stockPair(main, main));
+      } catch (error) {
+        missed.push(`main ${error.message}`);
       }
-      const towns = loadPng('plan-label-foreign', 'towns');
-      const foreignMain = loadPng('plan-label-foreign', `${engine.name}-main`);
-      if (!await browserRegionChanged(page, towns, foreignMain, 0)) missed.push('towns');
-      if (!await browserRegionChanged(page, towns, foreignMain, 0, { left: 0, top: 0, right: 478, bottom: 690 })) missed.push('towns ignored');
+      for (const name of ['removed', 'egypt', 'three', 'nya', 'chrome']) {
+        const head = await paint('plan-label-regression', `${engine.name}-${name}`);
+        try {
+          assertPlanLabelChecks(stockPair(head, main));
+          missed.push(`${name} passed`);
+        } catch (error) {
+          if (!/plan label region/.test(error.message)) missed.push(`${name} ${error.message}`);
+        }
+      }
+      const towns = await paint('plan-label-foreign', 'towns');
+      const foreignMain = await paint('plan-label-foreign', `${engine.name}-main`);
+      for (const ignore of [undefined, [{ left: 170, top: 290, right: 250, bottom: 480 }]]) {
+        try {
+          assertPlanLabelChecks(stockPair(towns, foreignMain, ignore));
+          missed.push(`towns${ignore ? ' ignored' : ''} passed`);
+        } catch (error) {
+          if (!/plan label region/.test(error.message)) missed.push(`towns ${error.message}`);
+        }
+      }
       for (const name of ['greek', 'accent']) {
-        const head = loadPng('plan-label-foreign', `${engine.name}-${name}`);
-        if (!await browserRegionChanged(page, head, foreignMain, 20)) missed.push(`${name} rotated`);
+        const turned = await paint('plan-label-foreign', `${engine.name}-${name}`, 20);
+        try {
+          assertPlanLabelChecks(stockPair(turned, foreignMain));
+          missed.push(`${name} rotated passed`);
+        } catch (error) {
+          if (!/plan label (region|raster)/.test(error.message)) missed.push(`${name} ${error.message}`);
+        }
       }
       assert.deepEqual(missed, []);
     } finally {

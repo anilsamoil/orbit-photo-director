@@ -5,9 +5,9 @@ import { dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
 import { earthAfterResizeReaders } from './earth-after-resize.mjs';
-import { auditRasterLevels, countryIdentity, countrySweepZooms, keptCountrySymbol, labelScreenVerdict, loadCountryRasterLevels, matchesMain, occurrenceCount, pairedRasterNames, planCameraContract, PLAN_COUNTRIES, planLabelReaders, rasterDuplicateVerdict, tilesLoaded } from './plan-label-verdict.mjs';
+import { auditRasterLevels, countryIdentity, countrySweepZooms, imageryLabelRegions, imageryRegionDiff, keptCountrySymbol, labelScreenVerdict, loadCountryRasterLevels, matchesMain, occurrenceCount, pairedRasterNames, planCameraContract, PLAN_COUNTRIES, planLabelReaders, rasterDuplicateVerdict, tilesLoaded } from './plan-label-verdict.mjs';
 import { decodePng } from './decode-png.mjs';
-import { ocrFrame } from './raster-ocr.mjs';
+import { ocrFrame, ocrFrameBox } from './raster-ocr.mjs';
 import { checkRasterOcr, clearRasterOcrRun, rasterOcrStats } from './raster-ocr.mjs';
 import { pinFixtureCookie } from './fixture-session.mjs';
 import { BOSTON_NADIR_EPOCH_MS, effectiveNowMs, refreshLaunchClock } from './fixtures.mjs';
@@ -6800,15 +6800,8 @@ function planLabelPlacement(map) {
           if (anchorX >= 0 && anchorY >= 0 && anchorX <= width && anchorY <= height) labels.push({ name: propertyName, opacity: opacityValue, box: null });
           continue;
         }
-        if (right < canvasBox.left || bottom < canvasBox.top || left > canvasBox.right || top > canvasBox.bottom) continue;
-        const placed = {
-          left: Math.max(left, canvasBox.left),
-          top: Math.max(top, canvasBox.top),
-          right: Math.min(right, canvasBox.right),
-          bottom: Math.min(bottom, canvasBox.bottom),
-        };
-        if (!(placed.right - placed.left >= 2 && placed.bottom - placed.top >= 2)) continue;
-        labels.push({ name: propertyName, opacity: opacityValue, box: placed });
+        if (!(right > canvasBox.left && bottom > canvasBox.top && left < canvasBox.right && top < canvasBox.bottom)) continue;
+        labels.push({ name: propertyName, opacity: opacityValue, box: { left, top, right, bottom } });
       }
     }
   }
@@ -7281,6 +7274,7 @@ async function capturePlanCanvas(send) {
     }
     const marker = frame.querySelector('.maplibregl-marker');
     if (marker) marker.style.visibility = 'hidden';
+    for (const node of document.querySelectorAll('[data-iss-clock], [data-iss-edition]')) node.style.visibility = 'hidden';
     const waited = await planWaitTiles(map);
     if (!waited.tilesOk) return { ok: false, detail: waited.detail };
     const rect = canvas.getBoundingClientRect();
@@ -7316,6 +7310,7 @@ async function capturePlanCanvas(send) {
     }
     const marker = frame.querySelector('.maplibregl-marker');
     if (marker) marker.style.visibility = '';
+    for (const node of document.querySelectorAll('[data-iss-clock], [data-iss-edition]')) node.style.visibility = '';
     return { ok: true };
   })()`);
   if (!decoded) return null;
@@ -7340,19 +7335,29 @@ function visiblePlanNames(row) {
   return (row.names || []).filter((name) => !hidden.has(name));
 }
 
+function shownLabelNames(row) {
+  if (row.headPlacement && Array.isArray(row.headPlacement.labels)) {
+    return row.headPlacement.labels
+      .filter((label) => label && Number(label.opacity) > 0 && typeof label.name === 'string' && label.name)
+      .map((label) => label.name);
+  }
+  return visiblePlanNames(row);
+}
+
 /** Tiles, country identity, occurrence count, and main parity. Each check throws on its own. */
 export function assertPlanLabelChecks(row) {
   const tiles = tilesLoaded(row);
   if (!tiles.ok) throw new Error(`plan label tiles ${JSON.stringify(tiles)}`);
-  const names = visiblePlanNames(row);
+  const names = shownLabelNames(row);
   const identity = countryIdentity(names, row.country);
   if (!identity.ok) throw new Error(`plan label country ${JSON.stringify(identity)}`);
   const zoom = Number(row.zoom);
   const contract = row.contract || planCameraContract(row.country, zoom, row.center);
-  if (Array.isArray(contract.expectedNames) && contract.expectedNames.length > 0) {
-    if (names.length === 0 || (contract.expectedNames.includes(row.country) && !names.includes(row.country))) {
-      throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, expected: contract.expectedNames })}`);
-    }
+  if (Array.isArray(contract.expectedNames) && contract.expectedNames.length > 0 && names.length === 0) {
+    throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, expected: contract.expectedNames })}`);
+  }
+  if (Array.isArray(contract.expectedNames) && contract.expectedNames.includes(row.country) && !names.includes(row.country)) {
+    throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, expected: contract.expectedNames })}`);
   }
   if (zoom >= 3) {
     const count = occurrenceCount(names.length, 0);
@@ -7361,6 +7366,11 @@ export function assertPlanLabelChecks(row) {
     if (!parity.ok) throw new Error(`plan label parity ${JSON.stringify(parity)}`);
     const pixels = pairedRasterNames(row.headShot, row.mainShot, { ignoreRects: row.ignoreRects || [] });
     if (!pixels.ok) throw new Error(`plan label raster ${JSON.stringify({ country: row.country, zoom, reason: pixels.reason, ratio: pixels.ratio })}`);
+    const regions = imageryLabelRegions({ country: row.country, zoom, center: row.center, viewport: row.viewport, width: row.headShot && row.headShot.width, height: row.headShot && row.headShot.height });
+    if (regions.length) {
+      const region = imageryRegionDiff(row.headShot, row.mainShot, regions);
+      if (!region.ok) throw new Error(`plan label region ${JSON.stringify({ country: row.country, zoom, reason: region.reason, box: region.box })}`);
+    }
     const placed = placementVerdict(row, contract);
     if (!placed.ok) throw new Error(`plan label place ${JSON.stringify({ country: row.country, zoom, ...placed })}`);
     const raster = rasterNameVerdict(row, contract);
@@ -7384,22 +7394,61 @@ function placementVerdict(row, contract) {
     head: row.headPlacement,
     main: row.mainPlacement,
     expectedNames: contract.expectedNames,
+    hide: contract.hide,
   });
+}
+
+function screenshotLabelBox(row, position) {
+  const canvas = row.headPlacement && row.headPlacement.canvas;
+  if (!position || !canvas) return null;
+  return {
+    left: position.left - canvas.left,
+    top: position.top - canvas.top,
+    right: position.right - canvas.left,
+    bottom: position.bottom - canvas.top,
+  };
+}
+
+function ocrLabelText(row, position) {
+  const local = screenshotLabelBox(row, position);
+  if (!local || !(local.right > local.left) || !(local.bottom > local.top)) return ocrFrame(row.headShot.png).text;
+  return ocrFrameBox(row.headShot.png, local).text;
 }
 
 function rasterNameVerdict(row, contract) {
   if (!contract.raster) return { ok: true, skipped: true };
+  if (contract.hide && row.headPlacement && Array.isArray(row.headPlacement.labels)) {
+    const visible = row.headPlacement.labels.some((label) => label && label.name === contract.hide && Number(label.opacity) > 0);
+    if (visible) return { ok: true, skipped: true };
+  }
   const hasFrame = !!(row.headShot && row.headShot.png);
   const hasText = row.rasterText != null;
-  if (!hasFrame && !hasText) return { ok: true, skipped: true };
-  const text = hasText ? row.rasterText : ocrFrame(row.headShot.png).text;
-  const opacity = row.labelOpacity != null
-    ? row.labelOpacity
-    : (row.headPlacement && row.headPlacement.opacity ? row.headPlacement.opacity[row.country] : null);
+  if (!hasFrame && !hasText) return { ok: false, reason: 'raster', declared: contract.raster };
   const position = row.rasterPosition !== undefined
     ? row.rasterPosition
     : (row.headPlacement && row.headPlacement.rasterBox) || null;
+  const text = hasText ? row.rasterText : ocrLabelText(row, position);
+  const opacity = row.labelOpacity != null
+    ? row.labelOpacity
+    : (row.headPlacement && row.headPlacement.opacity ? row.headPlacement.opacity[row.country] : null);
   return rasterDuplicateVerdict({ declared: contract.raster, text, opacity, position });
+}
+
+function assertLowZoomNames(row) {
+  const tiles = tilesLoaded(row);
+  if (!tiles.ok) throw new Error(`plan label tiles ${JSON.stringify(tiles)}`);
+  const names = shownLabelNames(row);
+  const identity = countryIdentity(names, row.country);
+  if (!identity.ok) throw new Error(`plan label country ${JSON.stringify(identity)}`);
+  const zoom = Number(row.zoom);
+  const contract = row.contract || planCameraContract(row.country, zoom, row.center);
+  if (Array.isArray(contract.expectedNames) && contract.expectedNames.length > 0 && names.length === 0) {
+    throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, expected: contract.expectedNames })}`);
+  }
+  if (Array.isArray(contract.expectedNames) && contract.expectedNames.includes(row.country) && !names.includes(row.country)) {
+    throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, expected: contract.expectedNames })}`);
+  }
+  return { tiles, identity, names };
 }
 
 /** A sweep row that did not reach its camera is a failure, including a zoom that was never checked. */
@@ -7408,7 +7457,7 @@ export function acceptPlanSweepRow(row) {
     throw new Error(`plan label camera ${JSON.stringify({ zoom: row && row.zoom, requested: row && row.requestedZoom, center: row && row.center, cameraOk: row && row.cameraOk })}`);
   }
   if (Number(row.requestedZoom) < 3) {
-    assertPlanLabelChecks(row);
+    assertLowZoomNames(row);
     return { below: true };
   }
   return { below: false };
@@ -7487,6 +7536,7 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
             center: seen.center,
             zoom: seen.zoom,
             tileZ: waited.tileZ,
+            placement: planLabelPlacement(map),
             names: planSymbolNames(map),
             hidden: (frame.dataset.insetHiddenCountries || '').split('|').filter(Boolean),
             country: ${JSON.stringify(country.name)},
