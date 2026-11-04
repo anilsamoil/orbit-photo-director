@@ -6976,11 +6976,22 @@ function recordMainCheckout() {
   return sha;
 }
 
+function writePlanPng(file, bytes) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      writeFileSync(file, bytes);
+      return;
+    } catch (error) {
+      if (!error || error.code !== 'EAGAIN' || attempt === 4) throw error;
+    }
+  }
+}
+
 function savePlanPair(name, head, main) {
   const dir = planPairDir();
   mkdirSync(dir, { recursive: true });
-  if (head && head.png) writeFileSync(resolve(dir, `${name}-head.png`), head.png);
-  if (main && main.png) writeFileSync(resolve(dir, `${name}-main.png`), main.png);
+  if (head && head.png) writePlanPng(resolve(dir, `${name}-head.png`), head.png);
+  if (main && main.png) writePlanPng(resolve(dir, `${name}-main.png`), main.png);
 }
 
 async function leaseMainFixture(url, home) {
