@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { nameCountOk } from './plan-label-verdict.mjs';
-import { countCountryGlyphs, countRotatedNames, decodePng, peekingGlyphInk } from './rotated-name-count.mjs';
+import { countCountryGlyphs, countRotatedNames, countryGlyphBoxes, decodePng, peekingGlyphInk } from './rotated-name-count.mjs';
 
 function canvas(width, height) {
   return new Uint8Array(width * height * 4);
@@ -80,7 +80,11 @@ test('the off-centroid verdict counts screenshot ink, including the regressed ca
 
 test('Kenya west counts two names and twelve bright pixels count as none', () => {
   const decoded = decodePng(readFileSync(new URL('./fixtures/label-cameras/kenya-west-37-1.png', import.meta.url)));
+  const boxes = countryGlyphBoxes(decoded.data, decoded.width, decoded.height, 'Kenya');
+  assert.equal(boxes.length, 2);
   assert.equal(countCountryGlyphs(decoded.data, decoded.width, decoded.height, 'Kenya'), 2);
+  assert.ok(boxes.some((box) => box[1] < 150), JSON.stringify(boxes));
+  assert.ok(boxes.some((box) => box[1] > 850), JSON.stringify(boxes));
   const specks = new Uint8Array(120 * 80 * 4);
   for (let index = 0; index < 12; index += 1) {
     const pixel = (20 + index * 7) * 4;

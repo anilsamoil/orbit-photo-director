@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { decodePng } from './rotated-name-count.mjs';
 import vm from 'node:vm';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,9 +10,9 @@ import { readableRasterName } from './raster-ocr.mjs';
 import { letteringOccluded } from '../../../../frontend/src/map/adapters/maplibre/country-label-size.ts';
 import {
   AUDITED_RASTER_LEVELS, auditRasterLevels, countryStyleVerdict, countrySweepZooms,
-  anchorOnPlan, auditedNameCandidates, auditedNameReadable, clippedRasterRemnant, completeNameCount, KENYA_WEST_RASTER_COUNT, labelTile, loadCountryRasterLevels, loadCountrySymbolLayers, nameCountOk, oneNameSource, pairedRasterNames, planLabelReaders, planLabelVerdict, rasterNameEvidence, rasterPainted, symbolCrossesEdge,
+  anchorOnPlan, auditedNameCandidates, auditedNameReadable, clippedRasterRemnant, completeNameCount, frameNameVerdict, KENYA_WEST_RASTER_COUNT, labelTile, loadCountryRasterLevels, loadCountrySymbolLayers, nameCountOk, oneNameSource, pairedRasterNames, planLabelReaders, planLabelVerdict, rasterNameEvidence, rasterPainted, RASTER_PAIR_TOLERANCE, symbolCrossesEdge,
 } from './plan-label-verdict.mjs';
-import { assertPlanLabelChecks } from './drive.mjs';
+import { acceptPlanSweepRow, assertPlanLabelChecks } from './drive.mjs';
 
 test('an exact sovereign name is not vetoed by an unrelated adjective', () => {
   assert.equal(rasterPainted('AUSTRALIA\nGreat Australian Bight', 'Australia'), true);
@@ -363,8 +364,13 @@ test('glyph ink, not the padded OCR box, meets the shared one-pixel clock rule',
   const check = drive.slice(drive.indexOf('export function assertPlanLabelChecks'), drive.indexOf('export async function proveFractionalPlanLabels'));
   assert.match(off, /assertPlanLabelChecks\(/);
   assert.match(off, /KENYA_WEST_RASTER_COUNT/);
+  assert.match(off, /releasePlanCamera\(/);
   assert.match(check, /pairedRasterNames\(/);
-  assert.match(check, /occurrenceCount\(row\.rasterCount, KENYA_WEST_RASTER_COUNT\)/);
+  assert.match(check, /frameNameVerdict\(/);
+  assert.match(check, /countCountryGlyphs|kenyaWest/);
+  assert.match(drive, /KENYA_WEST_RASTER_COUNT/);
+  assert.doesNotMatch(check, /row\.rasterCount|loadMainRaster|counts\.json/);
+  assert.equal(RASTER_PAIR_TOLERANCE, 0.012);
   assert.doesNotMatch(off, /countryGlyphBoxes|clippedRasterRemnant|peekingGlyphInk/);
   assert.doesNotMatch(check, /countryGlyphBoxes/);
 });
@@ -438,39 +444,126 @@ test('paired screenshots reject a blank France, the wrong country, a third Kenya
   assert.equal(frames.length, 20);
   const missed = [];
   for (const [label, main, head, count] of frames) {
-    const verdict = pairedRasterNames(head, main, count);
+    const verdict = pairedRasterNames(head, main);
     if (verdict.ok !== false || verdict.reason !== 'pixels') missed.push(`${label} ${verdict.reason || 'passed'}`);
-    const same = pairedRasterNames(main, main, count);
-    if (same.ok !== true || same.count !== count) missed.push(`${label} matching pair`);
+    const same = pairedRasterNames(main, main);
+    if (same.ok !== true) missed.push(`${label} matching pair`);
   }
   assert.deepEqual(missed, []);
 });
 
-test('Kenya west asserts the raster count of 2 on the paired main frame', () => {
-  const shot = rasterFrame(96, 64, (data, width, height) => {
-    paintWord(data, width, height, 8, 22, 18, 6);
-    paintWord(data, width, height, 46, 22, 18, 6);
-  });
-  const blank = rasterFrame(96, 64, () => {});
+function loadRegression(engine, name) {
+  const file = new URL(`./fixtures/plan-label-regression/${engine}-${name}.png`, import.meta.url);
+  const png = readFileSync(file);
+  return { ...decodePng(png), png };
+}
+
+test('a low zoom left at z8 is a failed check', () => {
+  assert.throws(() => acceptPlanSweepRow({ requestedZoom: 1.2, zoom: 8, cameraOk: false, tilesOk: true, country: 'Mexico' }), /plan label camera/);
+  assert.throws(() => acceptPlanSweepRow({ tilesOk: true, zoom: 8, country: 'Mexico' }), /plan label camera/);
   const row = {
     tilesOk: true,
-    zoom: 6.5,
-    tileZ: labelTile(6.5),
-    country: 'Kenya',
-    names: [],
-    kenyaWest: true,
-    rasterCount: KENYA_WEST_RASTER_COUNT,
-    headShot: shot,
-    mainShot: shot,
+    requestedZoom: 1.2,
+    zoom: 1.2,
+    cameraOk: true,
+    tileZ: labelTile(1.2),
+    country: 'France',
+    names: ['France'],
   };
+  assert.equal(acceptPlanSweepRow(row).below, true);
+});
+
+test('edited Kenya-west frames fail the name count in both engines while staying inside the pixel limit', () => {
+  const manifest = JSON.parse(readFileSync(new URL('./fixtures/plan-label-regression/manifest.json', import.meta.url), 'utf8'));
+  const chrome = { left: manifest.chrome[0], top: manifest.chrome[1], right: manifest.chrome[2], bottom: manifest.chrome[3] };
+  const missed = [];
+  const reasons = [];
+  assert.equal(manifest.engines.length * manifest.cases.length, 10);
+  for (const engine of manifest.engines) {
+    const main = loadRegression(engine, 'main');
+    for (const name of manifest.cases) {
+      const head = loadRegression(engine, name);
+      const label = `${engine} ${name}`;
+      const pixels = pairedRasterNames(head, main);
+      if (pixels.ok !== true || !(pixels.ratio <= RASTER_PAIR_TOLERANCE)) missed.push(`${label} pixels ${pixels.reason || pixels.ratio}`);
+      const row = {
+        tilesOk: true,
+        zoom: 6.5,
+        tileZ: labelTile(6.5),
+        country: 'Kenya',
+        names: [],
+        kenyaWest: true,
+        headShot: head,
+        mainShot: main,
+        chromeRects: name === 'chrome' ? [chrome] : [],
+      };
+      try {
+        assertPlanLabelChecks(row);
+        missed.push(`${label} passed`);
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        const body = text.replace(/^plan label \w+ /, '');
+        let parsed = null;
+        try { parsed = JSON.parse(body); } catch { parsed = null; }
+        if (!parsed || parsed.reason !== 'name' || parsed.main.KENYA !== 2) missed.push(`${label} ${text}`);
+        else reasons.push(`${label} ${JSON.stringify(parsed.head)}`);
+      }
+    }
+  }
+  assert.deepEqual(missed, []);
+  assert.deepEqual(reasons, [
+    'chromium removed {"KENYA":1}',
+    'chromium egypt {"KENYA":1,"EGYPT":1}',
+    'chromium three {"KENYA":3}',
+    'chromium nya {"KENYA":1}',
+    'chromium chrome {"KENYA":1}',
+    'webkit removed {"KENYA":1}',
+    'webkit egypt {"KENYA":1,"EGYPT":1}',
+    'webkit three {"KENYA":3}',
+    'webkit nya {"KENYA":1}',
+    'webkit chrome {"KENYA":1}',
+  ]);
+  const kenyaPng = readFileSync(new URL('./fixtures/label-cameras/kenya-west-37-1.png', import.meta.url));
+  const kenyaFrame = { ...decodePng(kenyaPng), png: kenyaPng };
+  const seen = frameNameVerdict(kenyaFrame, kenyaFrame, 'Kenya', { kenyaWest: true });
+  assert.equal(seen.ok, true, JSON.stringify(seen));
+  assert.equal(seen.count, 2);
   assert.equal(KENYA_WEST_RASTER_COUNT, 2);
-  assert.equal(pairedRasterNames(shot, shot, 2, { kenyaWest: true }).ok, true);
-  assert.equal(pairedRasterNames(shot, shot, 1, { kenyaWest: true }).reason, 'count');
-  assert.equal(pairedRasterNames(shot, shot, 3, { kenyaWest: true }).ok, false);
-  assert.doesNotThrow(() => assertPlanLabelChecks(row));
-  assert.throws(() => assertPlanLabelChecks({ ...row, rasterCount: 0 }), /plan label count/);
-  assert.throws(() => assertPlanLabelChecks({ ...row, headShot: blank }), /plan label raster/);
-  assert.throws(() => assertPlanLabelChecks({
-    tilesOk: true, zoom: 6.5, tileZ: labelTile(6.5), country: 'France', names: [], rasterCount: 0, headShot: blank, mainShot: shot,
-  }), /plan label raster/);
+});
+
+test('painted-out and duplicated CANADA fail the name check inside the pixel limit', () => {
+  const drawn = execFileSync('python3', ['-c', String.raw`
+import os
+from PIL import Image, ImageDraw, ImageFont
+out = os.environ['OPD_CANADA_FRAMES']
+os.makedirs(out, exist_ok=True)
+font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 22)
+def frame(words):
+    image = Image.new('RGBA', (492, 690), (24, 26, 28, 255))
+    draw = ImageDraw.Draw(image)
+    for text, x, y in words:
+        draw.text((x, y), text, font=font, fill=(236, 232, 220, 255))
+    return image
+main = frame([('CANADA', 180, 300)])
+main.save(out + '/main.png')
+frame([]).save(out + '/painted-out.png')
+frame([('CANADA', 180, 300), ('CANADA', 180, 340)]).save(out + '/duplicated.png')
+print('ok')
+`], { env: { ...process.env, OPD_CANADA_FRAMES: '/tmp/opd-canada-frames' } });
+  assert.match(drawn.toString(), /ok/);
+  const load = (name) => {
+    const png = readFileSync(`/tmp/opd-canada-frames/${name}.png`);
+    return { ...decodePng(png), png };
+  };
+  const main = load('main');
+  const cases = ['painted-out', 'duplicated'];
+  const missed = [];
+  for (const name of cases) {
+    const head = load(name);
+    const pixels = pairedRasterNames(head, main);
+    if (pixels.ok !== true || !(pixels.ratio <= RASTER_PAIR_TOLERANCE) || !(pixels.ratio > 0)) missed.push(`${name} pixels ${pixels.ratio}`);
+    const verdict = frameNameVerdict(head, main, 'Canada');
+    if (verdict.ok !== false) missed.push(`${name} passed`);
+  }
+  assert.deepEqual(missed, []);
 });

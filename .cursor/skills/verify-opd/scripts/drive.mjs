@@ -1,12 +1,14 @@
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
 import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
 import { earthAfterResizeReaders } from './earth-after-resize.mjs';
-import { auditRasterLevels, countryIdentity, countrySweepZooms, KENYA_WEST_RASTER_COUNT, keptCountrySymbol, loadCountryRasterLevels, matchesMain, occurrenceCount, pairedRasterNames, PLAN_COUNTRIES, planLabelReaders, tilesLoaded } from './plan-label-verdict.mjs';
+import { auditRasterLevels, countryIdentity, countrySweepZooms, frameNameVerdict, KENYA_WEST_RASTER_COUNT, keptCountrySymbol, loadCountryRasterLevels, matchesMain, occurrenceCount, pairedRasterNames, PLAN_COUNTRIES, planLabelReaders, tilesLoaded } from './plan-label-verdict.mjs';
 import { decodePng } from './rotated-name-count.mjs';
 import { checkRasterOcr, clearRasterOcrRun, rasterOcrStats } from './raster-ocr.mjs';
-import { pinFixtureCookie } from './fixture-session.mjs';
+import { fixtureCookie, pinFixtureCookie } from './fixture-session.mjs';
 import { BOSTON_NADIR_EPOCH_MS, effectiveNowMs, refreshLaunchClock } from './fixtures.mjs';
 import { freezeFixtureClock, restoreFixtureClock } from './fixture-clock.mjs';
 import { proveLaunchPlacement } from './placement-proof.mjs';
@@ -192,23 +194,8 @@ function chromeBin() {
   return process.env.OPD_VERIFY_CHROME || 'google-chrome';
 }
 
-export async function connectCdp(port) {
-  let list = [];
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/json/list`);
-      if (response.ok) {
-        list = await response.json();
-        if (list.some((entry) => entry.type === 'page' && entry.webSocketDebuggerUrl)) break;
-      }
-    } catch {
-      list = [];
-    }
-    await sleep(200);
-  }
-  const page = list.find((entry) => entry.type === 'page' && entry.webSocketDebuggerUrl);
-  if (!page) throw new Error(`chrome debug port ${port} has no page`);
-  const ws = new WebSocket(page.webSocketDebuggerUrl);
+async function connectSocket(wsUrl) {
+  const ws = new WebSocket(wsUrl);
   await new Promise((resolveOpen, rejectOpen) => {
     const timer = setTimeout(() => rejectOpen(new Error('chrome websocket timed out')), 10000);
     ws.addEventListener('open', () => {
@@ -249,11 +236,26 @@ export async function connectCdp(port) {
     handlers.push(handler);
     listeners.set(method, handlers);
   }
-  return {
-    send,
-    on,
-    close: () => ws.close(),
-  };
+  return { send, on, close: () => ws.close() };
+}
+
+export async function connectCdp(port) {
+  let list = [];
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/json/list`);
+      if (response.ok) {
+        list = await response.json();
+        if (list.some((entry) => entry.type === 'page' && entry.webSocketDebuggerUrl)) break;
+      }
+    } catch {
+      list = [];
+    }
+    await sleep(200);
+  }
+  const page = list.find((entry) => entry.type === 'page' && entry.webSocketDebuggerUrl);
+  if (!page) throw new Error(`chrome debug port ${port} has no page`);
+  return connectSocket(page.webSocketDebuggerUrl);
 }
 
 async function evaluate(send, expression) {
@@ -787,6 +789,7 @@ async function driveChrome({ baseUrl, evidenceDir, meta, features, home, fixture
       await pinFixtureCookie(cdp.send, baseUrl, fixtureToken);
       cdp.send.cartoDark = cartoDark;
       cdp.send.fixtureToken = fixtureToken;
+      cdp.send.debugPort = debugPort;
       cdp.send.fixtureDir = fixtureDir;
       await openApp(cdp.send, baseUrl, startOffset);
       const notes = await runFeatures(cdp.send, evidenceDir, meta, features, baseUrl, home, DESKTOP, fixtureToken);
@@ -6685,6 +6688,37 @@ function planLayerCovers(map, name, zoom) {
     return Array.isArray(names) && names.includes(name);
   });
 }
+function planCameraMatches(map, camera) {
+  const zoom = map.getZoom();
+  const center = map.getCenter();
+  const zoomOk = Math.abs(zoom - camera.zoom) <= 0.02;
+  const centerOk = Math.abs(center.lng - camera.center[0]) <= 0.05 && Math.abs(center.lat - camera.center[1]) <= 0.05;
+  return {
+    ok: zoomOk && centerOk,
+    zoom,
+    center: [center.lng, center.lat],
+    requestedZoom: camera.zoom,
+    requestedCenter: camera.center,
+  };
+}
+function planLockRasterCamera(map, camera) {
+  if (!map.__opdJumpNative) {
+    map.__opdJumpNative = map.jumpTo.bind(map);
+    map.jumpTo = (next) => map.__opdJumpNative(map.__opdRasterCamera || next);
+  }
+  map.__opdRasterCamera = camera;
+  map.__opdJumpLocked = true;
+  map.jumpTo(camera);
+  return planCameraMatches(map, camera);
+}
+function planReleaseRasterCamera(map) {
+  if (map && map.__opdJumpNative) map.jumpTo = map.__opdJumpNative;
+  if (map) {
+    delete map.__opdJumpNative;
+    delete map.__opdRasterCamera;
+    delete map.__opdJumpLocked;
+  }
+}
 const PLAN_REPAINT_IDLE_MS = 1500;
 function settleIdle(map, limitMs) {
   return new Promise((resolve) => {
@@ -6844,15 +6878,170 @@ async function restorePlanLabelCamera(send) {
   })()`);
 }
 
-function rasterFixtureKey(country, zoom, lng, lat) {
-  return `${country}-z${zoom}-${lng}-${lat}`;
+const RELEASE_PLAN_CAMERA = `(() => {
+  const map = document.querySelector('[data-pip="plan"] [data-pip-frame]')?.__opdTrackInset;
+  if (!map) return { ok: false, reason: 'map' };
+  if (map.__opdJumpNative) map.jumpTo = map.__opdJumpNative;
+  delete map.__opdJumpNative;
+  delete map.__opdRasterCamera;
+  delete map.__opdJumpLocked;
+  return { ok: true, zoom: map.getZoom(), locked: map.__opdJumpLocked === true };
+})()`;
+
+async function releasePlanCamera(send) {
+  if (!send) return { ok: false };
+  return evaluate(send, RELEASE_PLAN_CAMERA);
 }
 
-function loadMainRaster(country, zoom, lng, lat) {
-  const key = rasterFixtureKey(country, zoom, lng, lat);
-  const counts = JSON.parse(readFileSync(new URL('./fixtures/plan-main-raster/counts.json', import.meta.url), 'utf8'));
-  const image = decodePng(readFileSync(new URL(`./fixtures/plan-main-raster/${key}.png`, import.meta.url)));
-  return { image, count: counts[key] };
+async function withLockedPlan(send, lng, lat, zoom, country, body) {
+  try {
+    const row = await evaluate(send, `(async () => {
+      ${PLAN_TILE_HELPERS}
+      const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+      const map = frame && frame.__opdTrackInset;
+      if (!map || typeof map.jumpTo !== 'function') return { ok: false, reason: 'map' };
+      planHold(map);
+      const camera = { center: [${lng}, ${lat}], zoom: ${zoom} };
+      const seen = planLockRasterCamera(map, camera);
+      const waited = await planWaitTiles(map);
+      const after = planCameraMatches(map, camera);
+      const marker = frame.querySelector('.maplibregl-marker');
+      return {
+        ok: true,
+        cameraOk: seen.ok === true && after.ok === true,
+        requestedZoom: ${zoom},
+        requestedCenter: [${lng}, ${lat}],
+        center: after.center,
+        tilesOk: waited.tilesOk,
+        detail: waited.detail,
+        repaintMs: waited.repaintMs,
+        viewport: planViewport(map),
+        zoom: after.zoom,
+        tileZ: waited.tileZ,
+        names: planSymbolNames(map),
+        hidden: (frame.dataset.insetHiddenCountries || '').split('|').filter(Boolean),
+        country: ${JSON.stringify(country)},
+        markerVisible: !!(marker && marker.getClientRects().length > 0),
+      };
+    })()`);
+    if (!row || row.ok !== true || row.cameraOk !== true) {
+      throw new Error(`plan label camera ${country} ${zoom} ${JSON.stringify(row)}`);
+    }
+    return await body(row);
+  } finally {
+    await releasePlanCamera(send);
+  }
+}
+
+function planPairDir() {
+  const surface = process.env.OPD_VERIFY_SURFACE || 'desktop';
+  const size = process.env.OPD_VERIFY_VIEWPORT || 'default';
+  return resolve(process.env.OPD_VERIFY_PLAN_PAIRS || resolve(tmpdir(), 'opd-plan-pairs'), `${surface}-${size}`);
+}
+
+function recordMainCheckout() {
+  const checkout = process.env.OPD_VERIFY_MAIN_CHECKOUT;
+  if (!checkout) throw new Error('plan label main capture needs OPD_VERIFY_MAIN_CHECKOUT');
+  const sha = execFileSync('git', ['-C', checkout, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error('plan label main checkout has no commit');
+  const dir = planPairDir();
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(resolve(dir, 'main-sha.txt'), `${sha}\n`);
+  console.log(`plan labels main ${sha} ${dir}`);
+  return sha;
+}
+
+function savePlanPair(name, head, main) {
+  const dir = planPairDir();
+  mkdirSync(dir, { recursive: true });
+  if (head && head.png) writeFileSync(resolve(dir, `${name}-head.png`), head.png);
+  if (main && main.png) writeFileSync(resolve(dir, `${name}-main.png`), main.png);
+}
+
+async function leaseMainFixture(url, home) {
+  const state = JSON.parse(readFileSync(resolve(home, 'state.json'), 'utf8'));
+  const token = randomBytes(8).toString('hex');
+  const dir = resolve(home, 'fixtures');
+  const registered = await fetch(`${url}/api/verify/fixtures`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-opd-verify-registry': state.registrySecret },
+    body: JSON.stringify({ token, dir, pid: process.pid }),
+  });
+  if (!registered.ok) throw new Error(`plan label main register ${registered.status}`);
+  const secret = (await registered.json()).secret;
+  return { token, secret, url };
+}
+
+async function openPlanMain(send) {
+  const url = process.env.OPD_VERIFY_MAIN_URL;
+  const home = process.env.OPD_VERIFY_MAIN_HOME;
+  if (!url || !home) throw new Error('plan label main capture needs OPD_VERIFY_MAIN_URL and OPD_VERIFY_MAIN_HOME');
+  const lease = await leaseMainFixture(url, home);
+  const metrics = await evaluate(send, '({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio })');
+  let twin;
+  let close = async () => {};
+  const cartoDark = [];
+  if (send.session) {
+    await send.session.context.addCookies([fixtureCookie(url, lease.token)]);
+    const page = await send.session.context.newPage();
+    page.on('request', (request) => noteRequest(cartoDark, request.url()));
+    twin = playwrightSend({ ...send.session, page, initScripts: [...send.session.initScripts] });
+    twin.cartoDark = cartoDark;
+    close = async () => { await page.close(); };
+  } else if (send.debugPort) {
+    const port = 20000 + Math.floor(Math.random() * 2000);
+    const pid = startChrome(resolve(tmpdir(), `opd-main-chrome-${port}`), port);
+    const conn = await connectCdp(port);
+    twin = conn.send;
+    twin.cartoDark = cartoDark;
+    conn.on('Network.requestWillBeSent', (params) => noteRequest(cartoDark, params.request && params.request.url));
+    await twin('Network.enable');
+    await twin('Emulation.setDeviceMetricsOverride', {
+      width: metrics.w,
+      height: metrics.h,
+      deviceScaleFactor: metrics.dpr,
+      mobile: false,
+    });
+    await pinFixtureCookie(twin, url, lease.token);
+    close = async () => {
+      conn.close();
+      try { process.kill(pid, 'SIGTERM'); } catch { /* the twin browser already exited */ }
+      untrackBrowser(pid);
+    };
+  } else {
+    throw new Error('plan label main capture has no browser session');
+  }
+  try {
+    await openApp(twin, url, 0);
+    await click(twin, '#tab-iss');
+    await waitForPip(twin, 'plan', 'main plan', 30000);
+    const twinMetrics = await evaluate(twin, '({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio })');
+    if (twinMetrics.w !== metrics.w || twinMetrics.h !== metrics.h || twinMetrics.dpr !== metrics.dpr) {
+      throw new Error(`plan label main size ${JSON.stringify({ head: metrics, main: twinMetrics })}`);
+    }
+    twin.closeMain = close;
+    twin.lease = lease;
+    return twin;
+  } catch (error) {
+    await close();
+    await fetch(`${url}/api/verify/fixtures`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-opd-verify-registry': JSON.parse(readFileSync(resolve(home, 'state.json'), 'utf8')).registrySecret },
+      body: JSON.stringify({ token: lease.token, secret: lease.secret, forget: true }),
+    }).catch(() => {});
+    throw error;
+  }
+}
+
+async function forgetMainLease(twin) {
+  if (!twin || !twin.lease) return;
+  const home = process.env.OPD_VERIFY_MAIN_HOME;
+  const state = JSON.parse(readFileSync(resolve(home, 'state.json'), 'utf8'));
+  await fetch(`${twin.lease.url}/api/verify/fixtures`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-opd-verify-registry': state.registrySecret },
+    body: JSON.stringify({ token: twin.lease.token, secret: twin.lease.secret, forget: true }),
+  }).catch(() => {});
 }
 
 async function capturePlanCanvas(send) {
@@ -6861,6 +7050,7 @@ async function capturePlanCanvas(send) {
     const canvas = frame && frame.querySelector('canvas');
     const map = frame && frame.__opdTrackInset;
     if (!canvas || !map) return null;
+    if (map.__opdRasterCamera) map.jumpTo(map.__opdRasterCamera);
     for (const id of ['inset-track', 'inset-night']) {
       if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', 'none');
     }
@@ -6883,12 +7073,16 @@ async function capturePlanCanvas(send) {
     });
     const rect = canvas.getBoundingClientRect();
     const ignore = [];
-    for (const node of document.querySelectorAll('[data-iss-clock], [data-iss-edition]')) {
+    const chrome = [];
+    const take = (node, bucket) => {
       const area = node.getBoundingClientRect();
-      if (area.width < 2 || area.height < 2) continue;
-      ignore.push({ left: area.left - rect.left, top: area.top - rect.top, right: area.right - rect.left, bottom: area.bottom - rect.top });
-    }
-    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height, ignore };
+      if (area.width < 2 || area.height < 2) return;
+      if (area.right <= rect.left || area.left >= rect.right || area.bottom <= rect.top || area.top >= rect.bottom) return;
+      bucket.push({ left: area.left - rect.left, top: area.top - rect.top, right: area.right - rect.left, bottom: area.bottom - rect.top });
+    };
+    for (const node of document.querySelectorAll('[data-iss-clock], [data-iss-edition]')) take(node, ignore);
+    for (const node of document.querySelectorAll('[data-iss-controls], [data-iss-split-chrome], .maplibregl-ctrl')) take(node, chrome);
+    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height, ignore, chrome };
   })()`);
   await new Promise((resolve) => setTimeout(resolve, 200));
   if (!box || !(box.width > 2) || !(box.height > 2)) return null;
@@ -6896,7 +7090,8 @@ async function capturePlanCanvas(send) {
     format: 'png',
     clip: { x: box.x, y: box.y, width: box.width, height: box.height, scale: 1 },
   });
-  const decoded = decodePng(Buffer.from(image.data, 'base64'));
+  const png = Buffer.from(image.data, 'base64');
+  const decoded = decodePng(png);
   await evaluate(send, `(() => {
     const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
     const map = frame && frame.__opdTrackInset;
@@ -6911,14 +7106,17 @@ async function capturePlanCanvas(send) {
   if (!decoded) return null;
   const scaleX = decoded.width / box.width;
   const scaleY = decoded.height / box.height;
+  const scaleRect = (rect) => ({
+    left: rect.left * scaleX,
+    top: rect.top * scaleY,
+    right: rect.right * scaleX,
+    bottom: rect.bottom * scaleY,
+  });
   return {
     ...decoded,
-    ignore: box.ignore.map((rect) => ({
-      left: rect.left * scaleX,
-      top: rect.top * scaleY,
-      right: rect.right * scaleX,
-      bottom: rect.bottom * scaleY,
-    })),
+    png,
+    ignore: (box.ignore || []).map(scaleRect),
+    chrome: (box.chrome || []).map(scaleRect),
   };
 }
 
@@ -6947,20 +7145,51 @@ export function assertPlanLabelChecks(row) {
     const parity = matchesMain(names, []);
     if (!parity.ok) throw new Error(`plan label parity ${JSON.stringify(parity)}`);
     const kenyaWest = row.kenyaWest === true;
-    const knownCount = kenyaWest ? KENYA_WEST_RASTER_COUNT : row.rasterCount;
-    if (kenyaWest) {
-      const rasterCount = occurrenceCount(row.rasterCount, KENYA_WEST_RASTER_COUNT);
-      if (!rasterCount.ok) throw new Error(`plan label count ${JSON.stringify(rasterCount)}`);
-    }
-    const raster = pairedRasterNames(row.headShot, row.mainShot, knownCount, { kenyaWest, ignoreRects: row.ignoreRects || [] });
-    if (!raster.ok) throw new Error(`plan label raster ${JSON.stringify({ country: row.country, zoom, reason: raster.reason, ratio: raster.ratio, count: raster.count })}`);
-    return { tiles, identity, count, parity, raster };
+    const raster = pairedRasterNames(row.headShot, row.mainShot, { ignoreRects: row.ignoreRects || [] });
+    if (!raster.ok) throw new Error(`plan label raster ${JSON.stringify({ country: row.country, zoom, reason: raster.reason, ratio: raster.ratio })}`);
+    const named = frameNameVerdict(row.headShot, row.mainShot, row.country, {
+      kenyaWest,
+      chromeRects: row.chromeRects || [],
+      ignoreRects: row.ignoreRects || [],
+    });
+    if (!named.ok) throw new Error(`plan label ${named.check} ${JSON.stringify({ country: row.country, zoom, reason: named.reason, count: named.count, expected: named.expected, head: named.head, main: named.main })}`);
+    return { tiles, identity, count, parity, raster, named };
   }
   return { tiles, identity };
 }
 
+/** A sweep row that did not reach its camera is a failure, including a zoom that was never checked. */
+export function acceptPlanSweepRow(row) {
+  if (!row || row.cameraOk !== true || !Number.isFinite(Number(row.requestedZoom))) {
+    throw new Error(`plan label camera ${JSON.stringify({ zoom: row && row.zoom, requested: row && row.requestedZoom, center: row && row.center, cameraOk: row && row.cameraOk })}`);
+  }
+  if (Number(row.requestedZoom) < 3) {
+    assertPlanLabelChecks(row);
+    return { below: true };
+  }
+  return { below: false };
+}
+
+async function compareLockedPair(headSend, mainSend, lng, lat, zoom, country, kenyaWest) {
+  const head = await withLockedPlan(headSend, lng, lat, zoom, country, async (row) => ({ row, shot: await capturePlanCanvas(headSend) }));
+  const main = await withLockedPlan(mainSend, lng, lat, zoom, country, async () => ({ shot: await capturePlanCanvas(mainSend) }));
+  savePlanPair(`${country}-z${zoom}-${lng}-${lat}`, head.shot, main.shot);
+  const verdict = assertPlanLabelChecks({
+    ...head.row,
+    headShot: head.shot,
+    mainShot: main.shot,
+    kenyaWest: kenyaWest === true,
+    ignoreRects: head.shot ? head.shot.ignore : [],
+    chromeRects: head.shot ? head.shot.chrome : [],
+  });
+  return { row: head.row, verdict };
+}
+
 export async function proveFractionalPlanLabels(send, progress = () => {}) {
   const zooms = countrySweepZooms();
+  const expectedBelow = zooms.filter((zoom) => zoom < 3).length * PLAN_COUNTRIES.length;
+  let mainSend = null;
+  let belowZ3 = 0;
   try {
     const fitted = await coldPlanTileCaches(send);
     if (!fitted.inside || !fitted.inside.includes('Australia')) {
@@ -6973,21 +7202,15 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
     for (const country of fitted.inside) {
       assertPlanLabelChecks({ ...fitted, country, names: fitted.names, hidden: fitted.hidden || [] });
     }
+    recordMainCheckout();
+    mainSend = await openPlanMain(send);
     const rows = [];
     for (const zoom of [2.99, 3, 3.01]) {
-      const row = await readPlanLabelZoom(send, zoom, -100, 50);
-      const shot = zoom >= 3 ? await capturePlanCanvas(send) : null;
-      const fixture = zoom >= 3 ? loadMainRaster('Canada', zoom, -100, 50) : null;
-      const packed = {
-        ...row,
-        country: 'Canada',
-        headShot: shot,
-        mainShot: fixture && fixture.image,
-        rasterCount: fixture ? fixture.count : undefined,
-        ignoreRects: shot ? shot.ignore : [],
-      };
+      const packed = zoom >= 3
+        ? (await compareLockedPair(send, mainSend, -100, 50, zoom, 'Canada', false)).row
+        : await readPlanLabelZoom(send, zoom, -100, 50);
+      if (zoom < 3) assertPlanLabelChecks({ ...packed, country: 'Canada' });
       rows.push(packed);
-      assertPlanLabelChecks(packed);
     }
     const fractional = { counts: rows.map(row => ({ zoom: row.zoom, count: row.names.length })) };
     const sweepNotes = [];
@@ -7002,14 +7225,19 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
         planHold(map);
         const rows = [];
         for (const zoom of ${JSON.stringify(zooms)}) {
-          map.jumpTo({ center: [${country.lng}, ${country.lat}], zoom });
+          const camera = { center: [${country.lng}, ${country.lat}], zoom };
+          map.jumpTo(camera);
           const waited = await planWaitTiles(map);
+          const seen = planCameraMatches(map, camera);
           rows.push({
             tilesOk: waited.tilesOk,
             detail: waited.detail,
             urls: waited.urls,
             viewport: planViewport(map),
-            zoom: map.getZoom(),
+            requestedZoom: zoom,
+            cameraOk: seen.ok,
+            center: seen.center,
+            zoom: seen.zoom,
             tileZ: waited.tileZ,
             names: planSymbolNames(map),
             hidden: (frame.dataset.insetHiddenCountries || '').split('|').filter(Boolean),
@@ -7017,56 +7245,20 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
             centered: true,
             covers: planLayerCovers(map, ${JSON.stringify(country.name)}, map.getZoom()),
           });
-          if (!waited.tilesOk) break;
         }
         return { ok: true, rows };
       })()`);
-      if (!swept || swept.ok !== true) throw new Error(`plan label sweep ${country.name} ${JSON.stringify(swept)}`);
+      if (!swept || swept.ok !== true || !swept.rows || swept.rows.length !== zooms.length) {
+        throw new Error(`plan label skipped ${country.name} ${swept && swept.rows ? swept.rows.length : 0}/${zooms.length}`);
+      }
       for (let index = 0; index < swept.rows.length; index += 1) {
-        const row = swept.rows[index];
-        if (!(Number(row.zoom) >= 3)) assertPlanLabelChecks(row);
-        if (index % 10 === 0 || index === swept.rows.length-1) progress({ phase: 'verdicts', country: country.name, completed: index+1, samples: swept.rows.length, stats: { ...rasterOcrStats } });
+        const accepted = acceptPlanSweepRow(swept.rows[index]);
+        if (accepted.below) belowZ3 += 1;
+        if (index % 10 === 0 || index === swept.rows.length - 1) progress({ phase: 'verdicts', country: country.name, completed: index + 1, samples: swept.rows.length, stats: { ...rasterOcrStats } });
       }
       for (const zoom of zooms.filter((zoom) => zoom >= 3)) {
-        const row = await evaluate(send, `(async () => {
-          ${PLAN_TILE_HELPERS}
-          const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
-          const map = frame && frame.__opdTrackInset;
-          if (!map || typeof map.jumpTo !== 'function') return { ok: false, reason: 'map' };
-          planHold(map);
-          if (!map.__opdJumpLocked) {
-            const jump = map.jumpTo.bind(map);
-            map.jumpTo = (camera) => jump(map.__opdRasterCamera || camera);
-            map.__opdJumpLocked = true;
-          }
-          map.__opdRasterCamera = { center: [${country.lng}, ${country.lat}], zoom: ${zoom} };
-          map.jumpTo(map.__opdRasterCamera);
-          const waited = await planWaitTiles(map);
-          return {
-            ok: true,
-            tilesOk: waited.tilesOk,
-            detail: waited.detail,
-            repaintMs: waited.repaintMs,
-            viewport: planViewport(map),
-            zoom: map.getZoom(),
-            tileZ: waited.tileZ,
-            names: planSymbolNames(map),
-            hidden: (frame.dataset.insetHiddenCountries || '').split('|').filter(Boolean),
-            country: ${JSON.stringify(country.name)},
-            centered: true,
-          };
-        })()`);
-        const shot = await capturePlanCanvas(send);
-        const fixture = loadMainRaster(country.name, zoom, country.lng, country.lat);
-        assertPlanLabelChecks({
-          ...row,
-          headShot: shot,
-          mainShot: fixture.image,
-          rasterCount: fixture.count,
-          kenyaWest: false,
-          ignoreRects: shot ? shot.ignore : [],
-        });
-        if (row && row.repaintMs != null) console.log(`plan labels repaint ${country.name} z${zoom} ${row.repaintMs}ms`);
+        const paired = await compareLockedPair(send, mainSend, country.lng, country.lat, zoom, country.name, false);
+        if (paired.row && paired.row.repaintMs != null) console.log(`plan labels repaint ${country.name} z${zoom} ${paired.row.repaintMs}ms`);
       }
       sweepNotes.push(`${country.name}:${swept.rows.length}`);
       console.log(`plan labels sweep ${country.name}:${swept.rows.length} OCR:${rasterOcrStats.calls}`);
@@ -7090,71 +7282,48 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
     ];
     for (const camera of offCentroid) {
       for (const zoom of camera.zooms) {
-        const row = await evaluate(send, `(async () => {
-          ${PLAN_TILE_HELPERS}
-          const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
-          const map = frame && frame.__opdTrackInset;
-          if (!map || typeof map.jumpTo !== 'function') return { ok: false, reason: 'map' };
-          planHold(map);
-          if (!map.__opdJumpLocked) {
-            const jump = map.jumpTo.bind(map);
-            map.jumpTo = (camera) => jump(map.__opdRasterCamera || camera);
-            map.__opdJumpLocked = true;
-          }
-          map.__opdRasterCamera = { center: [${camera.center[0]}, ${camera.center[1]}], zoom: ${zoom} };
-          map.jumpTo(map.__opdRasterCamera);
-          const waited = await planWaitTiles(map);
-          const marker = frame.querySelector('.maplibregl-marker');
-          return {
-            ok: true,
-            tilesOk: waited.tilesOk,
-            detail: waited.detail,
-            repaintMs: waited.repaintMs,
-            viewport: planViewport(map),
-            zoom: map.getZoom(),
-            tileZ: waited.tileZ,
-            names: planSymbolNames(map),
-            hidden: (frame.dataset.insetHiddenCountries || '').split('|').filter(Boolean),
-            country: ${JSON.stringify(camera.country)},
-            markerVisible: !!(marker && marker.getClientRects().length > 0),
-          };
-        })()`);
-        if (!row || row.ok !== true) throw new Error(`plan label off-centroid ${camera.country} ${zoom} ${JSON.stringify(row)}`);
-        if (!row.markerVisible) throw new Error(`plan label marker ${camera.country} ${zoom}`);
-        const shot = await capturePlanCanvas(send);
         const kenyaWest = camera.country === 'Kenya' && camera.center[0] === 37 && camera.center[1] === 1;
-        const fixture = loadMainRaster(camera.country, zoom, camera.center[0], camera.center[1]);
-        if (kenyaWest && fixture.count !== KENYA_WEST_RASTER_COUNT) {
-          throw new Error(`plan label count ${JSON.stringify(occurrenceCount(fixture.count, KENYA_WEST_RASTER_COUNT))}`);
-        }
-        assertPlanLabelChecks({
-          ...row,
-          headShot: shot,
-          mainShot: fixture.image,
-          rasterCount: fixture.count,
-          kenyaWest,
-          ignoreRects: shot ? shot.ignore : [],
+        const paired = await withLockedPlan(send, camera.center[0], camera.center[1], zoom, camera.country, async (row) => {
+          if (!row.markerVisible) throw new Error(`plan label marker ${camera.country} ${zoom}`);
+          const shot = await capturePlanCanvas(send);
+          const main = await withLockedPlan(mainSend, camera.center[0], camera.center[1], zoom, camera.country, async () => capturePlanCanvas(mainSend));
+          savePlanPair(`${camera.country}-z${zoom}-${camera.center[0]}-${camera.center[1]}`, shot, main);
+          const verdict = assertPlanLabelChecks({
+            ...row,
+            headShot: shot,
+            mainShot: main,
+            kenyaWest,
+            ignoreRects: shot ? shot.ignore : [],
+            chromeRects: shot ? shot.chrome : [],
+          });
+          if (kenyaWest) console.log(`plan labels kenya west glyphs ${verdict.named.count} fixture ${KENYA_WEST_RASTER_COUNT}`);
+          return row;
         });
-        if (row.repaintMs != null) console.log(`plan labels repaint ${camera.country} z${zoom} ${row.repaintMs}ms`);
+        await releasePlanCamera(send);
+        await releasePlanCamera(mainSend);
+        if (paired.repaintMs != null) console.log(`plan labels repaint ${camera.country} z${zoom} ${paired.repaintMs}ms`);
         sweepNotes.push(`${camera.country}@${zoom}`);
-        console.log(`plan labels off-centroid ${camera.country} ${zoom} tiles:${row.tilesOk} symbols:${(row.names || []).length}`);
+        console.log(`plan labels off-centroid ${camera.country} ${zoom} tiles:${paired.tilesOk} symbols:${(paired.names || []).length}`);
       }
     }
-    await evaluate(send, `(() => {
-      const map = document.querySelector('[data-pip="plan"] [data-pip-frame]')?.__opdTrackInset;
-      if (map) map.__opdRasterCamera = null;
-      return { ok: true };
-    })()`);
+    await releasePlanCamera(send);
+    if (belowZ3 !== expectedBelow) throw new Error(`plan label skipped below z3 ${belowZ3}/${expectedBelow}`);
     const france = await readPlanLabelZoom(send, 1.2, 2, 46);
-    if (!france.tilesOk) throw new Error(`plan label tiles ${JSON.stringify({ zoom: 1.2, detail: france.detail })}`);
+    if (!france.tilesOk || Math.abs(france.zoom - 1.2) > 0.02) throw new Error(`plan label camera ${JSON.stringify({ zoom: france.zoom, detail: france.detail })}`);
     const franceKept = keptCountrySymbol(france.names, 'France');
     if (!franceKept.ok) throw new Error(`plan label France ${JSON.stringify(franceKept)}`);
     const japan = await readPlanLabelZoom(send, 1.2, 138, 36);
-    if (!japan.tilesOk) throw new Error(`plan label tiles ${JSON.stringify({ zoom: 1.2, detail: japan.detail })}`);
+    if (!japan.tilesOk || Math.abs(japan.zoom - 1.2) > 0.02) throw new Error(`plan label camera ${JSON.stringify({ zoom: japan.zoom, detail: japan.detail })}`);
     const japanKept = keptCountrySymbol(japan.names, 'Japan');
     if (!japanKept.ok) throw new Error(`plan label Japan ${JSON.stringify(japanKept)}`);
-    return `tilesOk:true OCR ${JSON.stringify(rasterOcrStats)} caches cold fitted ${fitted.zoom.toFixed(3)} z${fitted.tileZ} ${sweepNotes.join(' ')} ${fractional.counts.map((row) => `${row.zoom}:${row.count}`).join(' ')}`;
+    console.log(`plan labels belowZ3:${belowZ3}`);
+    return `tilesOk:true belowZ3:${belowZ3} OCR ${JSON.stringify(rasterOcrStats)} caches cold fitted ${fitted.zoom.toFixed(3)} z${fitted.tileZ} ${sweepNotes.join(' ')} ${fractional.counts.map((row) => `${row.zoom}:${row.count}`).join(' ')}`;
   } finally {
+    try { await releasePlanCamera(send); } catch { /* the page may already be gone */ }
+    if (mainSend) {
+      try { await mainSend.closeMain(); } catch { /* the twin page may already be gone */ }
+      try { await forgetMainLease(mainSend); } catch { /* the main proxy may already be gone */ }
+    }
     await restorePlanLabelCamera(send);
   }
 }

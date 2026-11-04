@@ -61,6 +61,13 @@ export function clearRasterOcrRun() {
   rasterOcrStats.hits = 0;
 }
 
+export function ocrFrame(bytes) {
+  const input = JSON.stringify({ frame: Buffer.from(bytes).toString('base64') });
+  const result = spawnSync(ocrPython(), [helper], { input, encoding: 'utf8', timeout: ocrTimeout(1), maxBuffer: 8 * 1024 * 1024 });
+  if (result.status !== 0) throw new Error(`frame OCR failed: ${(result.stderr || result.error || '').toString().slice(0, 500)}`);
+  return JSON.parse(result.stdout);
+}
+
 export function ocrRasterTile(tiles) {
   rasterOcrStats.calls += 1;
   const normalized = Buffer.isBuffer(tiles) ? [{ x: 0, y: 0, bytes: tiles }] : tiles;

@@ -12,7 +12,7 @@ function loadHelpers() {
     getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
   };
   vm.createContext(context);
-  vm.runInContext(`${PLAN_TILE_HELPERS}\nthis.planWaitTiles = planWaitTiles;\nthis.planSymbolNames = planSymbolNames;\nthis.planViewport = planViewport;`, context);
+  vm.runInContext(`${PLAN_TILE_HELPERS}\nthis.planWaitTiles = planWaitTiles;\nthis.planSymbolNames = planSymbolNames;\nthis.planViewport = planViewport;\nthis.planLockRasterCamera = planLockRasterCamera;\nthis.planReleaseRasterCamera = planReleaseRasterCamera;\nthis.planCameraMatches = planCameraMatches;`, context);
   return context;
 }
 
@@ -150,6 +150,28 @@ test('a repaint that never goes idle is still a tile failure, and the listener i
   assert.equal(timedOut.tilesOk, false);
   assert.equal(map.listeners(), 0);
   assert.match(PLAN_TILE_HELPERS, /PLAN_REPAINT_IDLE_MS = 1500/);
+});
+
+test('the raster lock covers one jump and the next jump reaches the requested camera', () => {
+  const { planLockRasterCamera, planReleaseRasterCamera, planCameraMatches } = loadHelpers();
+  let zoom = 1;
+  let center = { lng: 0, lat: 0 };
+  const map = {
+    getZoom: () => zoom,
+    getCenter: () => ({ ...center }),
+    jumpTo(camera) {
+      zoom = camera.zoom;
+      center = { lng: camera.center[0], lat: camera.center[1] };
+    },
+  };
+  planLockRasterCamera(map, { center: [-100, 50], zoom: 8 });
+  map.jumpTo({ center: [2, 46], zoom: 1.2 });
+  assert.equal(planCameraMatches(map, { center: [2, 46], zoom: 1.2 }).ok, false);
+  assert.equal(map.getZoom(), 8);
+  planReleaseRasterCamera(map);
+  map.jumpTo({ center: [2, 46], zoom: 1.2 });
+  assert.equal(planCameraMatches(map, { center: [2, 46], zoom: 1.2 }).ok, true);
+  assert.equal(map.getZoom(), 1.2);
 });
 
 test('Kenya west settles inside the repaint idle limit and drops the listener', async () => {

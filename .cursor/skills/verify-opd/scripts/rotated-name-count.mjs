@@ -303,23 +303,142 @@ export function peekingGlyphInk(pixels, width, height, masks) {
   return hits >= 8;
 }
 
-/** Names of one country in a screenshot. Rotated border lettering counts. Scattered bright pixels do not. */
-export function countryGlyphBoxes(pixels, width, height, country) {
-  const found = rotatedNameSpans(pixels, width, height);
-  const spans = Array.isArray(found) ? [] : found.spans;
-  const letters = String(country || '').replace(/[^a-z]/gi, '').length;
-  return spans.filter((span) => {
-    const length = Math.hypot(span.right - span.left, span.bottom - span.top);
-    if (span.size < 5 || span.size > 20) return false;
-    if (length < 22 || length > 140) return false;
-    const horizontalName = span.angle < 12 && span.letters >= letters - 1 && span.letters <= letters + 1;
-    const borderName = span.angle >= 12 && span.letters >= Math.max(4, letters - 1) && span.letters <= letters + 6;
-    return horizontalName || borderName;
-  }).map((span) => [span.left, span.top, span.right, span.bottom]);
+function dedupedLetters(letters) {
+  const uniq = [];
+  for (const letter of letters || []) {
+    if (uniq.some((kept) => (kept.x - letter.x) ** 2 + (kept.y - letter.y) ** 2 < 9)) continue;
+    uniq.push(letter);
+  }
+  return uniq;
 }
 
-export function countCountryGlyphs(pixels, width, height, country) {
-  return countryGlyphBoxes(pixels, width, height, country).length;
+function neutralInk(pixels, width, height, letter) {
+  const x = Math.round(letter.x);
+  const y = Math.round(letter.y);
+  let best = null;
+  let score = -1;
+  for (let dy = -5; dy <= 5; dy += 1) {
+    for (let dx = -5; dx <= 5; dx += 1) {
+      const column = x + dx;
+      const row = y + dy;
+      if (column < 0 || row < 0 || column >= width || row >= height) continue;
+      const index = (row * width + column) * 4;
+      const sum = pixels[index] + pixels[index + 1] + pixels[index + 2];
+      if (sum > score) {
+        score = sum;
+        best = [pixels[index], pixels[index + 1], pixels[index + 2]];
+      }
+    }
+  }
+  return !!best && best[0] > 160 && best[0] - best[2] < 20 && best[1] - best[2] < 16;
+}
+
+function parallelLines(group) {
+  if (group.length < 4) return [];
+  const cx = group.reduce((sum, letter) => sum + letter.x, 0) / group.length;
+  const cy = group.reduce((sum, letter) => sum + letter.y, 0) / group.length;
+  let xx = 0;
+  let yy = 0;
+  let xy = 0;
+  for (const letter of group) {
+    const dx = letter.x - cx;
+    const dy = letter.y - cy;
+    xx += dx * dx;
+    yy += dy * dy;
+    xy += dx * dy;
+  }
+  const angle = 0.5 * Math.atan2(2 * xy, xx - yy);
+  const dirX = Math.cos(angle);
+  const dirY = Math.sin(angle);
+  const placed = group.map((letter) => ({
+    letter,
+    side: (letter.x - cx) * -dirY + (letter.y - cy) * dirX,
+  }));
+  placed.sort((left, right) => left.side - right.side);
+  const lines = [];
+  for (const item of placed) {
+    const last = lines[lines.length - 1];
+    if (!last || Math.abs(item.side - last[0].side) > Math.max(4, item.letter.size * 0.8)) lines.push([item]);
+    else last.push(item);
+  }
+  return lines.map((line) => line.map((item) => item.letter));
+}
+
+/** Names of one country in a screenshot. Rotated border lettering counts. Scattered bright pixels do not. */
+function covered(letter, rects) {
+  return (rects || []).some((rect) => letter.x >= rect.left && letter.x < rect.right && letter.y >= rect.top && letter.y < rect.bottom);
+}
+
+function mergeBoxes(boxes) {
+  const open = boxes.map((box) => box.slice());
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let left = 0; left < open.length; left += 1) {
+      for (let right = left + 1; right < open.length; right += 1) {
+        const a = open[left];
+        const b = open[right];
+        if (!(a[0] < b[2] && a[2] > b[0] && a[1] < b[3] && a[3] > b[1])) continue;
+        open[left] = [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])];
+        open.splice(right, 1);
+        changed = true;
+        break;
+      }
+      if (changed) break;
+    }
+  }
+  return open;
+}
+
+export function countryGlyphBoxes(pixels, width, height, country, options = {}) {
+  const found = rotatedNameSpans(pixels, width, height);
+  const letters = dedupedLetters(Array.isArray(found) ? [] : found.letters).filter((letter) => neutralInk(pixels, width, height, letter) && !covered(letter, options.ignoreRects));
+  const nameLength = String(country || '').replace(/[^a-z]/gi, '').length;
+  const parent = letters.map((_, index) => index);
+  const find = (index) => {
+    let cursor = index;
+    while (parent[cursor] !== cursor) {
+      parent[cursor] = parent[parent[cursor]];
+      cursor = parent[cursor];
+    }
+    return cursor;
+  };
+  for (let left = 0; left < letters.length; left += 1) {
+    for (let right = left + 1; right < letters.length; right += 1) {
+      const dist = Math.hypot(letters[left].x - letters[right].x, letters[left].y - letters[right].y);
+      const reach = 2.6 * Math.max(letters[left].size, letters[right].size);
+      if (dist > 1 && dist < reach) parent[find(right)] = find(left);
+    }
+  }
+  const groups = new Map();
+  letters.forEach((letter, index) => {
+    const key = find(index);
+    const group = groups.get(key) || [];
+    group.push(letter);
+    groups.set(key, group);
+  });
+  const boxes = [];
+  for (const group of groups.values()) {
+    for (const line of parallelLines(group)) {
+      if (line.length < nameLength - 1 || line.length > nameLength + 1) continue;
+      const xs = line.map((letter) => letter.x);
+      const ys = line.map((letter) => letter.y);
+      const length = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+      const sizes = line.map((letter) => letter.size).sort((left, right) => left - right);
+      const size = sizes[Math.floor(sizes.length / 2)];
+      if (size < 5 || size > 20 || length < 18 || length > 140) continue;
+      const spanX = Math.max(...xs) - Math.min(...xs);
+      const spanY = Math.max(...ys) - Math.min(...ys);
+      const angle = Math.abs(Math.atan2(spanY, spanX) * 180 / Math.PI);
+      if (angle < 12 && line.length !== nameLength && Math.abs(line.length - nameLength) > 1) continue;
+      boxes.push([Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]);
+    }
+  }
+  return mergeBoxes(boxes);
+}
+
+export function countCountryGlyphs(pixels, width, height, country, options = {}) {
+  return countryGlyphBoxes(pixels, width, height, country, options).length;
 }
 
 /** How many complete country names the screenshot paints. */

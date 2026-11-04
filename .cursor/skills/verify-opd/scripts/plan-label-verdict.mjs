@@ -4,6 +4,8 @@ import vm from 'node:vm';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
+import { ocrFrame } from './raster-ocr.mjs';
+import { countCountryGlyphs } from './rotated-name-count.mjs';
 
 const COUNTRY_NAMES = ['Canada', 'Mexico', 'Brazil', 'Argentina'];
 
@@ -218,19 +220,13 @@ function rectContains(rect, x, y) {
   return x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
 }
 
-/** Raster names are the pixels main paints. A blank frame, the wrong country, an extra copy, a clipped word, or ink under the buttons does not match. */
-export function pairedRasterNames(head, main, knownCount, options = {}) {
+/** Whole-frame pixel compare. A country name is a separate count of the letters in the frame. */
+export function pairedRasterNames(head, main, options = {}) {
+  const settings = options && typeof options === 'object' && !Array.isArray(options) ? options : {};
   if (!head || !main || !head.data || !main.data || head.width !== main.width || head.height !== main.height || head.width < 2 || head.height < 2) {
-    return { ok: false, check: 'raster', reason: 'pair', count: knownCount };
+    return { ok: false, check: 'raster', reason: 'pair' };
   }
-  if (!Number.isInteger(knownCount) || knownCount < 0) {
-    return { ok: false, check: 'raster', reason: 'count', count: knownCount };
-  }
-  if (options.kenyaWest) {
-    const count = occurrenceCount(knownCount, KENYA_WEST_RASTER_COUNT);
-    if (!count.ok) return { ok: false, check: 'count', reason: 'count', count: knownCount, expected: KENYA_WEST_RASTER_COUNT };
-  }
-  const ignore = (options.ignoreRects || []).map((rect) => ({
+  const ignore = (settings.ignoreRects || []).map((rect) => ({
     left: rect.left - 8,
     top: rect.top - 8,
     right: rect.right + 8,
@@ -251,11 +247,57 @@ export function pairedRasterNames(head, main, knownCount, options = {}) {
     }
   }
   const ratio = seen ? differ / seen : 1;
-  const tolerance = Number.isFinite(options.tolerance) ? options.tolerance : RASTER_PAIR_TOLERANCE;
+  const tolerance = Number.isFinite(settings.tolerance) ? settings.tolerance : RASTER_PAIR_TOLERANCE;
   if (!(ratio <= tolerance)) {
-    return { ok: false, check: 'raster', reason: 'pixels', ratio, differ, seen, count: knownCount };
+    return { ok: false, check: 'raster', reason: 'pixels', ratio, differ, seen };
   }
-  return { ok: true, check: 'raster', reason: undefined, ratio, differ, seen, count: knownCount };
+  return { ok: true, check: 'raster', reason: undefined, ratio, differ, seen };
+}
+
+function boxHitsRect(box, rect) {
+  return box[0] < rect.right && box[2] > rect.left && box[1] < rect.bottom && box[3] > rect.top;
+}
+
+/** How many times each plan country is readable in this frame. A stored count is not a reading. */
+export function frameCountryNames(image, options = {}) {
+  if (!image || !image.png) return { ok: false, reason: 'frame', counts: {} };
+  const recognized = ocrFrame(image.png);
+  const names = new Set(PLAN_COUNTRIES.map((entry) => entry.name.toUpperCase()));
+  const chrome = options.chromeRects || [];
+  const counts = {};
+  for (const word of recognized.words || []) {
+    const text = String(word.text || '').toUpperCase().replace(/[^A-Z]/g, '');
+    if (!names.has(text) || word.uppercase === false) continue;
+    const box = word.box || [0, 0, 0, 0];
+    if (chrome.some((rect) => boxHitsRect(box, rect))) continue;
+    counts[text] = (counts[text] || 0) + 1;
+  }
+  return { ok: true, counts };
+}
+
+/** Name identity and occurrence count, read from the head frame and the main frame. */
+export function frameNameVerdict(head, main, country, options = {}) {
+  const left = frameCountryNames(head, { chromeRects: options.chromeRects || [] });
+  const right = frameCountryNames(main, { chromeRects: options.mainChromeRects || options.chromeRects || [] });
+  if (!left.ok || !right.ok) return { ok: false, check: 'name', reason: 'frame', head: left.counts, main: right.counts };
+  const key = String(country || '').toUpperCase();
+  const headCount = left.counts[key] || 0;
+  const mainCount = right.counts[key] || 0;
+  const count = occurrenceCount(headCount, mainCount);
+  const stable = (counts) => JSON.stringify(Object.fromEntries(Object.entries(counts).sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))));
+  if (stable(left.counts) !== stable(right.counts)) {
+    return { ok: false, check: 'name', reason: 'name', count: headCount, expected: mainCount, head: left.counts, main: right.counts };
+  }
+  if (!count.ok) return { ok: false, check: 'count', reason: 'count', count: headCount, expected: mainCount, head: left.counts, main: right.counts };
+  if (options.kenyaWest && head.data && main.data) {
+    const blocked = [...(options.chromeRects || []), ...(options.ignoreRects || [])];
+    const headGlyphs = countCountryGlyphs(head.data, head.width, head.height, country, { ignoreRects: blocked });
+    const mainGlyphs = countCountryGlyphs(main.data, main.width, main.height, country, { ignoreRects: options.mainIgnoreRects || blocked });
+    const same = occurrenceCount(headGlyphs, mainGlyphs);
+    if (!same.ok) return { ok: false, check: 'count', reason: 'count', count: headGlyphs, expected: mainGlyphs, head: left.counts, main: right.counts };
+    return { ok: true, check: 'count', count: headGlyphs, expected: mainGlyphs, head: left.counts, main: right.counts };
+  }
+  return { ok: true, check: 'name', count: headCount, expected: mainCount, head: left.counts, main: right.counts };
 }
 
 /** The plan label source uses main's tile cap, not the audit cap. Overzooming z6 turns border lettering into a second name. */

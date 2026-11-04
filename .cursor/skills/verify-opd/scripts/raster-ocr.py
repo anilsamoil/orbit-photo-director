@@ -42,6 +42,25 @@ def recognize(image, psm=11):
     return output
 
 
+def recognize_frame(image):
+    comp = Image.alpha_composite(Image.new('RGBA', image.size, (24, 26, 28, 255)), image.convert('RGBA')).convert('L')
+    large = ImageOps.autocontrast(comp)
+    buf = io.BytesIO()
+    large.save(buf, format='PNG')
+    result = subprocess.run([os.environ.get('OPD_VERIFY_TESSERACT', 'tesseract'), 'stdin', 'stdout', '-l', 'eng', '--psm', '11', 'tsv'], input=buf.getvalue(), capture_output=True, timeout=float(os.environ.get('OPD_VERIFY_OCR_PASS_TIMEOUT', '60')), env={**os.environ, 'OMP_THREAD_LIMIT': '1'})
+    if result.returncode:
+        raise RuntimeError('tesseract failed: ' + result.stderr.decode('utf8', 'replace')[:600])
+    rows = csv.DictReader(io.StringIO(result.stdout.decode('utf8', 'replace')), delimiter='\t', quoting=csv.QUOTE_NONE)
+    words = []
+    for row in rows:
+        text = row.get('text', '').strip().upper()
+        if not text or row.get('level') != '5':
+            continue
+        x, y, w, h = (int(row[key]) for key in ['left', 'top', 'width', 'height'])
+        words.append({'text': text, 'uppercase': row['text'].strip().isupper(), 'box': [x, y, x + w, y + h]})
+    return words
+
+
 if '--doctor' in sys.argv:
     image = Image.new('RGBA', (500, 100), 'white')
     font = None
@@ -61,6 +80,11 @@ if '--doctor' in sys.argv:
     print(json.dumps({'ok': True, 'python': sys.executable, 'probe': text}))
 else:
     data = json.load(sys.stdin)
+    if data.get('frame'):
+        image = Image.open(io.BytesIO(base64.b64decode(data['frame']))).convert('RGBA')
+        words = recognize_frame(image)
+        print(json.dumps({'words': words, 'text': ' '.join(word['text'] for word in words)}))
+        raise SystemExit(0)
     tiles = data['tiles']
     left = min(tile['x'] for tile in tiles)
     top = min(tile['y'] for tile in tiles)

@@ -1009,6 +1009,7 @@ export function playwrightSend(session) {
     throw new Error(`webkit send has no ${method}`);
   };
   send.replacesContext = true;
+  send.session = session;
   return send;
 }
 
