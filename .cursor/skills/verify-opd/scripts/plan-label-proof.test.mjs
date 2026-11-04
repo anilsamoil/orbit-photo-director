@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { test } from 'node:test';
-import { PLAN_TILE_HELPERS } from './drive.mjs';
+import { PLAN_TILE_HELPERS, proveFractionalPlanLabels } from './drive.mjs';
 
 function loadHelpers() {
   const context = {
@@ -256,6 +256,13 @@ test('two renders do not settle a loaded map before idle', async () => {
   assert.equal(waited.tilesOk, true, JSON.stringify(waited.detail));
   assert.ok(Date.now() - started >= 350, Date.now() - started);
   assert.equal(map.listeners(), 0);
+});
+
+test('the plan proof holds the page clock and hands the spent time back', () => {
+  const source = proveFractionalPlanLabels.toString();
+  assert.match(source, /window\.__opdPlanClock = \{ previous, held, mark \}/);
+  assert.match(source, /Date\.now = \(\) => held/);
+  assert.match(source, /Date\.now = \(\) => previous\(\) - spent/);
 });
 
 test('a loading in-view raster tile omitted from the renderable list holds the gate', async () => {

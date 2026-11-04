@@ -7263,6 +7263,14 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
   let mainSend = null;
   let belowZ3 = 0;
   try {
+    await evaluate(send, `(() => {
+      const previous = Date.now;
+      const held = previous();
+      const mark = performance.now();
+      window.__opdPlanClock = { previous, held, mark };
+      Date.now = () => held;
+      return { ok: true, held };
+    })()`);
     const fitted = await coldPlanTileCaches(send);
     if (!fitted.inside || !fitted.inside.includes('Australia')) {
       throw new Error(`plan label fitted ${JSON.stringify({ zoom: fitted.zoom, tileZ: fitted.tileZ, inside: fitted.inside, names: fitted.names })}`);
@@ -7392,6 +7400,17 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
     console.log(`plan labels belowZ3:${belowZ3}`);
     return `tilesOk:true belowZ3:${belowZ3} OCR ${JSON.stringify(rasterOcrStats)} caches cold fitted ${fitted.zoom.toFixed(3)} z${fitted.tileZ} ${sweepNotes.join(' ')} ${fractional.counts.map((row) => `${row.zoom}:${row.count}`).join(' ')}`;
   } finally {
+    try {
+      await evaluate(send, `(() => {
+        const heldClock = window.__opdPlanClock;
+        if (!heldClock || typeof heldClock.previous !== 'function') return { ok: false };
+        const spent = performance.now() - heldClock.mark;
+        const previous = heldClock.previous;
+        Date.now = () => previous() - spent;
+        delete window.__opdPlanClock;
+        return { ok: true, spent };
+      })()`);
+    } catch { /* the page may already be gone */ }
     try { await releasePlanCamera(send); } catch { /* the page may already be gone */ }
     if (mainSend) {
       try { await mainSend.closeMain(); } catch { /* the twin page may already be gone */ }
