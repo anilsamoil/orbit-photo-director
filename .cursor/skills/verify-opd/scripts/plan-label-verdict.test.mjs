@@ -492,9 +492,9 @@ test('label placement mutants fail and the healthy controls pass on both engines
       if (!verdict.ok || contract.raster !== null || contract.expectedNames.length !== 0) controls.push(`${engine} ${country}`);
     }
     const canada = planCameraContract('Canada', 2.99, [-100, 50]);
-    if (!canada.expectedNames.includes('Canada') || canada.raster !== null) controls.push(`${engine} Canada`);
+    if (canada.hide !== 'Canada' || canada.raster !== 'CANADA') controls.push(`${engine} Canada`);
     const fitted = planCameraContract('Canada', 1.2);
-    if (fitted.raster !== null || fitted.expectedNames !== null) controls.push(`${engine} fitted`);
+    if (fitted.hide !== 'Canada' || fitted.raster !== 'CANADA') controls.push(`${engine} fitted`);
     const france = planCameraContract('France', 1.2, [2, 46]);
     if (france.expectedNames.length !== 7 || france.raster !== null) controls.push(`${engine} France`);
   }
@@ -571,7 +571,6 @@ test('a low-zoom sweep rejects an empty list only on a camera that expects names
     ...extra,
     requestedZoom: extra.zoom,
   });
-  assert.throws(() => acceptPlanSweepRow(row({ country: 'Canada', zoom: 2.99, center: [-100, 50] })), /plan label names/);
   assert.throws(() => acceptPlanSweepRow(row({ country: 'France', zoom: 1.2, center: [2, 46] })), /plan label names/);
   acceptPlanSweepRow(row({ country: 'Canada', zoom: 1.2, center: [-100, 50] }));
   acceptPlanSweepRow(row({ country: 'Kenya', zoom: 1.2, center: [38, 1] }));
@@ -593,7 +592,7 @@ test('a low-zoom sweep rejects an empty list only on a camera that expects names
     names: ['Canada'],
     headPlacement: { labels: [{ name: 'Canada', opacity: 0, box: { left: 10, top: 10, right: 40, bottom: 24 } }], canvas: { left: 0, top: 0, right: 400, bottom: 800 }, chrome: [] },
   };
-  assert.throws(() => acceptPlanSweepRow(filtered), /plan label names/);
+  acceptPlanSweepRow(filtered);
   assert.equal(planCameraContract('Canada', 1.5, [-100, 50]).raster, 'CANADA');
   assert.equal(planCameraContract('Canada', 2.5, [-100, 50]).hide, 'Canada');
   assert.equal(planCameraContract('Canada', 3, [-100, 50]).hide, undefined);

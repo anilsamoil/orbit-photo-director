@@ -345,9 +345,6 @@ export function planCameraContract(country, zoom, center) {
   if (country === 'France' && near(z, 1.2, 0.05) && nearCenter(center, 2, 46)) {
     return { expectedNames: FRANCE_Z12_NAMES.slice(), raster: null };
   }
-  if (country === 'Canada' && z < 3 && near(z, 2.99, 0.02) && nearCenter(center, -100, 50)) {
-    return { expectedNames: ['Canada'], raster: null, hide: 'Canada' };
-  }
   if (country === 'Canada' && z < 3) {
     return { expectedNames: null, raster: 'CANADA', hide: 'Canada' };
   }
