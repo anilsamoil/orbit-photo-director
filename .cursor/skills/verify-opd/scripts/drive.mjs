@@ -6637,7 +6637,7 @@ function planRasterReady(map) {
     if (drawn.length === 0) return false;
     if (!drawn.every((tile) => tile.state === 'loaded')) return false;
     if (!drawn.some((tile) => tile.x === pack.center.x && tile.y === pack.center.y)) return false;
-    return pack.tiles.every((tile) => tile.z === pack.z && tile.state === 'loaded');
+    return pack.tiles.every((tile) => tile.state === 'loaded' || tile.state === 'errored');
   };
   return ready(planVisibleTiles(map, 'inset-labels')) && ready(planVisibleTiles(map, 'inset-basemap'));
 }
@@ -6769,6 +6769,7 @@ function settleIdle(map, limitMs, kick) {
     };
     const onRender = () => {
       if (finished || !planRasterReady(map)) return;
+      if (typeof map.loaded === 'function' && map.loaded() === true) return;
       paints += 1;
       if (paints >= 2) finish(true);
       else if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
