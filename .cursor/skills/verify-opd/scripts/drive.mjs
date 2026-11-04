@@ -5,8 +5,9 @@ import { dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
 import { earthAfterResizeReaders } from './earth-after-resize.mjs';
-import { auditRasterLevels, countryIdentity, countrySweepZooms, frameNameVerdict, KENYA_WEST_RASTER_COUNT, keptCountrySymbol, loadCountryRasterLevels, matchesMain, occurrenceCount, pairedRasterNames, PLAN_COUNTRIES, planLabelReaders, tilesLoaded } from './plan-label-verdict.mjs';
-import { decodePng } from './rotated-name-count.mjs';
+import { auditRasterLevels, countryIdentity, countrySweepZooms, keptCountrySymbol, labelScreenVerdict, loadCountryRasterLevels, matchesMain, occurrenceCount, pairedRasterNames, planCameraContract, PLAN_COUNTRIES, planLabelReaders, rasterDuplicateVerdict, tilesLoaded } from './plan-label-verdict.mjs';
+import { decodePng } from './decode-png.mjs';
+import { ocrFrame } from './raster-ocr.mjs';
 import { checkRasterOcr, clearRasterOcrRun, rasterOcrStats } from './raster-ocr.mjs';
 import { pinFixtureCookie } from './fixture-session.mjs';
 import { BOSTON_NADIR_EPOCH_MS, effectiveNowMs, refreshLaunchClock } from './fixtures.mjs';
@@ -6707,6 +6708,72 @@ function planSymbolNames(map) {
   }
   return names;
 }
+function planOpacityValue(layer, zoom) {
+  const opacity = layer.paint && layer.paint['text-opacity'];
+  if (typeof opacity === 'number') return opacity;
+  if (!Array.isArray(opacity) || opacity[0] !== 'step') return opacity == null ? 1 : 0;
+  let value = opacity[2];
+  for (let index = 3; index + 1 < opacity.length; index += 2) {
+    if (zoom >= opacity[index]) value = opacity[index + 1];
+  }
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+function planLabelPlacement(map) {
+  const canvas = map.getCanvas();
+  const canvasBox = canvas.getBoundingClientRect();
+  const chrome = [];
+  for (const node of document.querySelectorAll('[data-iss-clock], [data-iss-edition], [data-iss-controls], [data-iss-split-chrome], .maplibregl-ctrl')) {
+    const box = node.getBoundingClientRect();
+    if (box.width < 2 || box.height < 2) continue;
+    chrome.push({ left: box.left, top: box.top, right: box.right, bottom: box.bottom });
+  }
+  const zoom = map.getZoom();
+  const styleLayers = ((map.getStyle() && map.getStyle().layers) || [])
+    .filter((layer) => (layer.source === 'inset-countries' || layer.source === 'inset-country-fallbacks') && layer.type === 'symbol');
+  const features = styleLayers.length ? (map.queryRenderedFeatures({ layers: styleLayers.map((layer) => layer.id) }) || []) : [];
+  const labels = [];
+  for (const feature of features) {
+    const coordinates = feature.geometry && feature.geometry.coordinates;
+    if (!coordinates || coordinates.length < 2) continue;
+    const name = feature.properties && feature.properties.name;
+    if (typeof name !== 'string' || !name) continue;
+    const layer = feature.layer || {};
+    if (layer.layout && layer.layout.visibility === 'none') continue;
+    const point = map.project(coordinates);
+    const textSize = Number(layer.layout && layer.layout['text-size']) || 12;
+    const width = Math.max(textSize, name.length * textSize * 0.55);
+    const height = textSize;
+    const stateOpacity = feature.state && Number(feature.state.opacity);
+    labels.push({
+      name,
+      opacity: Number.isFinite(stateOpacity) ? stateOpacity : planOpacityValue(layer, zoom),
+      box: {
+        left: canvasBox.left + point.x - width / 2,
+        top: canvasBox.top + point.y - height / 2,
+        right: canvasBox.left + point.x + width / 2,
+        bottom: canvasBox.top + point.y + height / 2,
+      },
+    });
+  }
+  const opacity = {};
+  for (const layer of styleLayers) {
+    const filter = layer.filter;
+    const names = filter && filter[2] && filter[2][1];
+    const value = planOpacityValue(layer, zoom);
+    if (!Array.isArray(names)) continue;
+    for (const name of names) {
+      if (typeof name !== 'string') continue;
+      opacity[name] = opacity[name] == null ? value : Math.max(opacity[name], value);
+    }
+  }
+  return {
+    labels,
+    canvas: { left: canvasBox.left, top: canvasBox.top, right: canvasBox.right, bottom: canvasBox.bottom },
+    chrome,
+    opacity,
+  };
+}
 function planLayerCovers(map, name, zoom) {
   const layers = ((map.getStyle() && map.getStyle().layers) || [])
     .filter((layer) => (layer.source === 'inset-countries' || layer.source === 'inset-country-fallbacks') && layer.type === 'symbol');
@@ -6991,6 +7058,7 @@ async function withLockedPlan(send, lng, lat, zoom, country, body) {
         hidden: (frame.dataset.insetHiddenCountries || '').split('|').filter(Boolean),
         country: ${JSON.stringify(country)},
         markerVisible: !!(marker && marker.getClientRects().length > 0),
+        placement: planLabelPlacement(map),
       };
     })()`);
     if (!row || row.ok !== true || row.cameraOk !== true) {
@@ -7242,20 +7310,44 @@ export function assertPlanLabelChecks(row) {
     if (!count.ok) throw new Error(`plan label count ${JSON.stringify({ ...count, zoom, country: row.country, names })}`);
     const parity = matchesMain(names, []);
     if (!parity.ok) throw new Error(`plan label parity ${JSON.stringify(parity)}`);
-    const kenyaWest = row.kenyaWest === true;
-    const raster = pairedRasterNames(row.headShot, row.mainShot, { ignoreRects: row.ignoreRects || [] });
-    if (!raster.ok) throw new Error(`plan label raster ${JSON.stringify({ country: row.country, zoom, reason: raster.reason, ratio: raster.ratio })}`);
-    const named = frameNameVerdict(row.headShot, row.mainShot, row.country, {
-      kenyaWest,
-      chromeRects: row.chromeRects || [],
-      ignoreRects: row.ignoreRects || [],
-      mainChromeRects: row.mainChromeRects || [],
-      mainIgnoreRects: row.mainIgnoreRects || [],
-    });
-    if (!named.ok) throw new Error(`plan label ${named.check} ${JSON.stringify({ country: row.country, zoom, reason: named.reason, count: named.count, expected: named.expected, head: named.head, main: named.main })}`);
-    return { tiles, identity, count, parity, raster, named };
+    const pixels = pairedRasterNames(row.headShot, row.mainShot, { ignoreRects: row.ignoreRects || [] });
+    if (!pixels.ok) throw new Error(`plan label raster ${JSON.stringify({ country: row.country, zoom, reason: pixels.reason, ratio: pixels.ratio })}`);
+    const contract = row.contract || planCameraContract(row.country, zoom);
+    const placed = placementVerdict(row, contract);
+    if (!placed.ok) throw new Error(`plan label place ${JSON.stringify({ country: row.country, zoom, ...placed })}`);
+    const raster = rasterNameVerdict(row, contract);
+    if (!raster.ok) throw new Error(`plan label raster-name ${JSON.stringify({ country: row.country, zoom, ...raster })}`);
+    return { tiles, identity, count, parity, raster: pixels, placed, rasterName: raster };
+  }
+  const lowContract = row.contract || planCameraContract(row.country, zoom);
+  if (lowContract.raster || (row.headPlacement && row.mainPlacement)) {
+    const placed = placementVerdict(row, lowContract);
+    if (!placed.ok) throw new Error(`plan label place ${JSON.stringify({ country: row.country, zoom, ...placed })}`);
+    const raster = rasterNameVerdict(row, lowContract);
+    if (!raster.ok) throw new Error(`plan label raster-name ${JSON.stringify({ country: row.country, zoom, ...raster })}`);
+    return { tiles, identity, placed, rasterName: raster };
   }
   return { tiles, identity };
+}
+
+function placementVerdict(row, contract) {
+  if (!row.headPlacement || !row.mainPlacement) return { ok: true, skipped: true };
+  return labelScreenVerdict({
+    head: row.headPlacement,
+    main: row.mainPlacement,
+    expectedNames: contract.expectedNames,
+  });
+}
+
+function rasterNameVerdict(row, contract) {
+  if (!contract.raster) return { ok: true, skipped: true };
+  const text = row.rasterText != null
+    ? row.rasterText
+    : (row.headShot && row.headShot.png ? ocrFrame(row.headShot.png).text : null);
+  const opacity = row.labelOpacity != null
+    ? row.labelOpacity
+    : (row.headPlacement && row.headPlacement.opacity ? row.headPlacement.opacity[row.country] : null);
+  return rasterDuplicateVerdict({ declared: contract.raster, text, opacity });
 }
 
 /** A sweep row that did not reach its camera is a failure, including a zoom that was never checked. */
@@ -7270,15 +7362,19 @@ export function acceptPlanSweepRow(row) {
   return { below: false };
 }
 
-async function compareLockedPair(headSend, mainSend, lng, lat, zoom, country, kenyaWest) {
+async function compareLockedPair(headSend, mainSend, lng, lat, zoom, country) {
   const head = await withLockedPlan(headSend, lng, lat, zoom, country, async (row) => ({ row, shot: await capturePlanCanvas(headSend) }));
-  const main = await withLockedPlan(mainSend, lng, lat, zoom, country, async () => ({ shot: await capturePlanCanvas(mainSend) }));
+  const main = await withLockedPlan(mainSend, lng, lat, zoom, country, async (row) => ({ row, shot: await capturePlanCanvas(mainSend) }));
   savePlanPair(`${country}-z${zoom}-${lng}-${lat}`, head.shot, main.shot);
+  const contract = planCameraContract(country, zoom);
   const verdict = assertPlanLabelChecks({
     ...head.row,
     headShot: head.shot,
     mainShot: main.shot,
-    kenyaWest: kenyaWest === true,
+    headPlacement: head.row.placement,
+    mainPlacement: main.row.placement,
+    contract,
+    labelOpacity: head.row.placement && head.row.placement.opacity ? head.row.placement.opacity[country] : null,
     ignoreRects: head.shot ? head.shot.ignore : [],
     chromeRects: head.shot ? head.shot.chrome : [],
     mainIgnoreRects: main.shot ? main.shot.ignore : [],
@@ -7308,11 +7404,8 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
     mainSend = await openPlanMain(send);
     const rows = [];
     for (const zoom of [2.99, 3, 3.01]) {
-      const packed = zoom >= 3
-        ? (await compareLockedPair(send, mainSend, -100, 50, zoom, 'Canada', false)).row
-        : await readPlanLabelZoom(send, zoom, -100, 50);
-      if (zoom < 3) assertPlanLabelChecks({ ...packed, country: 'Canada' });
-      rows.push(packed);
+      const paired = await compareLockedPair(send, mainSend, -100, 50, zoom, 'Canada');
+      rows.push(paired.row);
     }
     const fractional = { counts: rows.map(row => ({ zoom: row.zoom, count: row.names.length })) };
     const sweepNotes = [];
@@ -7360,7 +7453,7 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
         if (index % 10 === 0 || index === swept.rows.length - 1) progress({ phase: 'verdicts', country: country.name, completed: index + 1, samples: swept.rows.length, stats: { ...rasterOcrStats } });
       }
       for (const zoom of zooms.filter((zoom) => zoom >= 3)) {
-        const paired = await compareLockedPair(send, mainSend, country.lng, country.lat, zoom, country.name, false);
+        const paired = await compareLockedPair(send, mainSend, country.lng, country.lat, zoom, country.name);
         if (paired.row && paired.row.repaintMs != null) console.log(`plan labels repaint ${country.name} z${zoom} ${paired.row.repaintMs}ms`);
       }
       sweepNotes.push(`${country.name}:${swept.rows.length}`);
@@ -7385,23 +7478,25 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
     ];
     for (const camera of offCentroid) {
       for (const zoom of camera.zooms) {
-        const kenyaWest = camera.country === 'Kenya' && camera.center[0] === 37 && camera.center[1] === 1;
+        const contract = planCameraContract(camera.country, zoom);
         const paired = await withLockedPlan(send, camera.center[0], camera.center[1], zoom, camera.country, async (row) => {
           if (!row.markerVisible) throw new Error(`plan label marker ${camera.country} ${zoom}`);
           const shot = await capturePlanCanvas(send);
-          const main = await withLockedPlan(mainSend, camera.center[0], camera.center[1], zoom, camera.country, async () => capturePlanCanvas(mainSend));
-          savePlanPair(`${camera.country}-z${zoom}-${camera.center[0]}-${camera.center[1]}`, shot, main);
-          const verdict = assertPlanLabelChecks({
+          const main = await withLockedPlan(mainSend, camera.center[0], camera.center[1], zoom, camera.country, async (mainRow) => ({ row: mainRow, shot: await capturePlanCanvas(mainSend) }));
+          savePlanPair(`${camera.country}-z${zoom}-${camera.center[0]}-${camera.center[1]}`, shot, main.shot);
+          assertPlanLabelChecks({
             ...row,
             headShot: shot,
-            mainShot: main,
-            kenyaWest,
+            mainShot: main.shot,
+            headPlacement: row.placement,
+            mainPlacement: main.row.placement,
+            contract,
+            labelOpacity: row.placement && row.placement.opacity ? row.placement.opacity[camera.country] : null,
             ignoreRects: shot ? shot.ignore : [],
             chromeRects: shot ? shot.chrome : [],
-            mainIgnoreRects: main ? main.ignore : [],
-            mainChromeRects: main ? main.chrome : [],
+            mainIgnoreRects: main.shot ? main.shot.ignore : [],
+            mainChromeRects: main.shot ? main.shot.chrome : [],
           });
-          if (kenyaWest) console.log(`plan labels kenya west glyphs ${verdict.named.count} fixture ${KENYA_WEST_RASTER_COUNT}`);
           return row;
         });
         await releasePlanCamera(send);

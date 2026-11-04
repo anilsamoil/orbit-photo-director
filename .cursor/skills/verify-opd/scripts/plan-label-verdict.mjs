@@ -4,8 +4,6 @@ import vm from 'node:vm';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
-import { ocrFrame } from './raster-ocr.mjs';
-import { countCountryGlyphs, latinLetterMatches } from './rotated-name-count.mjs';
 
 const COUNTRY_NAMES = ['Canada', 'Mexico', 'Brazil', 'Argentina'];
 
@@ -210,9 +208,6 @@ export function matchesMain(actual, mainNames) {
   return { ok, check: 'parity', reason: ok ? undefined : 'parity', actual: left, main: right };
 }
 
-/** Kenya west keeps main's two raster names. The symbol layer adds none. */
-export const KENYA_WEST_RASTER_COUNT = 2;
-
 /** Share of sampled pixels that may differ between a head frame and main's frame of the same camera. */
 export const RASTER_PAIR_TOLERANCE = 0.012;
 
@@ -280,76 +275,84 @@ function boxDiffers(left, right, box) {
   return !(seen > 0) || differ / seen > 0.08;
 }
 
-/** How many times each plan country is readable in this frame. A stored count is not a reading. */
-export function frameCountryNames(image, options = {}) {
-  if (!image || !image.png) return { ok: false, reason: 'frame', counts: {}, words: [] };
-  const recognized = ocrFrame(image.png);
-  if (!recognized || !Array.isArray(recognized.words) || recognized.words.length === 0) {
-    return { ok: false, reason: 'unread', counts: {}, words: [] };
-  }
-  const names = new Set(PLAN_COUNTRIES.map((entry) => entry.name.toUpperCase()));
-  const chrome = options.chromeRects || [];
-  const words = [];
-  const counts = {};
-  for (const word of recognized.words) {
-    const text = String(word.text || '').trim().toUpperCase();
-    if (!/^[A-Z]+$/.test(text) || !names.has(text) || word.uppercase === false) continue;
-    const box = word.box || [0, 0, 0, 0];
-    if (chrome.some((rect) => boxHitsRect(box, rect))) continue;
-    if (image.data && !latinLetterMatches(image.data, image.width, image.height, box, text)) continue;
-    words.push({ text, box });
-    counts[text] = (counts[text] || 0) + 1;
-  }
-  if (Object.keys(counts).length === 0) return { ok: false, reason: 'unread', counts, words };
-  return { ok: true, counts, words };
+/** France and Kenya controls expect no symbol labels. Canada below zoom 3 is the raster duplicate. */
+export function planCameraContract(country, zoom) {
+  const z = Number(zoom);
+  if (country === 'Canada' && z < 3) return { expectedNames: [], raster: 'CANADA' };
+  return { expectedNames: [], raster: null };
 }
 
-function countsFromWords(found, image, other) {
+function labelCounts(labels) {
   const counts = {};
-  for (const word of found.words || []) {
-    if (other && !boxDiffers(image, other, word.box)) continue;
-    counts[word.text] = (counts[word.text] || 0) + 1;
+  for (const label of labels || []) {
+    const name = label && label.name;
+    if (typeof name !== 'string' || !name) continue;
+    counts[name] = (counts[name] || 0) + 1;
   }
   return counts;
 }
 
-/** Name identity and occurrence count, read from the head frame and the main frame. */
-export function frameNameVerdict(head, main, country, options = {}) {
-  const chrome = options.chromeRects || [];
-  const mainChrome = options.mainChromeRects || [];
-  const leftFound = frameCountryNames(head, { chromeRects: chrome });
-  const rightFound = frameCountryNames(main, { chromeRects: mainChrome });
-  const leftCounts = leftFound.ok ? countsFromWords(leftFound, head, main) : {};
-  const rightCounts = rightFound.ok ? countsFromWords(rightFound, main, head) : {};
-  const key = String(country || '').toUpperCase();
-  const headCount = leftCounts[key] || 0;
-  const mainCount = rightCounts[key] || 0;
-  if (options.kenyaWest && head.data && main.data) {
-    const headBlocked = [...chrome, ...(options.ignoreRects || [])];
-    const mainBlocked = [...mainChrome, ...(options.mainIgnoreRects || [])];
-    const headGlyphs = countCountryGlyphs(head.data, head.width, head.height, country, { ignoreRects: headBlocked });
-    const mainGlyphs = countCountryGlyphs(main.data, main.width, main.height, country, { ignoreRects: mainBlocked });
-    if (headGlyphs < 1 || mainGlyphs < 1) {
-      return { ok: false, check: 'name', reason: 'unread', count: headGlyphs, expected: mainGlyphs, head: leftFound.counts, main: rightFound.counts };
-    }
-    const same = occurrenceCount(headGlyphs, mainGlyphs);
-    if (!same.ok) return { ok: false, check: 'count', reason: 'count', count: headGlyphs, expected: mainGlyphs, head: leftFound.counts, main: rightFound.counts };
-    return { ok: true, check: 'count', count: headGlyphs, expected: mainGlyphs, head: leftFound.counts, main: rightFound.counts };
-  }
-  const masks = chrome.length > 0 || mainChrome.length > 0;
-  const namedLeft = Object.keys(leftFound.counts).length > 0;
-  const namedRight = Object.keys(rightFound.counts).length > 0;
-  if ((!leftFound.ok || !rightFound.ok || !namedLeft || !namedRight) && !masks) {
-    return { ok: false, check: 'name', reason: 'unread', count: headCount, expected: mainCount, head: leftFound.counts, main: rightFound.counts };
-  }
-  const stable = (counts) => JSON.stringify(Object.fromEntries(Object.entries(counts).sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))));
-  if (stable(leftCounts) !== stable(rightCounts)) {
-    return { ok: false, check: 'name', reason: 'name', count: headCount, expected: mainCount, head: leftCounts, main: rightCounts };
-  }
-  const count = occurrenceCount(headCount, mainCount);
-  if (!count.ok) return { ok: false, check: 'count', reason: 'count', count: headCount, expected: mainCount, head: leftCounts, main: rightCounts };
-  return { ok: true, check: 'name', count: headCount, expected: mainCount, head: leftCounts, main: rightCounts };
+function stableCounts(counts) {
+  return JSON.stringify(Object.fromEntries(Object.entries(counts).sort(([left], [right]) => left.localeCompare(right))));
 }
+
+function boxInside(box, canvas) {
+  return box.left >= canvas.left && box.top >= canvas.top && box.right <= canvas.right && box.bottom <= canvas.bottom
+    && box.right > box.left && box.bottom > box.top;
+}
+
+function boxHits(box, rect) {
+  return box.left < rect.right && box.right > rect.left && box.top < rect.bottom && box.bottom > rect.top;
+}
+
+/** Names and counts come from queryRenderedFeatures. Boxes are checked against the DOM rectangles. */
+export function labelScreenVerdict({ head, main, expectedNames }) {
+  const headCounts = labelCounts(head && head.labels);
+  const mainCounts = labelCounts(main && main.labels);
+  if (stableCounts(headCounts) !== stableCounts(mainCounts)) {
+    return { ok: false, reason: 'parity', head: headCounts, main: mainCounts };
+  }
+  if (expectedNames) {
+    const expected = {};
+    for (const name of expectedNames) expected[name] = (expected[name] || 0) + 1;
+    if (stableCounts(headCounts) !== stableCounts(expected)) {
+      return { ok: false, reason: 'declared', head: headCounts, expected };
+    }
+  }
+  for (const side of [head, main]) {
+    const canvas = side && side.canvas;
+    const chrome = (side && side.chrome) || [];
+    for (const label of (side && side.labels) || []) {
+      if (!canvas || !boxInside(label.box, canvas)) {
+        return { ok: false, reason: 'canvas', name: label.name, box: label.box };
+      }
+      if (chrome.some((rect) => boxHits(label.box, rect))) {
+        return { ok: false, reason: 'chrome', name: label.name, box: label.box };
+      }
+    }
+  }
+  return { ok: true, counts: headCounts };
+}
+
+/** One horizontal OCR read confirms the declared raster name. Our label for it must be opacity 0. */
+export function rasterDuplicateVerdict({ declared, text, opacity }) {
+  if (!declared) return { ok: true, skipped: true };
+  const tokens = String(text || '').toUpperCase().split(/[^A-Z]+/).filter(Boolean);
+  if (!tokens.includes(String(declared).toUpperCase())) {
+    return { ok: false, reason: 'raster', declared, opacity };
+  }
+  if (Number(opacity) !== 0) {
+    return { ok: false, reason: 'opacity', declared, opacity };
+  }
+  return { ok: true, declared, opacity: 0 };
+}
+
+/** A new capture needs browser, OS, and device. Historical files stay incomplete and are not filled in. */
+export function captureEnvironmentOk(record) {
+  if (!record || record.environmentRecord === 'incomplete') return false;
+  return ['browser', 'os', 'device'].every((key) => typeof record[key] === 'string' && record[key].trim().length > 0);
+}
+
 
 /** The plan label source uses main's tile cap, not the audit cap. Overzooming z6 turns border lettering into a second name. */
 export const LABEL_SOURCE_MAX_ZOOM = 19;

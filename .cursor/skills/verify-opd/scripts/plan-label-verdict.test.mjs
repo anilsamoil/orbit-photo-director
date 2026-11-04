@@ -2,17 +2,16 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
-import { countCountryGlyphs, countryGlyphBoxes, decodePng } from './rotated-name-count.mjs';
 import vm from 'node:vm';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ocrFrame, readableRasterName } from './raster-ocr.mjs';
+import { readableRasterName } from './raster-ocr.mjs';
 import { letteringOccluded } from '../../../../frontend/src/map/adapters/maplibre/country-label-size.ts';
 import {
-  AUDITED_RASTER_LEVELS, auditRasterLevels, countryStyleVerdict, countrySweepZooms,
-  anchorOnPlan, auditedNameCandidates, auditedNameReadable, clippedRasterRemnant, completeNameCount, frameNameVerdict, KENYA_WEST_RASTER_COUNT, labelTile, loadCountryRasterLevels, loadCountrySymbolLayers, nameCountOk, oneNameSource, pairedRasterNames, planLabelReaders, planLabelVerdict, rasterNameEvidence, rasterPainted, RASTER_PAIR_TOLERANCE, symbolCrossesEdge,
+  AUDITED_RASTER_LEVELS, auditRasterLevels, captureEnvironmentOk, countryStyleVerdict, countrySweepZooms,
+  anchorOnPlan, auditedNameCandidates, auditedNameReadable, clippedRasterRemnant, completeNameCount, labelScreenVerdict, labelTile, loadCountryRasterLevels, loadCountrySymbolLayers, nameCountOk, oneNameSource, pairedRasterNames, planCameraContract, planLabelReaders, planLabelVerdict, rasterDuplicateVerdict, rasterNameEvidence, rasterPainted, RASTER_PAIR_TOLERANCE, symbolCrossesEdge,
 } from './plan-label-verdict.mjs';
-import { acceptPlanSweepRow, assertPlanLabelChecks } from './drive.mjs';
+import { acceptPlanSweepRow } from './drive.mjs';
 
 test('an exact sovereign name is not vetoed by an unrelated adjective', () => {
   assert.equal(rasterPainted('AUSTRALIA\nGreat Australian Bight', 'Australia'), true);
@@ -363,20 +362,22 @@ test('glyph ink, not the padded OCR box, meets the shared one-pixel clock rule',
   const off = drive.slice(drive.indexOf('const offCentroid'), drive.indexOf('const france = await readPlanLabelZoom'));
   const check = drive.slice(drive.indexOf('export function assertPlanLabelChecks'), drive.indexOf('export async function proveFractionalPlanLabels'));
   assert.match(off, /assertPlanLabelChecks\(/);
-  assert.match(off, /KENYA_WEST_RASTER_COUNT/);
+  assert.match(off, /planCameraContract\(/);
   assert.match(off, /releasePlanCamera\(/);
-  assert.match(check, /pairedRasterNames\(/);
-  assert.match(check, /frameNameVerdict\(/);
-  assert.match(check, /mainChromeRects: row\.mainChromeRects/);
-  assert.match(check, /mainIgnoreRects: row\.mainIgnoreRects/);
+  assert.match(check, /pairedRasterNames\(row\.headShot, row\.mainShot, \{ ignoreRects: row\.ignoreRects/);
+  assert.match(check, /labelScreenVerdict\(/);
+  assert.match(check, /mainChromeRects: main\.shot/);
+  assert.match(check, /mainIgnoreRects: main\.shot/);
   const openMain = drive.slice(drive.indexOf('async function openPlanMain'), drive.indexOf('async function forgetMainLease'));
   assert.match(openMain, /openDeviceContext\(/);
   assert.doesNotMatch(openMain, /session\.context\.addCookies|session\.context\.newPage/);
   assert.match(openMain, /finally \{/);
   assert.ok(openMain.indexOf('finally {') > openMain.indexOf('leaseMainFixture'), 'the lease release covers setup after registration');
   assert.match(openMain, /if \(!handed\) await releaseMainLease\(lease\)/);
-  assert.match(check, /countCountryGlyphs|kenyaWest/);
-  assert.match(drive, /KENYA_WEST_RASTER_COUNT/);
+  assert.match(check, /rasterDuplicateVerdict\(/);
+  assert.doesNotMatch(drive, /KENYA_WEST_RASTER_COUNT|countCountryGlyphs|frameNameVerdict/);
+  const rasterRead = drive.slice(drive.indexOf('function rasterNameVerdict'), drive.indexOf('export function acceptPlanSweepRow'));
+  assert.doesNotMatch(rasterRead, /ignoreRects/);
   assert.doesNotMatch(check, /row\.rasterCount|loadMainRaster|counts\.json/);
   assert.equal(RASTER_PAIR_TOLERANCE, 0.012);
   assert.doesNotMatch(off, /countryGlyphBoxes|clippedRasterRemnant|peekingGlyphInk/);
@@ -460,12 +461,6 @@ test('paired screenshots reject a blank France, the wrong country, a third Kenya
   assert.deepEqual(missed, []);
 });
 
-function loadRegression(engine, name) {
-  const file = new URL(`./fixtures/plan-label-regression/${engine}-${name}.png`, import.meta.url);
-  const png = readFileSync(file);
-  return { ...decodePng(png), png };
-}
-
 test('a low zoom left at z8 is a failed check', () => {
   assert.throws(() => acceptPlanSweepRow({ requestedZoom: 1.2, zoom: 8, cameraOk: false, tilesOk: true, country: 'Mexico' }), /plan label camera/);
   assert.throws(() => acceptPlanSweepRow({ tilesOk: true, zoom: 8, country: 'Mexico' }), /plan label camera/);
@@ -481,163 +476,68 @@ test('a low zoom left at z8 is a failed check', () => {
   assert.equal(acceptPlanSweepRow(row).below, true);
 });
 
-test('edited Kenya-west frames fail the name count in both engines while staying inside the pixel limit', () => {
-  const manifest = JSON.parse(readFileSync(new URL('./fixtures/plan-label-regression/manifest.json', import.meta.url), 'utf8'));
-  const chrome = { left: manifest.chrome[0], top: manifest.chrome[1], right: manifest.chrome[2], bottom: manifest.chrome[3] };
-  const missed = [];
-  const reasons = [];
-  assert.equal(manifest.engines.length * manifest.cases.length, 10);
-  for (const engine of manifest.engines) {
-    const main = loadRegression(engine, 'main');
-    for (const name of manifest.cases) {
-      const head = loadRegression(engine, name);
-      const label = `${engine} ${name}`;
-      const pixels = pairedRasterNames(head, main);
-      if (pixels.ok !== true || !(pixels.ratio <= RASTER_PAIR_TOLERANCE)) missed.push(`${label} pixels ${pixels.reason || pixels.ratio}`);
-      const row = {
-        tilesOk: true,
-        zoom: 6.5,
-        tileZ: labelTile(6.5),
-        country: 'Kenya',
-        names: [],
-        kenyaWest: true,
-        headShot: head,
-        mainShot: main,
-        chromeRects: name === 'chrome' ? [chrome] : [],
-      };
-      try {
-        assertPlanLabelChecks(row);
-        missed.push(`${label} passed`);
-      } catch (error) {
-        const text = error instanceof Error ? error.message : String(error);
-        const body = text.replace(/^plan label \w+ /, '');
-        let parsed = null;
-        try { parsed = JSON.parse(body); } catch { parsed = null; }
-        if (!parsed || (parsed.reason !== 'count' && parsed.reason !== 'name')) missed.push(`${label} ${text}`);
-        else if (name === 'three' && (parsed.count !== 3 || parsed.expected !== 2 || !(parsed.head && parsed.head.KENYA) || !(parsed.main && parsed.main.KENYA))) missed.push(`${label} unread ${text}`);
-        else reasons.push(`${label} ${parsed.reason} ${parsed.count} vs ${parsed.expected} ${JSON.stringify(parsed.head)} vs ${JSON.stringify(parsed.main)}`);
-      }
-    }
-  }
-  assert.deepEqual(missed, []);
-  assert.deepEqual(reasons, [
-    'chromium removed count 1 vs 2 {"KENYA":1} vs {"KENYA":2}',
-    'chromium egypt count 1 vs 2 {"KENYA":1,"EGYPT":1} vs {"KENYA":2}',
-    'chromium three count 3 vs 2 {"KENYA":3} vs {"KENYA":2}',
-    'chromium nya count 1 vs 2 {"KENYA":1} vs {"KENYA":2}',
-    'chromium chrome count 1 vs 2 {"KENYA":1} vs {"KENYA":2}',
-    'webkit removed count 1 vs 2 {"KENYA":1} vs {"KENYA":2}',
-    'webkit egypt count 1 vs 2 {"KENYA":1,"EGYPT":1} vs {"KENYA":2}',
-    'webkit three count 3 vs 2 {"KENYA":3} vs {"KENYA":2}',
-    'webkit nya count 1 vs 2 {"KENYA":1} vs {"KENYA":2}',
-    'webkit chrome count 1 vs 2 {"KENYA":1} vs {"KENYA":2}',
-  ]);
-  const kenyaPng = readFileSync(new URL('./fixtures/label-cameras/kenya-west-37-1.png', import.meta.url));
-  const kenyaFrame = { ...decodePng(kenyaPng), png: kenyaPng };
-  const seen = frameNameVerdict(kenyaFrame, kenyaFrame, 'Kenya', { kenyaWest: true });
-  assert.equal(seen.ok, true, JSON.stringify(seen));
-  assert.equal(seen.count, 2);
-  assert.equal(KENYA_WEST_RASTER_COUNT, 2);
-  const four = [
-    ['chromium', 'three', 3, 2],
-    ['chromium', 'chrome', 1, 2],
-    ['webkit', 'egypt', 1, 2],
-    ['webkit', 'three', 3, 2],
-  ];
-  const blobPassed = [];
-  for (const [engine, name, headCount, mainCount] of four) {
-    const head = loadRegression(engine, name);
-    const main = loadRegression(engine, 'main');
-    const ignore = name === 'chrome' ? { ignoreRects: [chrome] } : {};
-    const strictHead = countCountryGlyphs(head.data, head.width, head.height, 'Kenya', ignore);
-    const strictMain = countCountryGlyphs(main.data, main.width, main.height, 'Kenya');
-    assert.equal(strictHead, headCount, `${engine} ${name} head`);
-    assert.equal(strictMain, mainCount, `${engine} ${name} main`);
-    const looseHead = countryGlyphBoxes(head.data, head.width, head.height, 'Kenya', { confirmName: () => true }).length;
-    const looseMain = countryGlyphBoxes(main.data, main.width, main.height, 'Kenya', { confirmName: () => true }).length;
-    if (looseHead === looseMain) blobPassed.push(`${engine} ${name}`);
-  }
-  assert.deepEqual(blobPassed, ['chromium chrome', 'webkit egypt']);
-});
-
-test('painted-out and duplicated CANADA fail the name check inside the pixel limit', () => {
-  const load = (name) => {
-    const png = readFileSync(new URL(`./fixtures/plan-label-regression/canada-${name}.png`, import.meta.url));
-    return { ...decodePng(png), png };
-  };
-  const main = load('main');
-  const cases = ['painted-out', 'duplicated'];
-  const missed = [];
-  for (const name of cases) {
-    const head = load(name);
-    const pixels = pairedRasterNames(head, main);
-    if (pixels.ok !== true || !(pixels.ratio <= RASTER_PAIR_TOLERANCE) || !(pixels.ratio > 0)) missed.push(`${name} pixels ${pixels.ratio}`);
-    const verdict = frameNameVerdict(head, main, 'Canada');
-    if (verdict.ok !== false) missed.push(`${name} passed`);
-  }
-  const blank = load('painted-out');
-  const empty = frameNameVerdict(blank, blank, 'Canada');
-  if (empty.ok !== false || empty.reason !== 'unread') missed.push(`empty read ${empty.reason || 'passed'}`);
-  const clock = { left: 160, top: 280, right: 260, bottom: 340 };
-  const covered = {
-    ...main,
-    data: new Uint8Array(main.data),
-    png: main.png,
-  };
-  for (let y = clock.top; y < clock.bottom; y += 1) {
-    for (let x = clock.left; x < clock.right; x += 1) {
-      const index = (y * covered.width + x) * 4;
-      covered.data[index] = 12;
-      covered.data[index + 1] = 14;
-      covered.data[index + 2] = 16;
-    }
-  }
-  const shared = frameNameVerdict(covered, main, 'Canada', { chromeRects: [clock], mainChromeRects: [clock] });
-  const separate = frameNameVerdict(covered, main, 'Canada', { chromeRects: [clock], mainChromeRects: [] });
-  if (shared.ok !== true) missed.push(`shared clock mask ${shared.reason}`);
-  if (separate.ok !== false) missed.push('separate clock mask passed');
-  assert.deepEqual(missed, []);
-});
-
-test('foreign-language Kenya frames fail, and WebKit counts the two visible Latin names', () => {
-  const dir = new URL('./fixtures/plan-label-foreign/', import.meta.url);
-  const load = (name) => {
-    const png = readFileSync(new URL(`${name}.png`, dir));
-    return { ...decodePng(png), png };
-  };
-  const stripped = (image) => (ocrFrame(image.png).words || [])
-    .filter((word) => String(word.text || '').toUpperCase().replace(/[^A-Z]/g, '') === 'KENYA').length;
-  const mutantPassed = [];
-  const missed = [];
+test('label placement mutants fail and the healthy controls pass on both engines', () => {
+  const canvas = { left: 0, top: 0, right: 400, bottom: 800 };
+  const clock = { left: 0, top: 0, right: 80, bottom: 36 };
+  const open = { labels: [], canvas, chrome: [clock] };
+  const inside = { left: 120, top: 200, right: 180, bottom: 220 };
+  const underClock = { left: 10, top: 8, right: 70, bottom: 28 };
+  const controls = [];
   for (const engine of ['chromium', 'webkit']) {
-    const main = load(`${engine}-main`);
-    for (const name of ['greek', 'accent', 'cyrillic', 'arabic', 'cjk']) {
-      const head = load(`${engine}-${name}`);
-      const verdict = frameNameVerdict(head, main, 'Kenya', { kenyaWest: true });
-      if (verdict.ok !== false) missed.push(`${engine} ${name} passed`);
-      if (stripped(head) === stripped(main)) mutantPassed.push(`${engine} ${name}`);
+    for (const country of ['France', 'Kenya']) {
+      const contract = planCameraContract(country, 6.5);
+      const verdict = labelScreenVerdict({ head: open, main: { ...open }, expectedNames: contract.expectedNames });
+      if (!verdict.ok || contract.raster !== null || contract.expectedNames.length !== 0) controls.push(`${engine} ${country}`);
     }
+    const canada = planCameraContract('Canada', 2.5);
+    const clear = labelScreenVerdict({ head: open, main: { ...open }, expectedNames: canada.expectedNames });
+    const raster = rasterDuplicateVerdict({ declared: canada.raster, text: 'CANADA', opacity: 0 });
+    if (!clear.ok || !raster.ok) controls.push(`${engine} Canada`);
   }
-  assert.deepEqual(missed, []);
-  assert.deepEqual(mutantPassed, ['chromium greek', 'chromium accent', 'webkit greek', 'webkit accent']);
-  const visible = load('webkit-two-plus-greek');
-  const blobs = countryGlyphBoxes(visible.data, visible.width, visible.height, 'Kenya', { confirmName: () => true }).length;
-  const names = countCountryGlyphs(visible.data, visible.width, visible.height, 'Kenya');
-  assert.equal(blobs, 3);
-  assert.equal(names, 2);
-  const webkitMain = load('webkit-main');
-  assert.equal(countCountryGlyphs(webkitMain.data, webkitMain.width, webkitMain.height, 'Kenya'), 2);
-  const towns = load('towns');
-  assert.equal(countCountryGlyphs(towns.data, towns.width, towns.height, 'Kenya'), 0);
-  const alone = frameNameVerdict(towns, towns, 'Kenya', { kenyaWest: true });
-  const against = frameNameVerdict(towns, webkitMain, 'Kenya', { kenyaWest: true });
-  const unread = frameNameVerdict(towns, towns, 'Kenya');
-  assert.equal(alone.ok, false, JSON.stringify(alone));
-  assert.equal(against.ok, false, JSON.stringify(against));
-  assert.equal(unread.ok, false, JSON.stringify(unread));
-  assert.equal(unread.reason, 'unread');
-  assert.equal(unread.count, 0);
-  assert.equal(unread.expected, 0);
+  assert.deepEqual(controls, []);
+  const extra = labelScreenVerdict({
+    head: { labels: [{ name: 'France', box: inside }], canvas, chrome: [clock] },
+    main: open,
+    expectedNames: [],
+  });
+  assert.equal(extra.ok, false);
+  assert.equal(extra.reason, 'parity');
+  const swapped = labelScreenVerdict({
+    head: { labels: [{ name: 'France', box: inside }], canvas, chrome: [clock] },
+    main: { labels: [{ name: 'Kenya', box: inside }], canvas, chrome: [clock] },
+    expectedNames: ['France'],
+  });
+  assert.equal(swapped.ok, false);
+  assert.equal(swapped.reason, 'parity');
+  const covered = labelScreenVerdict({
+    head: { labels: [{ name: 'France', box: underClock }], canvas, chrome: [clock] },
+    main: { labels: [{ name: 'France', box: underClock }], canvas, chrome: [clock] },
+    expectedNames: ['France'],
+  });
+  assert.equal(covered.ok, false);
+  assert.equal(covered.reason, 'chrome');
+  const missing = rasterDuplicateVerdict({ declared: 'CANADA', text: 'MEXICO BRAZIL', opacity: 0 });
+  assert.equal(missing.ok, false);
+  assert.equal(missing.reason, 'raster');
+  const painted = rasterDuplicateVerdict({ declared: 'CANADA', text: 'CANADA', opacity: 1 });
+  assert.equal(painted.ok, false);
+  assert.equal(painted.reason, 'opacity');
+  const ignored = rasterDuplicateVerdict({ declared: 'CANADA', text: 'MEXICO', opacity: 0 });
+  assert.equal(ignored.ok, false);
+  assert.equal(ignored.reason, 'raster');
+});
+
+test('historical plan captures stay incomplete and a new capture needs a full environment record', () => {
+  const captures = JSON.parse(readFileSync(new URL('./fixtures/captures.json', import.meta.url), 'utf8'));
+  const historical = captures.pngs.filter((entry) => entry.kind === 'plan-column screenshot');
+  assert.equal(historical.length, 3);
+  for (const entry of historical) {
+    assert.equal(entry.environmentRecord, 'incomplete');
+    assert.equal(captureEnvironmentOk(entry), false);
+  }
+  assert.equal(captureEnvironmentOk({ environmentRecord: 'incomplete', browser: 'x', os: 'y', device: 'z' }), false);
+  assert.equal(captureEnvironmentOk({ browser: 'Chrome', os: 'Linux', device: '' }), false);
+  assert.equal(captureEnvironmentOk({ browser: 'Chrome 156', os: 'Linux', device: 'plan column 274x984' }), true);
 });
 
 test('docs do not keep the calib fixture value', () => {
