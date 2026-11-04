@@ -5,7 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
 import { earthAfterResizeReaders } from './earth-after-resize.mjs';
-import { auditRasterLevels, countryIdentity, countrySweepZooms, imageryLabelRegions, imageryRegionDiff, keptCountrySymbol, labelScreenVerdict, loadCountryRasterLevels, matchesMain, occurrenceCount, pairedRasterNames, planCameraContract, PLAN_COUNTRIES, planLabelReaders, rasterDuplicateVerdict, tilesLoaded } from './plan-label-verdict.mjs';
+import { auditRasterLevels, countryIdentity, countrySweepZooms, imageryLabelRegions, imageryRegionDiff, imageryViewport, keptCountrySymbol, labelScreenVerdict, loadCountryRasterLevels, matchesMain, occurrenceCount, pairedRasterNames, planCameraContract, PLAN_COUNTRIES, planLabelReaders, rasterDuplicateVerdict, tilesLoaded } from './plan-label-verdict.mjs';
 import { decodePng } from './decode-png.mjs';
 import { ocrFrame, ocrFrameBox } from './raster-ocr.mjs';
 import { checkRasterOcr, clearRasterOcrRun, rasterOcrStats } from './raster-ocr.mjs';
@@ -6815,7 +6815,14 @@ function planLabelPlacement(map) {
   }
   return {
     labels,
-    canvas: { left: canvasBox.left, top: canvasBox.top, right: canvasBox.right, bottom: canvasBox.bottom },
+    canvas: {
+      left: canvasBox.left,
+      top: canvasBox.top,
+      right: canvasBox.right,
+      bottom: canvasBox.bottom,
+      clientWidth: canvas.clientWidth,
+      clientHeight: canvas.clientHeight,
+    },
     chrome,
     opacity,
     rasterBox: planProjectRasterBox(map, planCanadaInk()),
@@ -7403,17 +7410,36 @@ function placementVerdict(row, contract) {
 
 function screenshotLabelBox(row, position) {
   const canvas = row.headPlacement && row.headPlacement.canvas;
-  if (!position || !canvas) return null;
+  const shot = row.headShot;
+  if (!position || !canvas || !shot) return null;
+  const clientW = canvas.clientWidth || (canvas.right - canvas.left);
+  const clientH = canvas.clientHeight || (canvas.bottom - canvas.top);
+  const scaleX = clientW ? shot.width / clientW : 1;
+  const scaleY = clientH ? shot.height / clientH : 1;
   return {
-    left: position.left - canvas.left,
-    top: position.top - canvas.top,
-    right: position.right - canvas.left,
-    bottom: position.bottom - canvas.top,
+    left: (position.left - canvas.left) * scaleX,
+    top: (position.top - canvas.top) * scaleY,
+    right: (position.right - canvas.left) * scaleX,
+    bottom: (position.bottom - canvas.top) * scaleY,
+  };
+}
+
+function canadaShotBox(row) {
+  const shot = row.headShot;
+  if (!shot || !Array.isArray(row.center) || !Number.isFinite(Number(row.zoom))) return null;
+  const view = imageryViewport(row.center, row.zoom, shot.width, shot.height);
+  const world = 512 * (2 ** Number(row.zoom));
+  const ink = [0.205078125, 0.313476562, 0.236816406, 0.317871094];
+  return {
+    left: view.origin.x + ink[0] * world,
+    top: view.origin.y + ink[1] * world,
+    right: view.origin.x + ink[2] * world,
+    bottom: view.origin.y + ink[3] * world,
   };
 }
 
 function ocrLabelText(row, position) {
-  const local = screenshotLabelBox(row, position);
+  const local = canadaShotBox(row) || screenshotLabelBox(row, position);
   if (!local || !(local.right > local.left) || !(local.bottom > local.top)) return ocrFrame(row.headShot.png).text;
   return ocrFrameBox(row.headShot.png, local).text;
 }
