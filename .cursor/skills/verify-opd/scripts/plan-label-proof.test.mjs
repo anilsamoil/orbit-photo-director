@@ -235,6 +235,31 @@ test('a map that is not loaded and never goes idle is still a tile failure', asy
   assert.equal(map.listeners(), 0);
 });
 
+test('a loaded parent tile still in view holds the gate until it leaves', async () => {
+  const { planWaitTiles } = loadHelpers();
+  const map = waitingMap({ idle: true });
+  const visible = map.style.tileManagers['inset-labels'].getVisibleCoordinates()[0];
+  let present = true;
+  const parent = {
+    tileID: { canonical: { z: Math.max(0, visible.canonical.z - 1), x: 0, y: 0 }, key: 'parent' },
+    state: 'loaded',
+  };
+  const center = { tileID: { canonical: visible.canonical, key: 'center' }, state: 'loaded' };
+  for (const id of ['inset-labels', 'inset-basemap']) {
+    map.style.tileManagers[id]._inViewTiles = {
+      getAllTiles: () => (present ? [parent, center] : [center]),
+    };
+  }
+  setTimeout(() => {
+    present = false;
+  }, 250);
+  const started = Date.now();
+  const waited = await planWaitTiles(map);
+  assert.equal(waited.tilesOk, true, JSON.stringify(waited.detail));
+  assert.ok(Date.now() - started >= 200, Date.now() - started);
+  assert.equal(map.listeners(), 0);
+});
+
 test('a loading in-view raster tile omitted from the renderable list holds the gate', async () => {
   const { planWaitTiles } = loadHelpers();
   const map = waitingMap({ idle: true });

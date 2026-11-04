@@ -6637,7 +6637,7 @@ function planRasterReady(map) {
     if (drawn.length === 0) return false;
     if (!drawn.every((tile) => tile.state === 'loaded')) return false;
     if (!drawn.some((tile) => tile.x === pack.center.x && tile.y === pack.center.y)) return false;
-    return pack.tiles.every((tile) => tile.state === 'loaded' || tile.state === 'errored');
+    return pack.tiles.every((tile) => tile.z === pack.z && tile.state === 'loaded');
   };
   return ready(planVisibleTiles(map, 'inset-labels')) && ready(planVisibleTiles(map, 'inset-basemap'));
 }
@@ -6787,7 +6787,9 @@ async function planWaitTiles(map) {
     labels = planVisibleTiles(map, 'inset-labels');
     base = planVisibleTiles(map, 'inset-basemap');
     if (planRasterReady(map)) break;
-    await settleIdle(map, 100);
+    await settleIdle(map, 100, () => {
+      if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
+    });
   }
   labels = planVisibleTiles(map, 'inset-labels');
   base = planVisibleTiles(map, 'inset-basemap');
