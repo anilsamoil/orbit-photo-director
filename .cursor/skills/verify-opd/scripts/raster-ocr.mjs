@@ -79,7 +79,7 @@ from PIL import Image, ImageOps
 import io
 left, top, right, bottom = (float(arg) for arg in sys.argv[1:5])
 image = Image.open(sys.stdin.buffer).convert('RGBA')
-pad = 12
+pad = 48
 box = (max(0, left - pad), max(0, top - pad), min(image.width, right + pad), min(image.height, bottom + pad))
 crop = image.crop(box)
 large = ImageOps.autocontrast(crop.convert('L').resize((max(1, crop.width * 4), max(1, crop.height * 4)), Image.Resampling.LANCZOS))
