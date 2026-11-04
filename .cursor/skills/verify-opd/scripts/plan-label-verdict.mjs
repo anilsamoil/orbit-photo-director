@@ -258,46 +258,81 @@ function boxHitsRect(box, rect) {
   return box[0] < rect.right && box[2] > rect.left && box[1] < rect.bottom && box[3] > rect.top;
 }
 
+function boxDiffers(left, right, box) {
+  if (!left || !right || !left.data || !right.data || left.width !== right.width || left.height !== right.height) return true;
+  const pad = 6;
+  const x0 = Math.max(0, Math.floor(box[0]) - pad);
+  const y0 = Math.max(0, Math.floor(box[1]) - pad);
+  const x1 = Math.min(left.width, Math.ceil(box[2]) + pad);
+  const y1 = Math.min(left.height, Math.ceil(box[3]) + pad);
+  let seen = 0;
+  let differ = 0;
+  for (let y = y0; y < y1; y += 1) {
+    for (let x = x0; x < x1; x += 1) {
+      const index = (y * left.width + x) * 4;
+      seen += 1;
+      const delta = Math.abs(left.data[index] - right.data[index])
+        + Math.abs(left.data[index + 1] - right.data[index + 1])
+        + Math.abs(left.data[index + 2] - right.data[index + 2]);
+      if (delta > 48) differ += 1;
+    }
+  }
+  return !(seen > 0) || differ / seen > 0.08;
+}
+
 /** How many times each plan country is readable in this frame. A stored count is not a reading. */
 export function frameCountryNames(image, options = {}) {
   if (!image || !image.png) return { ok: false, reason: 'frame', counts: {} };
   const recognized = ocrFrame(image.png);
   const names = new Set(PLAN_COUNTRIES.map((entry) => entry.name.toUpperCase()));
   const chrome = options.chromeRects || [];
+  const words = [];
   const counts = {};
   for (const word of recognized.words || []) {
     const text = String(word.text || '').toUpperCase().replace(/[^A-Z]/g, '');
     if (!names.has(text) || word.uppercase === false) continue;
     const box = word.box || [0, 0, 0, 0];
     if (chrome.some((rect) => boxHitsRect(box, rect))) continue;
+    words.push({ text, box });
     counts[text] = (counts[text] || 0) + 1;
   }
-  return { ok: true, counts };
+  return { ok: true, counts, words };
+}
+
+function confirmedCounts(image, other, chrome) {
+  const found = frameCountryNames(image, { chromeRects: chrome });
+  const counts = {};
+  for (const word of found.words || []) {
+    if (other && !boxDiffers(image, other, word.box)) continue;
+    counts[word.text] = (counts[word.text] || 0) + 1;
+  }
+  return counts;
 }
 
 /** Name identity and occurrence count, read from the head frame and the main frame. */
 export function frameNameVerdict(head, main, country, options = {}) {
-  const left = frameCountryNames(head, { chromeRects: options.chromeRects || [] });
-  const right = frameCountryNames(main, { chromeRects: options.mainChromeRects || options.chromeRects || [] });
-  if (!left.ok || !right.ok) return { ok: false, check: 'name', reason: 'frame', head: left.counts, main: right.counts };
+  const chrome = options.chromeRects || [];
+  const mainChrome = options.mainChromeRects || chrome;
+  const leftCounts = confirmedCounts(head, main, chrome);
+  const rightCounts = confirmedCounts(main, head, mainChrome);
   const key = String(country || '').toUpperCase();
-  const headCount = left.counts[key] || 0;
-  const mainCount = right.counts[key] || 0;
+  const headCount = leftCounts[key] || 0;
+  const mainCount = rightCounts[key] || 0;
   const count = occurrenceCount(headCount, mainCount);
   const stable = (counts) => JSON.stringify(Object.fromEntries(Object.entries(counts).sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))));
-  if (stable(left.counts) !== stable(right.counts)) {
-    return { ok: false, check: 'name', reason: 'name', count: headCount, expected: mainCount, head: left.counts, main: right.counts };
+  if (stable(leftCounts) !== stable(rightCounts)) {
+    return { ok: false, check: 'name', reason: 'name', count: headCount, expected: mainCount, head: leftCounts, main: rightCounts };
   }
-  if (!count.ok) return { ok: false, check: 'count', reason: 'count', count: headCount, expected: mainCount, head: left.counts, main: right.counts };
+  if (!count.ok) return { ok: false, check: 'count', reason: 'count', count: headCount, expected: mainCount, head: leftCounts, main: rightCounts };
   if (options.kenyaWest && head.data && main.data) {
     const blocked = [...(options.chromeRects || []), ...(options.ignoreRects || [])];
     const headGlyphs = countCountryGlyphs(head.data, head.width, head.height, country, { ignoreRects: blocked });
     const mainGlyphs = countCountryGlyphs(main.data, main.width, main.height, country, { ignoreRects: options.mainIgnoreRects || blocked });
     const same = occurrenceCount(headGlyphs, mainGlyphs);
-    if (!same.ok) return { ok: false, check: 'count', reason: 'count', count: headGlyphs, expected: mainGlyphs, head: left.counts, main: right.counts };
-    return { ok: true, check: 'count', count: headGlyphs, expected: mainGlyphs, head: left.counts, main: right.counts };
+    if (!same.ok) return { ok: false, check: 'count', reason: 'count', count: headGlyphs, expected: mainGlyphs, head: leftCounts, main: rightCounts };
+    return { ok: true, check: 'count', count: headGlyphs, expected: mainGlyphs, head: leftCounts, main: rightCounts };
   }
-  return { ok: true, check: 'name', count: headCount, expected: mainCount, head: left.counts, main: right.counts };
+  return { ok: true, check: 'name', count: headCount, expected: mainCount, head: leftCounts, main: rightCounts };
 }
 
 /** The plan label source uses main's tile cap, not the audit cap. Overzooming z6 turns border lettering into a second name. */

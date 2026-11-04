@@ -505,23 +505,23 @@ test('edited Kenya-west frames fail the name count in both engines while staying
         const body = text.replace(/^plan label \w+ /, '');
         let parsed = null;
         try { parsed = JSON.parse(body); } catch { parsed = null; }
-        if (!parsed || parsed.reason !== 'name' || parsed.main.KENYA !== 2) missed.push(`${label} ${text}`);
-        else reasons.push(`${label} ${JSON.stringify(parsed.head)}`);
+        if (!parsed || parsed.reason !== 'name') missed.push(`${label} ${text}`);
+        else reasons.push(`${label} ${JSON.stringify(parsed.head)} vs ${JSON.stringify(parsed.main)}`);
       }
     }
   }
   assert.deepEqual(missed, []);
   assert.deepEqual(reasons, [
-    'chromium removed {"KENYA":1}',
-    'chromium egypt {"KENYA":1,"EGYPT":1}',
-    'chromium three {"KENYA":3}',
-    'chromium nya {"KENYA":1}',
-    'chromium chrome {"KENYA":1}',
-    'webkit removed {"KENYA":1}',
-    'webkit egypt {"KENYA":1,"EGYPT":1}',
-    'webkit three {"KENYA":3}',
-    'webkit nya {"KENYA":1}',
-    'webkit chrome {"KENYA":1}',
+    'chromium removed {} vs {"KENYA":1}',
+    'chromium egypt {"EGYPT":1} vs {"KENYA":1}',
+    'chromium three {"KENYA":1} vs {}',
+    'chromium nya {} vs {"KENYA":1}',
+    'chromium chrome {} vs {"KENYA":1}',
+    'webkit removed {} vs {"KENYA":1}',
+    'webkit egypt {"EGYPT":1} vs {"KENYA":1}',
+    'webkit three {"KENYA":1} vs {}',
+    'webkit nya {} vs {"KENYA":1}',
+    'webkit chrome {} vs {"KENYA":1}',
   ]);
   const kenyaPng = readFileSync(new URL('./fixtures/label-cameras/kenya-west-37-1.png', import.meta.url));
   const kenyaFrame = { ...decodePng(kenyaPng), png: kenyaPng };
