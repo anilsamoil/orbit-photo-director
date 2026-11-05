@@ -6720,6 +6720,27 @@ function planSymbolNames(map) {
 function planCanadaInk() {
   return [0.205078125, 0.313476562, 0.236816406, 0.317871094];
 }
+function planCanadaReady(zoom, hidden, opacity) {
+  if (!(Number(zoom) < 3)) return true;
+  const expectsHide = Math.round(Number(zoom) + 1) === 3;
+  const listed = Array.isArray(hidden) && hidden.includes('Canada');
+  if (expectsHide) return listed && opacity === 0;
+  return !listed && typeof opacity === 'number' && opacity > 0;
+}
+async function planWaitCanada(map, zoom) {
+  const deadline = performance.now() + 8000;
+  let placement = planLabelPlacement(map);
+  while (performance.now() < deadline) {
+    const frame = map.getCanvas().closest('[data-pip-frame]');
+    const hidden = ((frame && frame.dataset.insetHiddenCountries) || '').split('|').filter(Boolean);
+    const opacity = placement.opacity ? placement.opacity.Canada : undefined;
+    if (planCanadaReady(zoom, hidden, opacity)) return placement;
+    if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    placement = planLabelPlacement(map);
+  }
+  return placement;
+}
 function planProjectRasterBox(map, ink) {
   if (!ink || ink.length < 4 || typeof map.project !== 'function') return null;
   const lngLat = (x, y) => [x * 360 - 180, Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180 / Math.PI];
@@ -7120,7 +7141,7 @@ async function withLockedPlan(send, lng, lat, zoom, country, body) {
         hidden: (frame.dataset.insetHiddenCountries || '').split('|').filter(Boolean),
         country: ${JSON.stringify(country)},
         markerVisible: !!(marker && marker.getClientRects().length > 0),
-        placement: planLabelPlacement(map),
+        placement: ${JSON.stringify(country)} === 'Canada' && ${zoom} < 3 ? await planWaitCanada(map, ${zoom}) : planLabelPlacement(map),
       };
     })()`);
     if (!row || row.ok !== true || row.cameraOk !== true) {

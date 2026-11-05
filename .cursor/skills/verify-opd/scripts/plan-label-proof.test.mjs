@@ -14,7 +14,7 @@ function loadHelpers() {
     getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
   };
   vm.createContext(context);
-  vm.runInContext(`${PLAN_TILE_HELPERS}\nthis.planWaitTiles = planWaitTiles;\nthis.planSymbolNames = planSymbolNames;\nthis.planViewport = planViewport;\nthis.planLockRasterCamera = planLockRasterCamera;\nthis.planReleaseRasterCamera = planReleaseRasterCamera;\nthis.planCameraMatches = planCameraMatches;`, context);
+  vm.runInContext(`${PLAN_TILE_HELPERS}\nthis.planWaitTiles = planWaitTiles;\nthis.planSymbolNames = planSymbolNames;\nthis.planViewport = planViewport;\nthis.planLockRasterCamera = planLockRasterCamera;\nthis.planReleaseRasterCamera = planReleaseRasterCamera;\nthis.planCameraMatches = planCameraMatches;\nthis.planCanadaReady = planCanadaReady;`, context);
   return context;
 }
 
@@ -296,6 +296,17 @@ test('a loading in-view raster tile omitted from the renderable list holds the g
   assert.equal(waited.tilesOk, true, JSON.stringify(waited.detail));
   assert.ok(Date.now() - started >= 200, Date.now() - started);
   assert.equal(map.listeners(), 0);
+});
+
+test('Canada below zoom 3 is ready only when the hide matches the drawn tile', () => {
+  const { planCanadaReady } = loadHelpers();
+  assert.equal(planCanadaReady(1.5, ['Canada'], 0), true);
+  assert.equal(planCanadaReady(1.5, [], 0), false);
+  assert.equal(planCanadaReady(1.5, ['Canada'], 1), false);
+  assert.equal(planCanadaReady(2.99, [], 1), true);
+  assert.equal(planCanadaReady(2.99, ['Canada'], 0), false);
+  assert.equal(planCanadaReady(2.99, [], 0), false);
+  assert.equal(planCanadaReady(3, [], undefined), true);
 });
 
 test('a loaded raster that is still fading does not settle until the fade ends', async () => {
