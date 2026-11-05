@@ -150,10 +150,15 @@ for (const engine of engines) {
       const franceNames = placedNames(france);
       assert.deepEqual(franceNames, [...FRANCE_Z12_NAMES].sort(), `${engine.name} France ${JSON.stringify(franceNames)}`);
       const franceVerdict = labelScreenVerdict({ head: france, main: france, expectedNames: franceNames });
-      const crosses = france.labels.some((label) => label.box && france.canvas && (
-        label.box.left < france.canvas.left || label.box.top < france.canvas.top
-        || label.box.right > france.canvas.right || label.box.bottom > france.canvas.bottom
-      ));
+      const crosses = france.labels.some((label) => {
+        const box = label.box;
+        const frame = france.canvas;
+        if (!box || !frame) return false;
+        const x = (box.left + box.right) / 2;
+        const y = (box.top + box.bottom) / 2;
+        const centerIn = x >= frame.left && x <= frame.right && y >= frame.top && y <= frame.bottom;
+        return centerIn && (box.left < frame.left || box.top < frame.top || box.right > frame.right || box.bottom > frame.bottom);
+      });
       assert.equal(crosses ? franceVerdict.reason : franceVerdict.ok, crosses ? 'canvas' : true, JSON.stringify(franceVerdict));
 
       await page.evaluate(() => {

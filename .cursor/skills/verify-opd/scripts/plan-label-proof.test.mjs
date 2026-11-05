@@ -346,6 +346,7 @@ test('the Canada hide wait is not applied to the main page', () => {
   const pair = source.slice(source.indexOf('async function compareLockedPair'), source.indexOf('export async function proveFractionalPlanLabels'));
   assert.match(pair, /withLockedPlan\(mainSend,[\s\S]*false\)/);
   assert.doesNotMatch(pair, /withLockedPlan\(mainSend,[\s\S]*true\)/);
+  assert.match(pair, /planContractForDrive\([\s\S]*OPD_VERIFY_CANADA_WAIT !== '0'/);
 });
 
 test('the Canada hide wait fails closed when the hide never arrives', async () => {

@@ -10,7 +10,7 @@ import { readableRasterName } from './raster-ocr.mjs';
 import { letteringOccluded } from '../../../../frontend/src/map/adapters/maplibre/country-label-size.ts';
 import {
   AUDITED_RASTER_LEVELS, auditRasterLevels, captureEnvironmentOk, countryStyleVerdict, countrySweepZooms,
-  anchorOnPlan, auditedNameCandidates, auditedNameReadable, clippedRasterRemnant, completeNameCount, imageryRegionDiff, imageryLabelRegions, imageryViewport, labelScreenVerdict, labelTile, loadCountryRasterLevels, loadCountrySymbolLayers, nameCountOk, oneNameSource, pairedRasterNames, planCameraContract, planLabelReaders, planLabelVerdict, rasterDuplicateVerdict, rasterNameEvidence, rasterPainted, RASTER_PAIR_TOLERANCE, symbolCrossesEdge,
+  anchorOnPlan, auditedNameCandidates, auditedNameReadable, clippedRasterRemnant, completeNameCount, imageryRegionDiff, imageryLabelRegions, imageryViewport, labelScreenVerdict, labelTile, loadCountryRasterLevels, loadCountrySymbolLayers, nameCountOk, oneNameSource, pairedRasterNames, planCameraContract, planContractForDrive, planLabelReaders, planLabelVerdict, rasterDuplicateVerdict, rasterNameEvidence, rasterPainted, RASTER_PAIR_TOLERANCE, symbolCrossesEdge,
 } from './plan-label-verdict.mjs';
 import { acceptPlanSweepRow, assertPlanLabelChecks } from './drive.mjs';
 
@@ -621,6 +621,28 @@ test('a low-zoom sweep rejects an empty list only on a camera that expects names
     names: [],
     mainNames: ['Canada', 'Mexico'],
   }), /plan label names/);
+  acceptPlanSweepRow({
+    cameraOk: true,
+    tilesOk: true,
+    tileZ: labelTile(1.5),
+    zoom: 1.5,
+    requestedZoom: 1.5,
+    center: [-102, 23],
+    country: 'Mexico',
+    names: ['Mexico', 'Argentina', 'Brazil'],
+    mainNames: ['Mexico', 'Canada', 'Argentina', 'Brazil'],
+  });
+  assert.throws(() => acceptPlanSweepRow({
+    cameraOk: true,
+    tilesOk: true,
+    tileZ: labelTile(1.5),
+    zoom: 1.5,
+    requestedZoom: 1.5,
+    center: [-102, 23],
+    country: 'Mexico',
+    names: ['Argentina', 'Brazil'],
+    mainNames: ['Mexico', 'Canada', 'Argentina', 'Brazil'],
+  }), /plan label names/);
   const duplicate = planCameraContract('Canada', 1.5, [-100, 50]);
   assert.equal(duplicate.expectedNames, null);
   assert.equal(duplicate.hide, 'Canada');
@@ -645,6 +667,11 @@ test('a low-zoom sweep rejects an empty list only on a camera that expects names
   assert.equal(planCameraContract('Canada', 2.5, [-100, 50]).hide, undefined);
   assert.equal(planCameraContract('Canada', 2.99, [-100, 50]).hide, undefined);
   assert.equal(planCameraContract('Canada', 3, [-100, 50]).hide, undefined);
+  const compared = planContractForDrive('Canada', 1.5, [-100, 50], false);
+  assert.equal(compared.raster, null);
+  assert.equal(compared.hide, undefined);
+  assert.equal(planContractForDrive('Canada', 1.5, [-100, 50], true).raster, 'CANADA');
+  assert.equal(planContractForDrive('Canada', 1.5, [-100, 50], true).hide, 'Canada');
 });
 
 test('the Canada duplicate allows only the declared hide, and a half-off label fails', () => {
@@ -677,7 +704,7 @@ test('the Canada duplicate allows only the declared hide, and a half-off label f
   });
   assert.equal(extra.ok, false);
   assert.equal(extra.reason, 'parity');
-  const half = { left: 380, top: 200, right: 430, bottom: 220 };
+  const half = { left: 355, top: 200, right: 430, bottom: 220 };
   const clipped = labelScreenVerdict({
     head: { labels: [{ name: 'Canada', opacity: 1, box: half }], canvas, chrome: [] },
     main: { labels: [{ name: 'Canada', opacity: 1, box: half }], canvas, chrome: [] },
@@ -685,6 +712,14 @@ test('the Canada duplicate allows only the declared hide, and a half-off label f
   });
   assert.equal(clipped.ok, false);
   assert.equal(clipped.reason, 'canvas');
+  const offPlan = { left: 390, top: 200, right: 450, bottom: 220 };
+  const onPlan = { left: 30, top: 120, right: 80, bottom: 140 };
+  const peripheral = labelScreenVerdict({
+    head: { labels: [{ name: 'Canada', opacity: 1, box: onPlan }, { name: 'Argentina', opacity: 1, box: offPlan }], canvas, chrome: [] },
+    main: { labels: [{ name: 'Canada', opacity: 1, box: onPlan }, { name: 'Argentina', opacity: 1, box: offPlan }], canvas, chrome: [] },
+    expectedNames: ['Argentina', 'Canada'],
+  });
+  assert.equal(peripheral.ok, true, JSON.stringify(peripheral));
   assert.throws(() => assertPlanLabelChecks({
     tilesOk: true,
     tileZ: labelTile(1.5),

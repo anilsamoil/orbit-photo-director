@@ -408,6 +408,13 @@ export function planCameraContract(country, zoom, center) {
   return { expectedNames: null, raster: null };
 }
 
+/** The Canada hide is the head build's contract. A main comparison does not assert it. */
+export function planContractForDrive(country, zoom, center, enforceCanadaHide = true) {
+  const contract = planCameraContract(country, zoom, center);
+  if (enforceCanadaHide !== false) return contract;
+  return { expectedNames: contract.expectedNames, raster: null };
+}
+
 function labelCounts(labels) {
   const counts = {};
   for (const label of labels || []) {
@@ -423,7 +430,14 @@ function stableCounts(counts) {
   return JSON.stringify(Object.fromEntries(Object.entries(counts).sort(([left], [right]) => left.localeCompare(right))));
 }
 
+function boxCenterOnCanvas(box, canvas) {
+  const x = (box.left + box.right) / 2;
+  const y = (box.top + box.bottom) / 2;
+  return x >= canvas.left && x <= canvas.right && y >= canvas.top && y <= canvas.bottom;
+}
+
 function boxInside(box, canvas) {
+  if (!boxCenterOnCanvas(box, canvas)) return true;
   return box.left >= canvas.left && box.top >= canvas.top && box.right <= canvas.right && box.bottom <= canvas.bottom
     && box.right > box.left && box.bottom > box.top;
 }

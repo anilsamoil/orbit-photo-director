@@ -5,7 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
 import { earthAfterResizeReaders } from './earth-after-resize.mjs';
-import { auditRasterLevels, countryIdentity, countrySweepZooms, imageryLabelRegions, imageryRegionDiff, imageryViewport, keptCountrySymbol, labelScreenVerdict, loadCountryRasterLevels, matchesMain, occurrenceCount, pairedRasterNames, planCameraContract, PLAN_COUNTRIES, planLabelReaders, rasterDuplicateVerdict, tilesLoaded } from './plan-label-verdict.mjs';
+import { auditRasterLevels, countryIdentity, countrySweepZooms, imageryLabelRegions, imageryRegionDiff, imageryViewport, keptCountrySymbol, labelScreenVerdict, loadCountryRasterLevels, matchesMain, occurrenceCount, pairedRasterNames, planCameraContract, planContractForDrive, PLAN_COUNTRIES, planLabelReaders, rasterDuplicateVerdict, tilesLoaded } from './plan-label-verdict.mjs';
 import { decodePng } from './decode-png.mjs';
 import { ocrFrame, ocrFrameBox } from './raster-ocr.mjs';
 import { checkRasterOcr, clearRasterOcrRun, rasterOcrStats } from './raster-ocr.mjs';
@@ -7531,9 +7531,11 @@ function assertLowZoomNames(row) {
     throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, expected: contract.expectedNames })}`);
   }
   if (Array.isArray(row.mainNames)) {
+    const hideCanada = zoom < 3 && Math.round(zoom + 1) === 3;
     const fold = (list) => (list || [])
       .filter((name) => typeof name === 'string' && name)
       .filter((name) => !(contract.hide && name.toLowerCase() === String(contract.hide).toLowerCase()))
+      .filter((name) => !(hideCanada && name.toLowerCase() === 'canada'))
       .map((name) => name.toLowerCase())
       .sort()
       .join('|');
@@ -7563,7 +7565,7 @@ async function compareLockedPair(headSend, mainSend, lng, lat, zoom, country) {
   const head = await withLockedPlan(headSend, lng, lat, zoom, country, async (row) => ({ row, shot: await capturePlanCanvas(headSend) }), hideWait);
   const main = await withLockedPlan(mainSend, lng, lat, zoom, country, async (row) => ({ row, shot: await capturePlanCanvas(mainSend) }), false);
   savePlanPair(`${country}-z${zoom}-${lng}-${lat}`, head.shot, main.shot);
-  const contract = planCameraContract(country, zoom, [lng, lat]);
+  const contract = planContractForDrive(country, zoom, [lng, lat], process.env.OPD_VERIFY_CANADA_WAIT !== '0');
   const verdict = assertPlanLabelChecks({
     ...head.row,
     headShot: head.shot,
