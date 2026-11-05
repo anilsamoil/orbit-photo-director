@@ -292,23 +292,18 @@ export function imageryViewport(center, zoom, width, height) {
   };
 }
 
-function labelLuminance(data, index) {
-  return (data[index] + data[index + 1] + data[index + 2]) / 3;
-}
-
-/** Boxes around the bright reference lettering actually present in either frame. */
+/** Boxes around pixels that differ between the two frames. Brightness is not the test. */
 export function labelInkRegions(head, main) {
   if (!head || !main || !head.data || !main.data || head.width !== main.width || head.height !== main.height || head.width < 2) return [];
   const width = head.width;
   const height = head.height;
   const mark = new Uint8Array(width * height);
-  const paint = (image) => {
-    for (let pixel = 0, index = 0; pixel < mark.length; pixel += 1, index += 4) {
-      if (labelLuminance(image.data, index) >= 150) mark[pixel] = 1;
-    }
-  };
-  paint(head);
-  paint(main);
+  for (let pixel = 0, index = 0; pixel < mark.length; pixel += 1, index += 4) {
+    const delta = Math.abs(head.data[index] - main.data[index])
+      + Math.abs(head.data[index + 1] - main.data[index + 1])
+      + Math.abs(head.data[index + 2] - main.data[index + 2]);
+    if (delta > 48) mark[pixel] = 1;
+  }
   const seen = new Uint8Array(width * height);
   const boxes = [];
   const stack = [];

@@ -6686,7 +6686,7 @@ function planColorAlpha(color) {
   const hex = /^#([0-9a-f]+)$/.exec(text);
   if (hex && (hex[1].length === 3 || hex[1].length === 6)) return 1;
   if (hex && hex[1].length === 8) return parseInt(hex[1].slice(6, 8), 16) / 255;
-  const rgba = /^rgba?\(([^)]*)\)$/.exec(text);
+  const rgba = /^rgba?\\(([^)]*)\\)$/.exec(text);
   if (!rgba) return 0;
   const parts = rgba[1].split(',').map((part) => part.trim());
   if (parts.length < 4) return 1;
@@ -6720,6 +6720,14 @@ function planSymbolNames(map) {
     names.push(name);
   }
   return names;
+}
+function planPaintOpacity(paint) {
+  const source = paint || {};
+  const hasOpacity = Object.prototype.hasOwnProperty.call(source, 'text-opacity');
+  const rawOpacity = source['text-opacity'];
+  const opacity = !hasOpacity ? 1 : (typeof rawOpacity === 'number' && Number.isFinite(rawOpacity) ? rawOpacity : null);
+  if (typeof opacity !== 'number') return opacity;
+  return opacity * planColorAlpha(source['text-color']);
 }
 function planCanadaInk() {
   return [0.205078125, 0.313476562, 0.236816406, 0.317871094];
@@ -6814,9 +6822,7 @@ function planLabelPlacement(map) {
         const propertyName = feature.properties && feature.properties.name;
         if (typeof shown !== 'string' || !shown || typeof propertyName !== 'string' || shown !== propertyName) continue;
         const paint = feature.layer.paint || {};
-        const hasOpacity = Object.prototype.hasOwnProperty.call(paint, 'text-opacity');
-        const rawOpacity = paint['text-opacity'];
-        const opacityValue = !hasOpacity ? 1 : (typeof rawOpacity === 'number' && Number.isFinite(rawOpacity) ? rawOpacity : null);
+        const opacityValue = planPaintOpacity(paint);
         const dedupe = propertyName + ':' + key.bucketInstanceId + ':' + key.featureIndex;
         if (seen.has(dedupe)) continue;
         seen.add(dedupe);
@@ -6904,7 +6910,7 @@ function planReleaseRasterCamera(map) {
   }
 }
 const PLAN_REPAINT_IDLE_MS = 2000;
-function settleIdle(map, limitMs, kick) {
+function settleIdle(map, limitMs, kick, full) {
   return new Promise((resolve) => {
     let finished = false;
     let timer = 0;
@@ -6917,11 +6923,20 @@ function settleIdle(map, limitMs, kick) {
       resolve(value);
     };
     let paints = 0;
+    const ready = (full) => planRasterReady(map)
+      && (!full || (
+        typeof map.loaded === 'function' && map.loaded() === true
+        && typeof map.areTilesLoaded === 'function' && map.areTilesLoaded() === true
+      ));
     const onIdle = () => {
-      if (planRasterReady(map)) finish(true);
+      if (ready(full)) finish(true);
     };
     const onRender = () => {
       if (finished || !planRasterReady(map)) return;
+      if (full) {
+        if (ready(true)) finish(true);
+        return;
+      }
       paints += 1;
       if (paints >= 2) finish(true);
       else if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
@@ -6932,7 +6947,7 @@ function settleIdle(map, limitMs, kick) {
     if (typeof kick === 'function') kick();
   });
 }
-async function planWaitTiles(map) {
+async function planWaitTiles(map, full) {
   const deadline = performance.now() + 8000;
   let labels = null;
   let base = null;
@@ -6942,7 +6957,7 @@ async function planWaitTiles(map) {
     if (planRasterReady(map)) break;
     await settleIdle(map, 100, () => {
       if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
-    });
+    }, full);
   }
   labels = planVisibleTiles(map, 'inset-labels');
   base = planVisibleTiles(map, 'inset-basemap');
@@ -6953,7 +6968,7 @@ async function planWaitTiles(map) {
     const idleStarted = performance.now();
     painted = await settleIdle(map, PLAN_REPAINT_IDLE_MS, () => {
       if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
-    });
+    }, full);
     repaintMs = Math.round(performance.now() - idleStarted);
     labels = planVisibleTiles(map, 'inset-labels');
     base = planVisibleTiles(map, 'inset-basemap');
@@ -7114,7 +7129,7 @@ async function releasePlanCamera(send) {
   return evaluate(send, RELEASE_PLAN_CAMERA);
 }
 
-async function withLockedPlan(send, lng, lat, zoom, country, body) {
+async function withLockedPlan(send, lng, lat, zoom, country, body, canadaWait) {
   await focusMapPage(send);
   try {
     const row = await evaluate(send, `(async () => {
@@ -7145,7 +7160,7 @@ async function withLockedPlan(send, lng, lat, zoom, country, body) {
         country: ${JSON.stringify(country)},
         markerVisible: !!(marker && marker.getClientRects().length > 0),
         placement: await (async () => {
-          if (${JSON.stringify(country)} !== 'Canada' || !(${zoom} < 3)) return planLabelPlacement(map);
+          if (!${canadaWait ? 'true' : 'false'} || ${JSON.stringify(country)} !== 'Canada' || !(${zoom} < 3)) return planLabelPlacement(map);
           const canada = await planWaitCanada(map, ${zoom});
           if (!canada.ready) throw new Error('plan label canada');
           return canada.placement;
@@ -7324,7 +7339,7 @@ async function capturePlanCanvas(send) {
     const marker = frame.querySelector('.maplibregl-marker');
     if (marker) marker.style.visibility = 'hidden';
     for (const node of document.querySelectorAll('[data-iss-clock], [data-iss-edition]')) node.style.visibility = 'hidden';
-    const waited = await planWaitTiles(map);
+    const waited = await planWaitTiles(map, true);
     if (!waited.tilesOk) return { ok: false, detail: waited.detail };
     const rect = canvas.getBoundingClientRect();
     const ignore = [];
@@ -7501,7 +7516,10 @@ function rasterNameVerdict(row, contract) {
 function assertLowZoomNames(row) {
   const tiles = tilesLoaded(row);
   if (!tiles.ok) throw new Error(`plan label tiles ${JSON.stringify(tiles)}`);
-  const names = shownLabelNames(row);
+  const names = shownLabelNames(row).map((name) => {
+    const found = PLAN_COUNTRIES.find((entry) => entry.name.toLowerCase() === String(name).toLowerCase());
+    return found ? found.name : name;
+  });
   const identity = countryIdentity(names, row.country);
   if (!identity.ok) throw new Error(`plan label country ${JSON.stringify(identity)}`);
   const zoom = Number(row.zoom);
@@ -7512,7 +7530,17 @@ function assertLowZoomNames(row) {
   if (Array.isArray(contract.expectedNames) && contract.expectedNames.includes(row.country) && !names.includes(row.country)) {
     throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, expected: contract.expectedNames })}`);
   }
-  if (names.length === 0 && row.country !== 'Canada') {
+  if (Array.isArray(row.mainNames)) {
+    const fold = (list) => (list || [])
+      .filter((name) => typeof name === 'string' && name)
+      .filter((name) => !(contract.hide && name.toLowerCase() === String(contract.hide).toLowerCase()))
+      .map((name) => name.toLowerCase())
+      .sort()
+      .join('|');
+    if (fold(names) !== fold(row.mainNames)) {
+      throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, main: row.mainNames })}`);
+    }
+  } else if (names.length === 0 && row.country !== 'Canada') {
     throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, expected: contract.expectedNames })}`);
   }
   return { tiles, identity, names };
@@ -7531,8 +7559,9 @@ export function acceptPlanSweepRow(row) {
 }
 
 async function compareLockedPair(headSend, mainSend, lng, lat, zoom, country) {
-  const head = await withLockedPlan(headSend, lng, lat, zoom, country, async (row) => ({ row, shot: await capturePlanCanvas(headSend) }));
-  const main = await withLockedPlan(mainSend, lng, lat, zoom, country, async (row) => ({ row, shot: await capturePlanCanvas(mainSend) }));
+  const hideWait = process.env.OPD_VERIFY_CANADA_WAIT !== '0';
+  const head = await withLockedPlan(headSend, lng, lat, zoom, country, async (row) => ({ row, shot: await capturePlanCanvas(headSend) }), hideWait);
+  const main = await withLockedPlan(mainSend, lng, lat, zoom, country, async (row) => ({ row, shot: await capturePlanCanvas(mainSend) }), false);
   savePlanPair(`${country}-z${zoom}-${lng}-${lat}`, head.shot, main.shot);
   const contract = planCameraContract(country, zoom, [lng, lat]);
   const verdict = assertPlanLabelChecks({
@@ -7618,7 +7647,26 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
       if (!swept || swept.ok !== true || !swept.rows || swept.rows.length !== zooms.length) {
         throw new Error(`plan label skipped ${country.name} ${swept && swept.rows ? swept.rows.length : 0}/${zooms.length}`);
       }
+      const mainSwept = await evaluate(mainSend, `(async () => {
+        ${PLAN_TILE_HELPERS}
+        const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+        const map = frame && frame.__opdTrackInset;
+        if (!map || typeof map.jumpTo !== 'function') return { ok: false, reason: 'map' };
+        planHold(map);
+        const rows = [];
+        for (const zoom of ${JSON.stringify(zooms)}) {
+          const camera = { center: [${country.lng}, ${country.lat}], zoom };
+          map.jumpTo(camera);
+          const waited = await planWaitTiles(map);
+          rows.push({ names: planSymbolNames(map), tilesOk: waited.tilesOk });
+        }
+        return { ok: true, rows };
+      })()`);
+      if (!mainSwept || mainSwept.ok !== true || !mainSwept.rows || mainSwept.rows.length !== zooms.length) {
+        throw new Error(`plan label main names ${country.name}`);
+      }
       for (let index = 0; index < swept.rows.length; index += 1) {
+        swept.rows[index].mainNames = mainSwept.rows[index].names;
         const accepted = acceptPlanSweepRow(swept.rows[index]);
         if (accepted.below) belowZ3 += 1;
         if (index % 10 === 0 || index === swept.rows.length - 1) progress({ phase: 'verdicts', country: country.name, completed: index + 1, samples: swept.rows.length, stats: { ...rasterOcrStats } });

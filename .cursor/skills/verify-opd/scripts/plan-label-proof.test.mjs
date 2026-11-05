@@ -14,7 +14,7 @@ function loadHelpers() {
     getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
   };
   vm.createContext(context);
-  vm.runInContext(`${PLAN_TILE_HELPERS}\nthis.planWaitTiles = planWaitTiles;\nthis.planSymbolNames = planSymbolNames;\nthis.planViewport = planViewport;\nthis.planLockRasterCamera = planLockRasterCamera;\nthis.planReleaseRasterCamera = planReleaseRasterCamera;\nthis.planCameraMatches = planCameraMatches;\nthis.planCanadaReady = planCanadaReady;\nthis.planWaitCanada = planWaitCanada;`, context);
+  vm.runInContext(`${PLAN_TILE_HELPERS}\nthis.planWaitTiles = planWaitTiles;\nthis.planSymbolNames = planSymbolNames;\nthis.planViewport = planViewport;\nthis.planLockRasterCamera = planLockRasterCamera;\nthis.planReleaseRasterCamera = planReleaseRasterCamera;\nthis.planCameraMatches = planCameraMatches;\nthis.planCanadaReady = planCanadaReady;\nthis.planWaitCanada = planWaitCanada;\nthis.planPaintOpacity = planPaintOpacity;\nthis.planWaitTiles = planWaitTiles;`, context);
   return context;
 }
 
@@ -195,6 +195,37 @@ test('Kenya west settles inside the repaint idle limit and drops the listener', 
   assert.ok(waited.repaintMs >= 900 && waited.repaintMs < 1500, waited.repaintMs);
 });
 
+test('a full readiness wait still requires loaded() and areTilesLoaded()', async () => {
+  const { planWaitTiles } = loadHelpers();
+  const map = waitingMap({ idle: false });
+  map.loaded = () => false;
+  map.areTilesLoaded = () => false;
+  const renderListeners = [];
+  const baseOn = map.on;
+  map.on = (event, callback) => {
+    if (event === 'render') {
+      renderListeners.push(callback);
+      return;
+    }
+    baseOn(event, callback);
+  };
+  map.triggerRepaint = () => {
+    for (const callback of renderListeners.slice()) callback();
+  };
+  const started = Date.now();
+  const waited = await planWaitTiles(map, true);
+  assert.equal(waited.tilesOk, false, JSON.stringify(waited.detail));
+  assert.ok(Date.now() - started >= 1500, Date.now() - started);
+});
+
+test('paint opacity includes the text color alpha', () => {
+  const { planPaintOpacity } = loadHelpers();
+  assert.equal(planPaintOpacity({ 'text-opacity': 1, 'text-color': '#f7f4ea' }), 1);
+  assert.equal(planPaintOpacity({ 'text-opacity': 1, 'text-color': 'transparent' }), 0);
+  assert.equal(planPaintOpacity({ 'text-opacity': 1, 'text-color': { r: 1, g: 1, b: 1, a: 0 } }), 0);
+  assert.equal(planPaintOpacity({ 'text-opacity': 0.5, 'text-color': { r: 1, g: 1, b: 1, a: 0.5 } }), 0.25);
+});
+
 test('two paints settle a ready raster even when loaded() is false', async () => {
   const { planWaitTiles } = loadHelpers();
   const map = waitingMap({ idle: false });
@@ -308,6 +339,13 @@ test('a loading in-view raster tile omitted from the renderable list holds the g
   assert.equal(waited.tilesOk, true, JSON.stringify(waited.detail));
   assert.ok(Date.now() - started >= 200, Date.now() - started);
   assert.equal(map.listeners(), 0);
+});
+
+test('the Canada hide wait is not applied to the main page', () => {
+  const source = readFileSync(new URL('./drive.mjs', import.meta.url), 'utf8');
+  const pair = source.slice(source.indexOf('async function compareLockedPair'), source.indexOf('export async function proveFractionalPlanLabels'));
+  assert.match(pair, /withLockedPlan\(mainSend,[\s\S]*false\)/);
+  assert.doesNotMatch(pair, /withLockedPlan\(mainSend,[\s\S]*true\)/);
 });
 
 test('the Canada hide wait fails closed when the hide never arrives', async () => {

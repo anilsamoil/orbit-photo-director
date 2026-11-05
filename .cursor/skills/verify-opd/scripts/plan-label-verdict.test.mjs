@@ -575,8 +575,8 @@ test('a low-zoom sweep rejects an empty list only on a camera that expects names
   });
   assert.throws(() => acceptPlanSweepRow(row({ country: 'France', zoom: 1.2, center: [2, 46] })), /plan label names/);
   acceptPlanSweepRow(row({ country: 'Canada', zoom: 1.2, center: [-100, 50] }));
-  assert.throws(() => acceptPlanSweepRow(row({ country: 'Kenya', zoom: 1.2, center: [38, 1] })), /plan label names/);
-  assert.throws(() => acceptPlanSweepRow(row({ country: 'France', zoom: 2.5, center: [2, 46] })), /plan label names/);
+  assert.throws(() => acceptPlanSweepRow(row({ country: 'Kenya', zoom: 1.2, center: [38, 1], mainNames: ['Kenya'] })), /plan label names/);
+  assert.throws(() => acceptPlanSweepRow(row({ country: 'France', zoom: 2.5, center: [2, 46], mainNames: ['France'] })), /plan label names/);
   assert.throws(() => acceptPlanSweepRow({
     cameraOk: true,
     tilesOk: true,
@@ -585,8 +585,42 @@ test('a low-zoom sweep rejects an empty list only on a camera that expects names
     requestedZoom: 2.5,
     center: [2, 46],
     country: 'France',
+    names: ['Egypt'],
+    mainNames: ['France'],
+  }), /plan label names/);
+  acceptPlanSweepRow({
+    cameraOk: true,
+    tilesOk: true,
+    tileZ: labelTile(2.5),
+    zoom: 2.5,
+    requestedZoom: 2.5,
+    center: [2, 46],
+    country: 'France',
     names: ['EGYPT'],
-  }), /plan label country/);
+    mainNames: ['Egypt'],
+  });
+  acceptPlanSweepRow({
+    cameraOk: true,
+    tilesOk: true,
+    tileZ: labelTile(2.5),
+    zoom: 2.5,
+    requestedZoom: 2.5,
+    center: [-160, 0],
+    country: 'France',
+    names: [],
+    mainNames: [],
+  });
+  assert.throws(() => acceptPlanSweepRow({
+    cameraOk: true,
+    tilesOk: true,
+    tileZ: labelTile(1.5),
+    zoom: 1.5,
+    requestedZoom: 1.5,
+    center: [-100, 50],
+    country: 'Canada',
+    names: [],
+    mainNames: ['Canada', 'Mexico'],
+  }), /plan label names/);
   const duplicate = planCameraContract('Canada', 1.5, [-100, 50]);
   assert.equal(duplicate.expectedNames, null);
   assert.equal(duplicate.hide, 'Canada');
@@ -750,6 +784,24 @@ test('imagery label regions fail the Kenya edits, towns, and rotated look-alikes
       missed.push(`${engine} extra KENYA passed`);
     } catch (error) {
       if (!/plan label region/.test(error.message)) missed.push(`${engine} extra ${error.message}`);
+    }
+    for (const color of [[120, 120, 120], [180, 30, 30], [30, 30, 180]]) {
+      const tinted = { ...main, data: new Uint8Array(main.data), png: main.png };
+      for (let dx = 0; dx < 28; dx += 1) {
+        for (let dy = 0; dy < 10; dy += 1) {
+          const index = (((200 + dy) * tinted.width) + 30 + dx) * 4;
+          tinted.data[index] = color[0];
+          tinted.data[index + 1] = color[1];
+          tinted.data[index + 2] = color[2];
+          tinted.data[index + 3] = 255;
+        }
+      }
+      try {
+        assertPlanLabelChecks(stock(tinted, main));
+        missed.push(`${engine} color ${color.join(',')} passed`);
+      } catch (error) {
+        if (!/plan label region/.test(error.message)) missed.push(`${engine} color ${error.message}`);
+      }
     }
     for (const name of ['greek', 'accent']) {
       const straight = load('plan-label-foreign', `${engine}-${name}`);
