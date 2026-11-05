@@ -14,7 +14,7 @@ function loadHelpers() {
     getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
   };
   vm.createContext(context);
-  vm.runInContext(`${PLAN_TILE_HELPERS}\nthis.planWaitTiles = planWaitTiles;\nthis.planSymbolNames = planSymbolNames;\nthis.planViewport = planViewport;\nthis.planLockRasterCamera = planLockRasterCamera;\nthis.planReleaseRasterCamera = planReleaseRasterCamera;\nthis.planCameraMatches = planCameraMatches;\nthis.planCanadaReady = planCanadaReady;`, context);
+  vm.runInContext(`${PLAN_TILE_HELPERS}\nthis.planWaitTiles = planWaitTiles;\nthis.planSymbolNames = planSymbolNames;\nthis.planViewport = planViewport;\nthis.planLockRasterCamera = planLockRasterCamera;\nthis.planReleaseRasterCamera = planReleaseRasterCamera;\nthis.planCameraMatches = planCameraMatches;\nthis.planCanadaReady = planCanadaReady;\nthis.planWaitCanada = planWaitCanada;`, context);
   return context;
 }
 
@@ -195,12 +195,11 @@ test('Kenya west settles inside the repaint idle limit and drops the listener', 
   assert.ok(waited.repaintMs >= 900 && waited.repaintMs < 1500, waited.repaintMs);
 });
 
-test('two repaints do not settle a map until it is loaded and its tiles are loaded', async () => {
+test('two paints settle a ready raster even when loaded() is false', async () => {
   const { planWaitTiles } = loadHelpers();
   const map = waitingMap({ idle: false });
   map.loaded = () => false;
   map.areTilesLoaded = () => false;
-  map.isMoving = () => false;
   const renderListeners = [];
   const baseOn = map.on;
   map.on = (event, callback) => {
@@ -213,6 +212,19 @@ test('two repaints do not settle a map until it is loaded and its tiles are load
   map.triggerRepaint = () => {
     for (const callback of renderListeners.slice()) callback();
   };
+  const started = Date.now();
+  const waited = await planWaitTiles(map);
+  assert.equal(waited.tilesOk, true, JSON.stringify(waited.detail));
+  assert.ok(Date.now() - started < 500, Date.now() - started);
+  assert.equal(map.listeners(), 0);
+});
+
+test('raster tiles that stay loading do not settle', async () => {
+  const { planWaitTiles } = loadHelpers();
+  const map = waitingMap({ idle: false });
+  for (const id of ['inset-labels', 'inset-basemap']) {
+    map.style.tileManagers[id].getTile = () => ({ state: 'loading' });
+  }
   const started = Date.now();
   const waited = await planWaitTiles(map);
   assert.equal(waited.tilesOk, false, JSON.stringify(waited.detail));
@@ -298,6 +310,24 @@ test('a loading in-view raster tile omitted from the renderable list holds the g
   assert.equal(map.listeners(), 0);
 });
 
+test('the Canada hide wait fails closed when the hide never arrives', async () => {
+  const { planWaitCanada } = loadHelpers();
+  const map = {
+    getCanvas: () => ({
+      clientWidth: 100,
+      clientHeight: 100,
+      getBoundingClientRect: () => ({ left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 }),
+      closest: () => ({ dataset: { insetHiddenCountries: '' } }),
+    }),
+    style: {},
+    triggerRepaint() {},
+  };
+  const started = Date.now();
+  const waited = await planWaitCanada(map, 1.5);
+  assert.equal(waited.ready, false);
+  assert.ok(Date.now() - started >= 8000, Date.now() - started);
+});
+
 test('Canada below zoom 3 is ready only when the hide matches the drawn tile', () => {
   const { planCanadaReady } = loadHelpers();
   assert.equal(planCanadaReady(1.5, ['Canada'], 0), true);
@@ -332,7 +362,7 @@ test('tiles are read again after the repaint idle', async () => {
   assert.equal(held.tilesOk, true);
 });
 
-test('plan symbol names ignore a transparent or mismatched label', () => {
+test('plan symbol names drop a transparent label and keep a swapped name', () => {
   const { planSymbolNames } = loadHelpers();
   const france = (layer) => ({
     properties: { name: 'France' },
@@ -357,7 +387,7 @@ test('plan symbol names ignore a transparent or mismatched label', () => {
       france({ ...painted, layout: { 'text-field': 'X' } }),
     ],
   };
-  assert.deepEqual([...planSymbolNames(map)], ['France']);
+  assert.deepEqual([...planSymbolNames(map)], ['France', 'X']);
 });
 
 test('MapLibre color and formatted text stay visible, hidden text stays out, and two Frances both count', () => {

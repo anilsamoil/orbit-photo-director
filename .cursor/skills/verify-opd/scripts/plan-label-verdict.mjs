@@ -292,8 +292,68 @@ export function imageryViewport(center, zoom, width, height) {
   };
 }
 
+function labelLuminance(data, index) {
+  return (data[index] + data[index + 1] + data[index + 2]) / 3;
+}
+
+/** Boxes around the bright reference lettering actually present in either frame. */
+export function labelInkRegions(head, main) {
+  if (!head || !main || !head.data || !main.data || head.width !== main.width || head.height !== main.height || head.width < 2) return [];
+  const width = head.width;
+  const height = head.height;
+  const mark = new Uint8Array(width * height);
+  const paint = (image) => {
+    for (let pixel = 0, index = 0; pixel < mark.length; pixel += 1, index += 4) {
+      if (labelLuminance(image.data, index) >= 150) mark[pixel] = 1;
+    }
+  };
+  paint(head);
+  paint(main);
+  const seen = new Uint8Array(width * height);
+  const boxes = [];
+  const stack = [];
+  for (let start = 0; start < mark.length; start += 1) {
+    if (!mark[start] || seen[start]) continue;
+    stack.push(start);
+    seen[start] = 1;
+    let minX = width;
+    let minY = height;
+    let maxX = 0;
+    let maxY = 0;
+    let count = 0;
+    while (stack.length) {
+      const pixel = stack.pop();
+      const x = pixel % width;
+      const y = (pixel - x) / width;
+      count += 1;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+      const neighbors = [pixel - 1, pixel + 1, pixel - width, pixel + width];
+      for (let index = 0; index < neighbors.length; index += 1) {
+        const next = neighbors[index];
+        if (next < 0 || next >= mark.length || seen[next] || !mark[next]) continue;
+        if (Math.abs((next % width) - x) > 1) continue;
+        seen[next] = 1;
+        stack.push(next);
+      }
+    }
+    if (count < 8 || maxX - minX > width * 0.85 || maxY - minY > height * 0.6) continue;
+    boxes.push([
+      Math.max(0, minX - 2),
+      Math.max(0, minY - 2),
+      Math.min(width, maxX + 3),
+      Math.min(height, maxY + 3),
+    ]);
+  }
+  return boxes;
+}
+
 /** Reference-raster label boxes for this camera, in screenshot pixels. */
 export function imageryLabelRegions(camera, levels = loadCountryRasterLevels()) {
+  const ink = labelInkRegions(camera && camera.head, camera && camera.main);
+  if (ink.length) return ink;
   const zoom = Number(camera && camera.zoom);
   const country = camera && camera.country;
   const viewport = camera && camera.viewport
@@ -345,7 +405,7 @@ export function planCameraContract(country, zoom, center) {
   if (country === 'France' && near(z, 1.2, 0.05) && nearCenter(center, 2, 46)) {
     return { expectedNames: FRANCE_Z12_NAMES.slice(), raster: null };
   }
-  if (country === 'Canada' && z < 3) {
+  if (country === 'Canada' && z < 3 && Math.round(z + 1) === 3) {
     return { expectedNames: null, raster: 'CANADA', hide: 'Canada' };
   }
   if (z >= 3 && (country === 'France' || country === 'Kenya')) return { expectedNames: [], raster: null };

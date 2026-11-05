@@ -6712,7 +6712,11 @@ function planSymbolNames(map) {
     if (layer.layout && layer.layout.visibility === 'none') continue;
     if (!planOpacityOn(layer, zoom)) continue;
     if (planColorAlpha(layer.paint && layer.paint['text-color']) <= 0) continue;
-    if (planShownText(layer.layout && layer.layout['text-field'], feature.properties) !== name) continue;
+    const shown = planShownText(layer.layout && layer.layout['text-field'], feature.properties);
+    if (shown !== name) {
+      if (typeof shown === 'string' && shown) names.push(shown);
+      continue;
+    }
     names.push(name);
   }
   return names;
@@ -6734,12 +6738,12 @@ async function planWaitCanada(map, zoom) {
     const frame = map.getCanvas().closest('[data-pip-frame]');
     const hidden = ((frame && frame.dataset.insetHiddenCountries) || '').split('|').filter(Boolean);
     const opacity = placement.opacity ? placement.opacity.Canada : undefined;
-    if (planCanadaReady(zoom, hidden, opacity)) return placement;
+    if (planCanadaReady(zoom, hidden, opacity)) return { ready: true, placement };
     if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
     await new Promise((resolve) => setTimeout(resolve, 50));
     placement = planLabelPlacement(map);
   }
-  return placement;
+  return { ready: false, placement };
 }
 function planProjectRasterBox(map, ink) {
   if (!ink || ink.length < 4 || typeof map.project !== 'function') return null;
@@ -6830,10 +6834,8 @@ function planLabelPlacement(map) {
           if (anchorX >= 0 && anchorY >= 0 && anchorX <= width && anchorY <= height) labels.push({ name: propertyName, opacity: opacityValue, box: null });
           continue;
         }
-        const centerX = (left + right) / 2;
-        const centerY = (top + bottom) / 2;
-        const centerInside = centerX >= canvasBox.left && centerX <= canvasBox.right && centerY >= canvasBox.top && centerY <= canvasBox.bottom;
-        if (!centerInside) continue;
+        const onScreen = right > canvasBox.left && left < canvasBox.right && bottom > canvasBox.top && top < canvasBox.bottom;
+        if (!onScreen) continue;
         labels.push({ name: propertyName, opacity: opacityValue, box: { left, top, right, bottom } });
       }
     }
@@ -6914,14 +6916,15 @@ function settleIdle(map, limitMs, kick) {
       map.off('render', onRender);
       resolve(value);
     };
-    const settled = () => planRasterReady(map)
-      && typeof map.loaded === 'function' && map.loaded() === true
-      && typeof map.areTilesLoaded === 'function' && map.areTilesLoaded() === true;
+    let paints = 0;
     const onIdle = () => {
-      if (settled()) finish(true);
+      if (planRasterReady(map)) finish(true);
     };
     const onRender = () => {
-      if (!finished && settled()) finish(true);
+      if (finished || !planRasterReady(map)) return;
+      paints += 1;
+      if (paints >= 2) finish(true);
+      else if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
     };
     timer = setTimeout(() => finish(false), limitMs);
     map.on('idle', onIdle);
@@ -7141,7 +7144,12 @@ async function withLockedPlan(send, lng, lat, zoom, country, body) {
         hidden: (frame.dataset.insetHiddenCountries || '').split('|').filter(Boolean),
         country: ${JSON.stringify(country)},
         markerVisible: !!(marker && marker.getClientRects().length > 0),
-        placement: ${JSON.stringify(country)} === 'Canada' && ${zoom} < 3 ? await planWaitCanada(map, ${zoom}) : planLabelPlacement(map),
+        placement: await (async () => {
+          if (${JSON.stringify(country)} !== 'Canada' || !(${zoom} < 3)) return planLabelPlacement(map);
+          const canada = await planWaitCanada(map, ${zoom});
+          if (!canada.ready) throw new Error('plan label canada');
+          return canada.placement;
+        })(),
       };
     })()`);
     if (!row || row.ok !== true || row.cameraOk !== true) {
@@ -7407,7 +7415,7 @@ export function assertPlanLabelChecks(row) {
     if (!parity.ok) throw new Error(`plan label parity ${JSON.stringify(parity)}`);
     const pixels = pairedRasterNames(row.headShot, row.mainShot, { ignoreRects: row.ignoreRects || [] });
     if (!pixels.ok) throw new Error(`plan label raster ${JSON.stringify({ country: row.country, zoom, reason: pixels.reason, ratio: pixels.ratio })}`);
-    const regions = imageryLabelRegions({ country: row.country, zoom, center: row.center, viewport: row.viewport, width: row.headShot && row.headShot.width, height: row.headShot && row.headShot.height });
+    const regions = imageryLabelRegions({ country: row.country, zoom, center: row.center, viewport: row.viewport, width: row.headShot && row.headShot.width, height: row.headShot && row.headShot.height, head: row.headShot, main: row.mainShot });
     if (regions.length) {
       const region = imageryRegionDiff(row.headShot, row.mainShot, regions);
       if (!region.ok) throw new Error(`plan label region ${JSON.stringify({ country: row.country, zoom, reason: region.reason, box: region.box })}`);
@@ -7477,10 +7485,6 @@ function ocrLabelText(row, position) {
 
 function rasterNameVerdict(row, contract) {
   if (!contract.raster) return { ok: true, skipped: true };
-  if (contract.hide && row.headPlacement && Array.isArray(row.headPlacement.labels)) {
-    const visible = row.headPlacement.labels.some((label) => label && label.name === contract.hide && Number(label.opacity) > 0);
-    if (visible) return { ok: true, skipped: true };
-  }
   const hasFrame = !!(row.headShot && row.headShot.png);
   const hasText = row.rasterText != null;
   if (!hasFrame && !hasText) return { ok: false, reason: 'raster', declared: contract.raster };
@@ -7506,6 +7510,9 @@ function assertLowZoomNames(row) {
     throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, expected: contract.expectedNames })}`);
   }
   if (Array.isArray(contract.expectedNames) && contract.expectedNames.includes(row.country) && !names.includes(row.country)) {
+    throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, expected: contract.expectedNames })}`);
+  }
+  if (names.length === 0 && row.country !== 'Canada') {
     throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, expected: contract.expectedNames })}`);
   }
   return { tiles, identity, names };
