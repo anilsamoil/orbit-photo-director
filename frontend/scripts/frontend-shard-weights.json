@@ -34,6 +34,7 @@
   "test/close-browser.test.ts": 9.97,
   "test/cold-session-recovery.test.ts": 31.874,
   "test/countdown.test.ts": 0.431,
+  "test/country-label-size.test.ts": 0.05,
   "test/crew-roster.test.ts": 0.482,
   "test/csv-parse.test.ts": 0.453,
   "test/cupola-pane.test.ts": 0.458,

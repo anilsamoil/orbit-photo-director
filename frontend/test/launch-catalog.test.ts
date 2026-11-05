@@ -100,9 +100,47 @@ describe('launch catalog store', () => {
     expect(tiers?.groups.watch.map((launch) => launch.eventId)).toEqual(['event-1']);
     expect(tiers?.pins).toEqual([]);
     expect(fetcher).toHaveBeenCalledWith(`/${packed.pointer.path}`, expect.objectContaining({ cache: 'force-cache' }));
+    expect(store.acceptedPath()).toBe(packed.pointer.path);
     expect(parseLaunchCatalogPointer(packed.pointer).path).toBe('launch/catalog/v/r1.json');
     expect(() => parseLaunchPointer(packed.pointer)).toThrow();
     expect(() => parseLaunchCatalogPointer({ ...packed.pointer, path: 'launch/v/r1.json' })).toThrow();
+  });
+
+  it('settledPath returns the catalog that lands after an in-flight refresh', async () => {
+    const held = await catalogEnvelope(catalog([], { revision: 'c1000-1', generated_at: iso(-1) }));
+    const next = await catalogEnvelope(catalog([], { revision: 'c2000-1', generated_at: iso(0) }));
+    const hold: { release: (() => void) | null } = { release: null };
+    let phase: 'held' | 'next' = 'held';
+    const store = new LaunchCatalogStore(vi.fn(async (input: RequestInfo | URL) => {
+      const path = requestPath(input);
+      const packed = phase === 'held' ? held : next;
+      if (path !== '/launch/catalog/latest.json' && phase === 'next') {
+        await new Promise<void>((resolve) => {
+          hold.release = resolve;
+        });
+      }
+      const body = path === '/launch/catalog/latest.json' ? JSON.stringify(packed.pointer) : packed.text;
+      return new Response(body, { status: 200, headers: jsonHeaders });
+    }));
+    await store.refresh(true);
+    expect(store.acceptedPath()).toBe('launch/catalog/v/c1000-1.json');
+    phase = 'next';
+    const refreshing = store.refresh(true);
+    let landed = false;
+    const pending = store.settledPath().then((value) => {
+      landed = true;
+      return value;
+    });
+    await vi.waitFor(() => {
+      if (hold.release === null) throw new Error('catalog body has not started');
+    });
+    expect(landed).toBe(false);
+    expect(store.acceptedPath()).toBe('launch/catalog/v/c1000-1.json');
+    const release = hold.release;
+    if (release === null) throw new Error('catalog body has not started');
+    release();
+    await refreshing;
+    await expect(pending).resolves.toBe('launch/catalog/v/c2000-1.json');
   });
 
   it('does not hold a schema 2 body or a hash mismatch', async () => {

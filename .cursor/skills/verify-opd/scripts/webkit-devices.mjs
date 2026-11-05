@@ -31,6 +31,7 @@ export const VIEWPORT_ALLOWLIST = {
   'ipad-pro-11': [
     { width: 834, height: 1210 },
     { width: 1210, height: 834 },
+    { width: 820, height: 1180 },
   ],
   'ipad-3': [
     { width: 768, height: 1024 },
@@ -928,6 +929,11 @@ export function playwrightSend(session) {
       return {};
     }
     if (method === 'Page.enable') return {};
+    if (method === 'Network.setCacheDisabled') {
+      // Fresh WebKit contexts plus coldPlanTileCaches' unique URL nonce avoid
+      // cached tiles without forbidden cross-origin Cache-Control headers.
+      return {};
+    }
     if (method === 'Page.addScriptToEvaluateOnNewDocument') {
       session.initScripts.push(params.source);
       await page.addInitScript(params.source);
@@ -1003,6 +1009,8 @@ export function playwrightSend(session) {
     throw new Error(`webkit send has no ${method}`);
   };
   send.replacesContext = true;
+  send.session = session;
+  send.page = session.page;
   return send;
 }
 

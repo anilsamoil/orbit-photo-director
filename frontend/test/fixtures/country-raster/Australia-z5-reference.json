@@ -1,0 +1,67 @@
+{
+  "fixture": "Australia-z5-reference.png",
+  "country": "Australia",
+  "tileZoom": 5,
+  "tileOrigin": [
+    26,
+    17
+  ],
+  "expected": "Both sovereign AUSTRALIA and unrelated Great Australian Bight are present. Sovereign name must count.",
+  "sha256": "52187a89d937822350294a33725adf040d490d27bfa86768a730b1576044e08e",
+  "sources": [
+    {
+      "url": "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/5/17/26",
+      "requestedUrl": "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/5/17/26?opd-pr264-r7=20261010T165218.963732Z",
+      "finished": "2026-10-10T16:52:31.470048+00:00",
+      "sha256": "2979eae997e34b048114866da1648d547c6d763dfe9820bca787b9db91ea0c0b"
+    },
+    {
+      "url": "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/5/17/27",
+      "requestedUrl": "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/5/17/27?opd-pr264-r7=20261010T165218.963732Z",
+      "finished": "2026-10-10T16:52:31.470357+00:00",
+      "sha256": "684b0f7c46d24239ea1e734f01c9e43e5694def74990261c65e394703fc04760"
+    },
+    {
+      "url": "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/5/17/28",
+      "requestedUrl": "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/5/17/28?opd-pr264-r7=20261010T165218.963732Z",
+      "finished": "2026-10-10T16:52:31.435384+00:00",
+      "sha256": "68e1f879780b29f8cfa98b697ee5f4a4b26d4824c35647f5d4f448148034d9c3"
+    },
+    {
+      "url": "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/5/18/26",
+      "requestedUrl": "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/5/18/26?opd-pr264-r7=20261010T165218.963732Z",
+      "finished": "2026-10-10T16:52:31.602367+00:00",
+      "sha256": "69961be8653410cc0ad379faf143a048e8b886e104921979be7fe36152f7b70a"
+    },
+    {
+      "url": "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/5/18/27",
+      "requestedUrl": "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/5/18/27?opd-pr264-r7=20261010T165218.963732Z",
+      "finished": "2026-10-10T16:52:31.599065+00:00",
+      "sha256": "231a24790c55b61cd72024ffd6adeb6c312ec31782f8b0b14e65587fbbff4b3d"
+    },
+    {
+      "url": "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/5/18/28",
+      "requestedUrl": "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/5/18/28?opd-pr264-r7=20261010T165218.963732Z",
+      "finished": "2026-10-10T16:52:31.697226+00:00",
+      "sha256": "ccabba903534194f49f1f3fffeafb2cd373cd02872c9450f0f75ac1cc5e8a61b"
+    },
+    {
+      "url": "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/5/19/26",
+      "requestedUrl": "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/5/19/26?opd-pr264-r7=20261010T165218.963732Z",
+      "finished": "2026-10-10T16:52:31.663666+00:00",
+      "sha256": "6611416e19b0b1bb32c1a28a8da162f22c11af938cf0dc10f8bb018e2a2a896f"
+    },
+    {
+      "url": "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/5/19/27",
+      "requestedUrl": "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/5/19/27?opd-pr264-r7=20261010T165218.963732Z",
+      "finished": "2026-10-10T16:52:31.671812+00:00",
+      "sha256": "af828ee30d9ffe0f03f853c7ea7ecf0cfeba1a715d016b5acbac68c0b8e16091"
+    },
+    {
+      "url": "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/5/19/28",
+      "requestedUrl": "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/5/19/28?opd-pr264-r7=20261010T165218.963732Z",
+      "finished": "2026-10-10T16:52:31.887481+00:00",
+      "sha256": "4404860267bba1fa8b00bae5f1eca466f83817a5d3c21ffd54f1ace135614de4"
+    }
+  ]
+}

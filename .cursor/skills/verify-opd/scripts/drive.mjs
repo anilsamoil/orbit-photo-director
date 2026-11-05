@@ -1,9 +1,14 @@
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
 import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
 import { earthAfterResizeReaders } from './earth-after-resize.mjs';
-import { planLabelReaders } from './plan-label-verdict.mjs';
+import { auditRasterLevels, countryIdentity, countrySweepZooms, imageryLabelRegions, imageryRegionDiff, imageryViewport, keptCountrySymbol, labelScreenVerdict, loadCountryRasterLevels, matchesMain, occurrenceCount, pairedRasterNames, planCameraContract, planContractForDrive, PLAN_COUNTRIES, planLabelReaders, rasterDuplicateVerdict, tilesLoaded } from './plan-label-verdict.mjs';
+import { decodePng } from './decode-png.mjs';
+import { ocrFrame, ocrFrameBox } from './raster-ocr.mjs';
+import { checkRasterOcr, clearRasterOcrRun, rasterOcrStats } from './raster-ocr.mjs';
 import { pinFixtureCookie } from './fixture-session.mjs';
 import { BOSTON_NADIR_EPOCH_MS, effectiveNowMs, refreshLaunchClock } from './fixtures.mjs';
 import { freezeFixtureClock, restoreFixtureClock } from './fixture-clock.mjs';
@@ -190,23 +195,8 @@ function chromeBin() {
   return process.env.OPD_VERIFY_CHROME || 'google-chrome';
 }
 
-export async function connectCdp(port) {
-  let list = [];
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/json/list`);
-      if (response.ok) {
-        list = await response.json();
-        if (list.some((entry) => entry.type === 'page' && entry.webSocketDebuggerUrl)) break;
-      }
-    } catch {
-      list = [];
-    }
-    await sleep(200);
-  }
-  const page = list.find((entry) => entry.type === 'page' && entry.webSocketDebuggerUrl);
-  if (!page) throw new Error(`chrome debug port ${port} has no page`);
-  const ws = new WebSocket(page.webSocketDebuggerUrl);
+async function connectSocket(wsUrl) {
+  const ws = new WebSocket(wsUrl);
   await new Promise((resolveOpen, rejectOpen) => {
     const timer = setTimeout(() => rejectOpen(new Error('chrome websocket timed out')), 10000);
     ws.addEventListener('open', () => {
@@ -247,11 +237,26 @@ export async function connectCdp(port) {
     handlers.push(handler);
     listeners.set(method, handlers);
   }
-  return {
-    send,
-    on,
-    close: () => ws.close(),
-  };
+  return { send, on, close: () => ws.close() };
+}
+
+export async function connectCdp(port) {
+  let list = [];
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/json/list`);
+      if (response.ok) {
+        list = await response.json();
+        if (list.some((entry) => entry.type === 'page' && entry.webSocketDebuggerUrl)) break;
+      }
+    } catch {
+      list = [];
+    }
+    await sleep(200);
+  }
+  const page = list.find((entry) => entry.type === 'page' && entry.webSocketDebuggerUrl);
+  if (!page) throw new Error(`chrome debug port ${port} has no page`);
+  return connectSocket(page.webSocketDebuggerUrl);
 }
 
 async function evaluate(send, expression) {
@@ -785,6 +790,7 @@ async function driveChrome({ baseUrl, evidenceDir, meta, features, home, fixture
       await pinFixtureCookie(cdp.send, baseUrl, fixtureToken);
       cdp.send.cartoDark = cartoDark;
       cdp.send.fixtureToken = fixtureToken;
+      cdp.send.debugPort = debugPort;
       cdp.send.fixtureDir = fixtureDir;
       await openApp(cdp.send, baseUrl, startOffset);
       const notes = await runFeatures(cdp.send, evidenceDir, meta, features, baseUrl, home, DESKTOP, fixtureToken);
@@ -4881,8 +4887,76 @@ async function provePlanWheelSurvivesRebuild(send) {
   return after.zoom;
 }
 
+export function planRasterSymbolActive(layer, zoom) {
+  const min = layer.minzoom == null ? 0 : layer.minzoom;
+  const max = layer.maxzoom == null ? 24 : layer.maxzoom;
+  if (!(zoom >= min && zoom < max)) return false;
+  if (layer.layout && layer.layout.visibility === 'none') return false;
+  const opacity = layer.paint && layer.paint['text-opacity'];
+  if (opacity === 0) return false;
+  if (Array.isArray(opacity) && opacity[0] === 'step') {
+    let value = opacity[2];
+    for (let index = 3; index + 1 < opacity.length; index += 2) {
+      if (zoom >= opacity[index]) value = opacity[index + 1];
+    }
+    if (value === 0) return false;
+  }
+  const filter = layer.filter;
+  const names = filter && filter[2] && filter[2][1];
+  if (Array.isArray(names) && names.length === 0) return false;
+  return true;
+}
+
+export async function planRasterNameSamples(orbit) {
+  const samples = [];
+  for (const zoom of [3.1, 8]) {
+    if (orbit.stop) orbit.stop();
+    orbit.jumpTo({ center: [-73, 41], zoom, bearing: 0, pitch: 0 });
+    const settled = await new Promise((resolve) => {
+      let done = false;
+      const onIdle = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(true);
+      };
+      const timer = setTimeout(() => {
+        if (done) return;
+        done = true;
+        if (typeof orbit.off === 'function') orbit.off('idle', onIdle);
+        resolve(false);
+      }, 4000);
+      orbit.once('idle', onIdle);
+    });
+    if (!settled) return { ok: false, reason: 'timeout', zoom, samples };
+    const style = orbit.getStyle() || {};
+    const symbolLayers = (style.layers || []).filter((layer) => layer.type === 'symbol');
+    const symbolIds = symbolLayers.map((layer) => layer.id);
+    const active = symbolLayers.filter((layer) => planRasterSymbolActive(layer, zoom)).map((layer) => layer.id);
+    let features = [];
+    try {
+      features = symbolIds.length ? orbit.queryRenderedFeatures(undefined, { layers: symbolIds }) : [];
+    } catch (error) {
+      return { ok: false, reason: 'query', zoom, error: String(error), samples };
+    }
+    const names = [];
+    for (const feature of features) {
+      const name = feature && feature.properties && feature.properties.name;
+      if (typeof name === 'string' && !names.includes(name)) names.push(name);
+    }
+    const stacked = names.filter((name) => name === 'Washington D.C.' || name === 'New York' || name === 'Washington');
+    samples.push({ zoom: orbit.getZoom(), stacked, names, active });
+    if (stacked.length || active.length || Math.abs(orbit.getZoom() - zoom) > 0.05) {
+      return { ok: false, reason: stacked.length ? 'stacked' : active.length ? 'vector' : 'zoom', samples };
+    }
+  }
+  return { ok: true, samples };
+}
+
 async function provePlanRasterNames(send) {
   const laid = await evaluate(send, `(async () => {
+    const planRasterSymbolActive = ${planRasterSymbolActive.toString()};
+    const planRasterNameSamples = ${planRasterNameSamples.toString()};
     const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
     const canvas = frame?.querySelector('canvas');
     const orbit = frame?.__opdTrackInset;
@@ -4892,42 +4966,9 @@ async function provePlanRasterNames(send) {
     const raster = orbit.getLayer('inset-labels');
     const opacity = orbit.getPaintProperty('inset-labels', 'raster-opacity');
     if (!raster || !(opacity > 0)) return { ok: false, reason: 'raster', opacity: opacity == null ? null : opacity };
-    const symbolLayers = (orbit.getStyle().layers || []).filter((layer) => layer.type === 'symbol');
-    const symbolIds = symbolLayers.map((layer) => layer.id);
-    const samples = [];
-    for (const zoom of [3.1, 8]) {
-      if (orbit.stop) orbit.stop();
-      orbit.jumpTo({ center: [-73, 41], zoom, bearing: 0, pitch: 0 });
-      await new Promise((resolve) => {
-        const timer = setTimeout(resolve, 1200);
-        orbit.once('idle', () => {
-          clearTimeout(timer);
-          resolve();
-        });
-      });
-      const active = symbolLayers.filter((layer) => {
-        const min = layer.minzoom == null ? 0 : layer.minzoom;
-        const max = layer.maxzoom == null ? 24 : layer.maxzoom;
-        return zoom >= min && zoom < max;
-      }).map((layer) => layer.id);
-      let features = [];
-      try {
-        features = symbolIds.length ? orbit.queryRenderedFeatures(undefined, { layers: symbolIds }) : [];
-      } catch (error) {
-        return { ok: false, reason: 'query', zoom, error: String(error) };
-      }
-      const names = [];
-      for (const feature of features) {
-        const name = feature && feature.properties && feature.properties.name;
-        if (typeof name === 'string' && !names.includes(name)) names.push(name);
-      }
-      const stacked = names.filter((name) => name === 'Washington D.C.' || name === 'New York' || name === 'Washington');
-      samples.push({ zoom: orbit.getZoom(), stacked, names, active });
-      if (stacked.length || active.length || Math.abs(orbit.getZoom() - zoom) > 0.05) {
-        return { ok: false, reason: stacked.length ? 'stacked' : active.length ? 'vector' : 'zoom', samples };
-      }
-    }
-    return { ok: true, samples, opacity };
+    const sampled = await planRasterNameSamples(orbit);
+    if (!sampled.ok) return sampled;
+    return { ok: true, samples: sampled.samples, opacity };
   })()`);
   if (!laid?.ok) throw new Error(`plan raster names ${JSON.stringify(laid)}`);
 }
@@ -4993,7 +5034,7 @@ async function beginPlanLayout(send) {
     if (!frame || !canvas || !orbit) return null;
     const width = frame.clientWidth;
     const height = frame.clientHeight;
-    window.__opdPlanLayout = { frame, canvas, orbit, style: frame.getAttribute('style'), dpr: Object.getOwnPropertyDescriptor(window, 'devicePixelRatio') };
+    window.__opdPlanLayout = { frame, canvas, orbit, style: frame.getAttribute('style'), dpr: Object.getOwnPropertyDescriptor(window, 'devicePixelRatio'), dprValue: window.devicePixelRatio };
     return { width, height, dpr: window.devicePixelRatio };
   })()`);
   if (!saved) throw new Error('plan layout fixture missing');
@@ -5029,7 +5070,7 @@ async function restorePlanLayout(send) {
     if (saved.style === null) saved.frame.removeAttribute('style');
     else saved.frame.setAttribute('style', saved.style);
     if (saved.dpr) Object.defineProperty(window, 'devicePixelRatio', saved.dpr);
-    else delete window.devicePixelRatio;
+    else if (Number.isFinite(saved.dprValue)) Object.defineProperty(window, 'devicePixelRatio', { configurable: true, get: () => saved.dprValue });
     delete window.__opdPlanLayout;
   })()`);
 }
@@ -5471,7 +5512,7 @@ async function provePlanMapLive(send, viewport) {
     await provePlanRotatingPinch(send);
     return `wheel ${zoom.toFixed(2)}; ${outside}`;
   } finally {
-    await evaluate(send, `(() => { delete window.devicePixelRatio; document.querySelector('[data-opd-blur]')?.remove(); return true; })()`);
+    await evaluate(send, `(() => { document.querySelector('[data-opd-blur]')?.remove(); return true; })()`);
     await setViewport(send, viewport.width, viewport.height, viewport.mobile);
   }
 }
@@ -6509,6 +6550,1256 @@ async function proveFullscreenTelemetry(send) {
   return `${open.w}x${open.h}`;
 }
 
+export const PLAN_TILE_HELPERS = `
+function planSourceZoom(map, sourceId) {
+  const spec = map.getStyle() && map.getStyle().sources && map.getStyle().sources[sourceId];
+  const cap = spec && Number.isFinite(Number(spec.maxzoom)) ? Number(spec.maxzoom) : Infinity;
+  return Math.min(cap, Math.max(0, Math.round(map.getZoom() + 1)));
+}
+function planViewport(map) {
+  const canvas = map.getCanvas();
+  const rect = canvas.getBoundingClientRect();
+  const n = 2 ** planSourceZoom(map, 'inset-labels');
+  const origin = map.project([-180, 85.0511287798066]);
+  const scale = 512 * (2 ** map.getZoom()) / (256 * n);
+  const occlusions = [];
+  for (const node of document.querySelectorAll('[data-iss-clock], [data-iss-edition], [data-iss-split-chrome]')) {
+    const box = node.getBoundingClientRect();
+    if (box.width <= 0 || box.height <= 0 || (getComputedStyle(node).display === 'none' || getComputedStyle(node).visibility === 'hidden')) continue;
+    if (box.right <= rect.left || box.left >= rect.right || box.bottom <= rect.top || box.top >= rect.bottom) continue;
+    occlusions.push([box.left-rect.left, box.top-rect.top, box.right-rect.left, box.bottom-rect.top]);
+  }
+  return { width: rect.width, height: rect.height, worldCopies: map.getRenderWorldCopies(), scale, origin: { x: origin.x, y: origin.y }, occlusions };
+}
+function planHold(map) {
+  if (map.__opdLabelHold) return;
+  map.__opdLabelHold = {
+    fit: map.fitBounds.bind(map),
+    resize: map.resize.bind(map),
+    center: map.getCenter(),
+    zoom: map.getZoom(),
+  };
+  map.fitBounds = () => map;
+  map.resize = () => map;
+}
+function planCenterTile(map, z) {
+  const center = map.getCenter();
+  const n = 2 ** z;
+  const x = Math.max(0, Math.min(n - 1, Math.floor(((center.lng + 180) / 360) * n)));
+  const rad = center.lat * Math.PI / 180;
+  const yRaw = Math.floor((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2 * n);
+  const y = Math.max(0, Math.min(n - 1, yRaw));
+  return { x, y };
+}
+function planTileKey(coord, tile) {
+  const id = (tile && tile.tileID) || coord || {};
+  if (id.key) return String(id.key);
+  const canonical = id.canonical;
+  if (!canonical) return '';
+  return [canonical.z, canonical.x, canonical.y, id.wrap || 0].join('/');
+}
+function planVisibleTiles(map, sourceId) {
+  const manager = map.style && map.style.tileManagers && map.style.tileManagers[sourceId];
+  const z = planSourceZoom(map, sourceId);
+  const center = planCenterTile(map, z);
+  if (!manager || typeof manager.getVisibleCoordinates !== 'function') {
+    return { z, tiles: [], center, state: 'manager' };
+  }
+  const tiles = [];
+  const seen = new Set();
+  const add = (coord, tile) => {
+    const id = (tile && tile.tileID) || coord || {};
+    const canonical = id.canonical;
+    if (!canonical) return;
+    const key = planTileKey(coord, tile);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    tiles.push({
+      z: canonical.z,
+      x: canonical.x,
+      y: canonical.y,
+      state: tile ? tile.state : 'missing',
+    });
+  };
+  const view = manager._inViewTiles;
+  if (view && typeof view.getAllTiles === 'function') {
+    for (const tile of view.getAllTiles() || []) add(tile && tile.tileID, tile);
+  }
+  for (const coord of manager.getVisibleCoordinates() || []) {
+    const tile = typeof manager.getTile === 'function' ? manager.getTile(coord) : null;
+    add(coord, tile);
+  }
+  return { z, tiles, center };
+}
+function planFadeDone(map) {
+  const managers = map.style && map.style.tileManagers;
+  if (!managers) return false;
+  for (const id of ['inset-labels', 'inset-basemap']) {
+    const manager = managers[id];
+    if (!manager || typeof manager.hasTransition !== 'function' || manager.hasTransition()) return false;
+  }
+  return true;
+}
+function planRasterReady(map) {
+  const ready = (pack) => {
+    if (!pack || pack.state === 'manager' || pack.tiles.length === 0) return false;
+    const drawn = pack.tiles.filter((tile) => tile.z === pack.z);
+    if (drawn.length === 0) return false;
+    if (!drawn.every((tile) => tile.state === 'loaded')) return false;
+    if (!drawn.some((tile) => tile.x === pack.center.x && tile.y === pack.center.y)) return false;
+    return pack.tiles.every((tile) => tile.state === 'loaded' || tile.state === 'errored');
+  };
+  return ready(planVisibleTiles(map, 'inset-labels')) && ready(planVisibleTiles(map, 'inset-basemap')) && planFadeDone(map);
+}
+function planTileUrls(map, sourceId, tiles) {
+  const spec = map.getStyle() && map.getStyle().sources && map.getStyle().sources[sourceId];
+  const template = spec && spec.tiles && spec.tiles[0];
+  if (!template) return [];
+  return tiles.map((tile) => template.replace('{z}', String(tile.z)).replace('{y}', String(tile.y)).replace('{x}', String(tile.x)));
+}
+function planOpacityOn(layer, zoom) {
+  const opacity = layer.paint && layer.paint['text-opacity'];
+  if (!Array.isArray(opacity) || opacity[0] !== 'step') return opacity !== 0;
+  let value = opacity[2];
+  for (let index = 3; index + 1 < opacity.length; index += 2) {
+    if (zoom >= opacity[index]) value = opacity[index + 1];
+  }
+  return value !== 0;
+}
+function planShownText(field, properties) {
+  if (field && typeof field === 'object' && Array.isArray(field.sections)) {
+    return field.sections.map((section) => (section && typeof section.text === 'string' ? section.text : '')).join('');
+  }
+  if (typeof field === 'string') return field;
+  if (Array.isArray(field) && field[0] === 'get' && typeof field[1] === 'string') {
+    const value = properties ? properties[field[1]] : undefined;
+    return typeof value === 'string' ? value : '';
+  }
+  return '';
+}
+function planColorAlpha(color) {
+  if (color == null) return 1;
+  if (typeof color === 'object' && typeof color.a === 'number') return color.a;
+  if (typeof color !== 'string') return 0;
+  const text = color.trim().toLowerCase();
+  if (text === 'transparent') return 0;
+  const hex = /^#([0-9a-f]+)$/.exec(text);
+  if (hex && (hex[1].length === 3 || hex[1].length === 6)) return 1;
+  if (hex && hex[1].length === 8) return parseInt(hex[1].slice(6, 8), 16) / 255;
+  const rgba = /^rgba?\\(([^)]*)\\)$/.exec(text);
+  if (!rgba) return 0;
+  const parts = rgba[1].split(',').map((part) => part.trim());
+  if (parts.length < 4) return 1;
+  const alpha = Number(parts[3]);
+  return Number.isFinite(alpha) ? alpha : 0;
+}
+function planSymbolNames(map) {
+  const zoom = map.getZoom();
+  const canvas = map.getCanvas();
+  const layers = ((map.getStyle() && map.getStyle().layers) || [])
+    .filter((layer) => (layer.source === 'inset-countries' || layer.source === 'inset-country-fallbacks') && layer.type === 'symbol' && planOpacityOn(layer, zoom))
+    .map((layer) => layer.id);
+  const features = layers.length ? (map.queryRenderedFeatures({ layers }) || []) : [];
+  const names = [];
+  for (const feature of features) {
+    const coordinates = feature.geometry && feature.geometry.coordinates;
+    if (!coordinates || coordinates.length < 2) continue;
+    const point = map.project(coordinates);
+    if (!(point.x >= 0 && point.y >= 0 && point.x <= canvas.clientWidth && point.y <= canvas.clientHeight)) continue;
+    const name = feature.properties && feature.properties.name;
+    if (typeof name !== 'string' || !name) continue;
+    const layer = feature.layer || {};
+    if (layer.layout && layer.layout.visibility === 'none') continue;
+    if (!planOpacityOn(layer, zoom)) continue;
+    if (planColorAlpha(layer.paint && layer.paint['text-color']) <= 0) continue;
+    const shown = planShownText(layer.layout && layer.layout['text-field'], feature.properties);
+    if (shown !== name) {
+      if (typeof shown === 'string' && shown) names.push(shown);
+      continue;
+    }
+    names.push(name);
+  }
+  return names;
+}
+function planPaintOpacity(paint) {
+  const source = paint || {};
+  const hasOpacity = Object.prototype.hasOwnProperty.call(source, 'text-opacity');
+  const rawOpacity = source['text-opacity'];
+  const opacity = !hasOpacity ? 1 : (typeof rawOpacity === 'number' && Number.isFinite(rawOpacity) ? rawOpacity : null);
+  if (typeof opacity !== 'number') return opacity;
+  return opacity * planColorAlpha(source['text-color']);
+}
+function planCanadaInk() {
+  return [0.205078125, 0.313476562, 0.236816406, 0.317871094];
+}
+function planCanadaReady(zoom, hidden, opacity, showsSame, placed) {
+  if (!(Number(zoom) < 3)) return true;
+  const listed = Array.isArray(hidden) && hidden.includes('Canada');
+  if (showsSame === true) return listed && opacity === 0;
+  const visible = !listed && typeof opacity === 'number' && opacity > 0;
+  return visible && placed === true;
+}
+let canadaTrack = null;
+async function planCanadaShowsSame(map) {
+  const canvas = map.getCanvas();
+  const frame = canvas && typeof canvas.closest === 'function' ? (canvas.closest('[data-pip-frame]') || canvas) : canvas;
+  const viewport = { left: 0, top: 0, right: frame && frame.clientWidth || 0, bottom: frame && frame.clientHeight || 0 };
+  if (typeof rasterShowsSameCountry === 'function') {
+    return rasterShowsSameCountry(map.getZoom(), 0, null, (lngLat) => map.project(lngLat), viewport, []) === true;
+  }
+  if (!canadaTrack) {
+    try {
+      canadaTrack = await import('/src/map/adapters/maplibre/track-inset.ts');
+    } catch (error) {
+      canadaTrack = {};
+    }
+  }
+  if (typeof canadaTrack.rasterShowsSameCountry !== 'function' || typeof canadaTrack.canadaRasterView !== 'function' || !frame) return false;
+  const view = canadaTrack.canadaRasterView(map, frame);
+  if (!view) return false;
+  return canadaTrack.rasterShowsSameCountry(view.zoom, view.drawn, view.entry, view.project, view.viewport, view.occlusions) === true;
+}
+async function planCanadaSettled(map) {
+  const listed = () => {
+    const canvas = map.getCanvas();
+    const frame = canvas && typeof canvas.closest === 'function' ? canvas.closest('[data-pip-frame]') : null;
+    return ((frame && frame.dataset && frame.dataset.insetHiddenCountries) || '').split('|').includes('Canada');
+  };
+  let showsSame = await planCanadaShowsSame(map);
+  if (listed() === showsSame) return { showsSame, changed: false };
+  const deadline = performance.now() + 2000;
+  while (performance.now() < deadline) {
+    if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    showsSame = await planCanadaShowsSame(map);
+    if (listed() === showsSame) return { showsSame, changed: true };
+  }
+  return { showsSame, changed: true };
+}
+function planCanadaPlaced(placement) {
+  const labels = placement && placement.labels || [];
+  for (let index = 0; index < labels.length; index += 1) {
+    const label = labels[index];
+    if (label && label.name === 'Canada' && label.box && Number(label.opacity) > 0) return true;
+  }
+  return false;
+}
+async function planWaitCanada(map, zoom) {
+  const deadline = performance.now() + 8000;
+  let placement = planLabelPlacement(map);
+  while (performance.now() < deadline) {
+    const frame = map.getCanvas().closest('[data-pip-frame]');
+    const hidden = ((frame && frame.dataset.insetHiddenCountries) || '').split('|').filter(Boolean);
+    const opacity = placement.opacity ? placement.opacity.Canada : undefined;
+    const showsSame = await planCanadaShowsSame(map);
+    if (planCanadaReady(zoom, hidden, opacity, showsSame, planCanadaPlaced(placement))) return { ready: true, placement, showsSame };
+    if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    placement = planLabelPlacement(map);
+  }
+  const showsSame = await planCanadaShowsSame(map);
+  return { ready: false, placement, showsSame };
+}
+function planProjectRasterBox(map, ink) {
+  if (!ink || ink.length < 4 || typeof map.project !== 'function') return null;
+  const lngLat = (x, y) => [x * 360 - 180, Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180 / Math.PI];
+  const start = map.project(lngLat(ink[0], ink[1]));
+  const end = map.project(lngLat(ink[2], ink[3]));
+  const canvas = map.getCanvas();
+  const canvasBox = canvas.getBoundingClientRect();
+  if (!start || !end || !Number.isFinite(start.x) || !Number.isFinite(end.y)) return null;
+  const left = canvasBox.left + Math.min(start.x, end.x);
+  const top = canvasBox.top + Math.min(start.y, end.y);
+  const right = canvasBox.left + Math.max(start.x, end.x);
+  const bottom = canvasBox.top + Math.max(start.y, end.y);
+  if (!(right > left && bottom > top)) return null;
+  if (right < canvasBox.left || bottom < canvasBox.top || left > canvasBox.right || top > canvasBox.bottom) return null;
+  return { left, top, right, bottom };
+}
+function planLabelPlacement(map) {
+  const canvas = map.getCanvas();
+  const canvasBox = canvas.getBoundingClientRect();
+  const chrome = [];
+  for (const node of document.querySelectorAll('[data-iss-clock], [data-iss-edition], [data-iss-controls], [data-iss-split-chrome], .maplibregl-ctrl')) {
+    const box = node.getBoundingClientRect();
+    if (box.width < 2 || box.height < 2) continue;
+    chrome.push({ left: box.left, top: box.top, right: box.right, bottom: box.bottom });
+  }
+  const labels = [];
+  const opacity = {};
+  const seen = new Set();
+  const style = map.style;
+  const placement = style && style.placement;
+  const index = placement && placement.collisionIndex;
+  const width = canvas.clientWidth;
+  const height = canvas.clientHeight;
+  if (index && placement.retainedQueryData) {
+    const serialized = typeof style._serializedAllLayers === 'function' ? style._serializedAllLayers() : {};
+    const images = style.imageManager && typeof style.imageManager.listImages === 'function' ? style.imageManager.listImages() : [];
+    const grids = [index.grid, index.ignoredGrid];
+    for (let gridIndex = 0; gridIndex < grids.length; gridIndex += 1) {
+      const grid = grids[gridIndex];
+      if (!grid || typeof grid.query !== 'function') continue;
+      const hits = grid.query(0, 0, width + 200, height + 200) || [];
+      for (let hitIndex = 0; hitIndex < hits.length; hitIndex += 1) {
+        const hit = hits[hitIndex];
+        const key = hit && hit.key;
+        if (!key) continue;
+        const data = placement.retainedQueryData[key.bucketInstanceId];
+        if (!data || !data.featureIndex || typeof data.featureIndex.lookupSymbolFeatures !== 'function') continue;
+        let found = null;
+        try {
+          found = data.featureIndex.lookupSymbolFeatures([key.featureIndex], serialized, data.bucketIndex, data.sourceLayerIndex, { globalState: style._globalState }, null, images, style._layers);
+        } catch (error) {
+          continue;
+        }
+        let feature = null;
+        const layerIds = found ? Object.keys(found) : [];
+        for (let layerIndex = 0; layerIndex < layerIds.length; layerIndex += 1) {
+          const rows = found[layerIds[layerIndex]] || [];
+          if (rows[0] && rows[0].feature) {
+            feature = rows[0].feature;
+            break;
+          }
+        }
+        if (!feature || !feature.layer) continue;
+        const source = feature.layer.source;
+        if (source !== 'inset-countries' && source !== 'inset-country-fallbacks') continue;
+        const shown = planShownText(feature.layer.layout && feature.layer.layout['text-field'], feature.properties);
+        const propertyName = feature.properties && feature.properties.name;
+        if (typeof shown !== 'string' || !shown || typeof propertyName !== 'string' || shown !== propertyName) continue;
+        const paint = feature.layer.paint || {};
+        const opacityValue = planPaintOpacity(paint);
+        const dedupe = propertyName + ':' + key.bucketInstanceId + ':' + key.featureIndex;
+        if (seen.has(dedupe)) continue;
+        seen.add(dedupe);
+        if (typeof opacityValue === 'number') opacity[propertyName] = opacity[propertyName] == null ? opacityValue : Math.max(opacity[propertyName], opacityValue);
+        else if (!(propertyName in opacity)) opacity[propertyName] = null;
+        if (!(opacityValue > 0)) continue;
+        const left = canvasBox.left + hit.x1 - 100;
+        const top = canvasBox.top + hit.y1 - 100;
+        const right = canvasBox.left + hit.x2 - 100;
+        const bottom = canvasBox.top + hit.y2 - 100;
+        const box = right > left && bottom > top ? { left, top, right, bottom } : null;
+        if (!box) {
+          const anchorX = hit.x1 - 100;
+          const anchorY = hit.y1 - 100;
+          if (anchorX >= 0 && anchorY >= 0 && anchorX <= width && anchorY <= height) labels.push({ name: propertyName, opacity: opacityValue, box: null });
+          continue;
+        }
+        const onScreen = right > canvasBox.left && left < canvasBox.right && bottom > canvasBox.top && top < canvasBox.bottom;
+        if (!onScreen) continue;
+        labels.push({ name: propertyName, opacity: opacityValue, box: { left, top, right, bottom } });
+      }
+    }
+  }
+  const frame = typeof canvas.closest === 'function' ? canvas.closest('[data-pip-frame]') : canvas.parentElement;
+  const hidden = ((frame && frame.dataset && frame.dataset.insetHiddenCountries) || '').split('|').filter(Boolean);
+  for (let hiddenIndex = 0; hiddenIndex < hidden.length; hiddenIndex += 1) {
+    if (opacity[hidden[hiddenIndex]] == null) opacity[hidden[hiddenIndex]] = 0;
+  }
+  return {
+    labels,
+    canvas: {
+      left: canvasBox.left,
+      top: canvasBox.top,
+      right: canvasBox.right,
+      bottom: canvasBox.bottom,
+      clientWidth: canvas.clientWidth,
+      clientHeight: canvas.clientHeight,
+    },
+    chrome,
+    opacity,
+    rasterBox: planProjectRasterBox(map, planCanadaInk()),
+  };
+}
+function planLayerCovers(map, name, zoom) {
+  const layers = ((map.getStyle() && map.getStyle().layers) || [])
+    .filter((layer) => (layer.source === 'inset-countries' || layer.source === 'inset-country-fallbacks') && layer.type === 'symbol');
+  return layers.some((layer) => {
+    const min = layer.minzoom == null ? -Infinity : layer.minzoom;
+    const max = layer.maxzoom == null ? Infinity : layer.maxzoom;
+    if (zoom < min || zoom >= max) return false;
+    const filter = layer.filter;
+    const names = filter && filter[2] && filter[2][1];
+    return Array.isArray(names) && names.includes(name);
+  });
+}
+function planCameraMatches(map, camera) {
+  const zoom = map.getZoom();
+  const center = map.getCenter();
+  const zoomOk = Math.abs(zoom - camera.zoom) <= 0.02;
+  const centerOk = Math.abs(center.lng - camera.center[0]) <= 0.05 && Math.abs(center.lat - camera.center[1]) <= 0.05;
+  return {
+    ok: zoomOk && centerOk,
+    zoom,
+    center: [center.lng, center.lat],
+    requestedZoom: camera.zoom,
+    requestedCenter: camera.center,
+  };
+}
+function planLockRasterCamera(map, camera) {
+  if (!map.__opdJumpNative) {
+    map.__opdJumpNative = map.jumpTo.bind(map);
+    map.jumpTo = (next) => map.__opdJumpNative(map.__opdRasterCamera || next);
+  }
+  map.__opdRasterCamera = camera;
+  map.__opdJumpLocked = true;
+  map.jumpTo(camera);
+  return planCameraMatches(map, camera);
+}
+function planReleaseRasterCamera(map) {
+  if (map && map.__opdJumpNative) map.jumpTo = map.__opdJumpNative;
+  if (map) {
+    delete map.__opdJumpNative;
+    delete map.__opdRasterCamera;
+    delete map.__opdJumpLocked;
+  }
+}
+const PLAN_REPAINT_IDLE_MS = 2000;
+function settleIdle(map, limitMs, kick, full) {
+  return new Promise((resolve) => {
+    let finished = false;
+    let timer = 0;
+    const finish = (value) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      map.off('idle', onIdle);
+      map.off('render', onRender);
+      resolve(value);
+    };
+    let paints = 0;
+    const ready = (full) => planRasterReady(map)
+      && (!full || (
+        typeof map.loaded === 'function' && map.loaded() === true
+        && typeof map.areTilesLoaded === 'function' && map.areTilesLoaded() === true
+      ));
+    const onIdle = () => {
+      if (ready(full)) finish(true);
+    };
+    const onRender = () => {
+      if (finished || !planRasterReady(map)) return;
+      if (full) {
+        if (ready(true)) finish(true);
+        return;
+      }
+      paints += 1;
+      if (paints >= 2) finish(true);
+      else if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
+    };
+    timer = setTimeout(() => finish(false), limitMs);
+    map.on('idle', onIdle);
+    map.on('render', onRender);
+    if (typeof kick === 'function') kick();
+  });
+}
+async function planWaitTiles(map, full) {
+  const deadline = performance.now() + 8000;
+  let labels = null;
+  let base = null;
+  while (performance.now() < deadline) {
+    labels = planVisibleTiles(map, 'inset-labels');
+    base = planVisibleTiles(map, 'inset-basemap');
+    if (planRasterReady(map)) break;
+    await settleIdle(map, 100, () => {
+      if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
+    }, full);
+  }
+  labels = planVisibleTiles(map, 'inset-labels');
+  base = planVisibleTiles(map, 'inset-basemap');
+  let tilesOk = planRasterReady(map);
+  let repaintMs = null;
+  let painted = null;
+  if (tilesOk) {
+    const idleStarted = performance.now();
+    painted = await settleIdle(map, PLAN_REPAINT_IDLE_MS, () => {
+      if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
+    }, full);
+    repaintMs = Math.round(performance.now() - idleStarted);
+    labels = planVisibleTiles(map, 'inset-labels');
+    base = planVisibleTiles(map, 'inset-basemap');
+    tilesOk = painted === true && planRasterReady(map);
+  }
+  const drawn = (pack) => (pack && pack.tiles ? pack.tiles.filter((tile) => tile.z === pack.z) : []);
+  const urls = tilesOk
+    ? planTileUrls(map, 'inset-labels', drawn(labels)).concat(planTileUrls(map, 'inset-basemap', drawn(base)))
+    : [];
+  const blocking = [];
+  for (const pack of [labels, base]) {
+    for (const tile of (pack && pack.tiles) || []) {
+      if (tile.state !== 'loaded' && tile.state !== 'errored') blocking.push(tile);
+    }
+  }
+  return {
+    tilesOk,
+    tileZ: labels ? labels.z : null,
+    urls,
+    repaintMs,
+    detail: tilesOk ? null : {
+      labels,
+      base,
+      blocking,
+      idle: painted,
+      are: map.areTilesLoaded(),
+      loaded: typeof map.loaded === 'function' ? map.loaded() : null,
+      fading: !planFadeDone(map),
+    },
+  };
+}
+`;
+
+const PLAN_LABEL_READ = `(async (zoom, lng, lat) => {
+  ${PLAN_TILE_HELPERS}
+  const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+  const map = frame && frame.__opdTrackInset;
+  if (!map || typeof map.jumpTo !== 'function' || typeof map.queryRenderedFeatures !== 'function') {
+    return { ok: false, reason: 'map' };
+  }
+  planHold(map);
+  map.jumpTo({ center: [lng, lat], zoom });
+  const waited = await planWaitTiles(map);
+  const canvas = map.getCanvas();
+  const box = canvas.getBoundingClientRect();
+  return {
+    ok: true,
+    tilesOk: waited.tilesOk,
+    detail: waited.detail,
+    urls: waited.urls,
+    viewport: planViewport(map),
+    zoom: map.getZoom(),
+    tileZ: waited.tileZ,
+    names: planSymbolNames(map),
+    clip: { x: box.x, y: box.y, width: box.width, height: box.height },
+  };
+})`;
+
+export async function readPlanLabelZoom(send, zoom, lng, lat) {
+  const sample = await evaluate(send, `(${PLAN_LABEL_READ})(${zoom}, ${lng}, ${lat})`);
+  if (!sample || sample.ok !== true) throw new Error(`plan label zooms ${JSON.stringify(sample)}`);
+  return sample;
+}
+
+export async function coldPlanTileCaches(send) {
+  checkRasterOcr();
+  clearRasterOcrRun();
+  await send('Network.setCacheDisabled', { cacheDisabled: true });
+  const countries = JSON.stringify(PLAN_COUNTRIES);
+  const cleared = await evaluate(send, `(async () => {
+    ${PLAN_TILE_HELPERS}
+    const names = (typeof caches !== 'undefined' && caches.keys) ? await caches.keys() : [];
+    await Promise.all(names.map((name) => caches.delete(name)));
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    const map = frame && frame.__opdTrackInset;
+    if (!map || !map.style || !map.style.tileManagers || typeof map.jumpTo !== 'function') {
+      return { ok: false, reason: 'map', caches: names };
+    }
+    planHold(map);
+    if (typeof map.setTransformRequest === 'function') {
+      const bust = String(Date.now()) + '-' + Math.random().toString(36).slice(2);
+      map.setTransformRequest((url) => {
+        if (!url || url.indexOf('arcgisonline.com') < 0) return { url };
+        const next = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'nocache=' + bust;
+        return { url: next };
+      });
+    }
+    for (const id of ['inset-labels', 'inset-basemap']) {
+      const manager = map.style.tileManagers[id];
+      if (manager && typeof manager.clearTiles === 'function') manager.clearTiles();
+    }
+    const center = map.getCenter();
+    map.jumpTo({ center, zoom: map.getZoom() });
+    const waited = await planWaitTiles(map);
+    const canvas = map.getCanvas();
+    const box = canvas.getBoundingClientRect();
+    const inside = [];
+    for (const country of ${countries}) {
+      const point = map.project([country.lng, country.lat]);
+      if (point.x >= 8 && point.y >= 8 && point.x <= box.width - 8 && point.y <= box.height - 8) inside.push(country.name);
+    }
+    return {
+      ok: waited.tilesOk === true,
+      cold: true,
+      caches: names,
+      tilesOk: waited.tilesOk,
+      detail: waited.detail,
+      urls: waited.urls,
+      viewport: planViewport(map),
+      zoom: map.getZoom(),
+      tileZ: waited.tileZ,
+      names: planSymbolNames(map),
+      inside,
+    };
+  })()`);
+  if (!cleared || cleared.cold !== true || cleared.tilesOk !== true) {
+    throw new Error(`plan label caches ${JSON.stringify(cleared)}`);
+  }
+  return cleared;
+}
+
+async function restorePlanLabelCamera(send) {
+  await evaluate(send, `(() => {
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    const map = frame && frame.__opdTrackInset;
+    const hold = map && map.__opdLabelHold;
+    if (!map || !hold) return { ok: false };
+    map.jumpTo({ center: hold.center, zoom: hold.zoom });
+    map.fitBounds = hold.fit;
+    map.resize = hold.resize;
+    delete map.__opdLabelHold;
+    return { ok: true, zoom: map.getZoom() };
+  })()`);
+}
+
+const RELEASE_PLAN_CAMERA = `(() => {
+  const map = document.querySelector('[data-pip="plan"] [data-pip-frame]')?.__opdTrackInset;
+  if (!map) return { ok: false, reason: 'map' };
+  if (map.__opdJumpNative) map.jumpTo = map.__opdJumpNative;
+  delete map.__opdJumpNative;
+  delete map.__opdRasterCamera;
+  delete map.__opdJumpLocked;
+  return { ok: true, zoom: map.getZoom(), locked: map.__opdJumpLocked === true };
+})()`;
+
+async function focusMapPage(send) {
+  const page = send && ((send.session && send.session.page) || send.page);
+  if (page && typeof page.bringToFront === 'function') {
+    await page.bringToFront();
+    return;
+  }
+  if (!send) return;
+  await send('Page.bringToFront', {}).catch(() => {});
+}
+
+async function releasePlanCamera(send) {
+  if (!send) return { ok: false };
+  return evaluate(send, RELEASE_PLAN_CAMERA);
+}
+
+async function withLockedPlan(send, lng, lat, zoom, country, body, canadaWait) {
+  await focusMapPage(send);
+  try {
+    const row = await evaluate(send, `(async () => {
+      ${PLAN_TILE_HELPERS}
+      const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+      const map = frame && frame.__opdTrackInset;
+      if (!map || typeof map.jumpTo !== 'function') return { ok: false, reason: 'map' };
+      planHold(map);
+      const camera = { center: [${lng}, ${lat}], zoom: ${zoom} };
+      const seen = planLockRasterCamera(map, camera);
+      const waited = await planWaitTiles(map);
+      const after = planCameraMatches(map, camera);
+      const marker = frame.querySelector('.maplibregl-marker');
+      return {
+        ok: true,
+        cameraOk: seen.ok === true && after.ok === true,
+        requestedZoom: ${zoom},
+        requestedCenter: [${lng}, ${lat}],
+        center: after.center,
+        tilesOk: waited.tilesOk,
+        detail: waited.detail,
+        repaintMs: waited.repaintMs,
+        viewport: planViewport(map),
+        zoom: after.zoom,
+        tileZ: waited.tileZ,
+        names: planSymbolNames(map),
+        hidden: (frame.dataset.insetHiddenCountries || '').split('|').filter(Boolean),
+        country: ${JSON.stringify(country)},
+        markerVisible: !!(marker && marker.getClientRects().length > 0),
+        showsSame: await planCanadaShowsSame(map),
+        placement: await (async () => {
+          if (!${canadaWait ? 'true' : 'false'} || ${JSON.stringify(country)} !== 'Canada' || !(${zoom} < 3)) return planLabelPlacement(map);
+          const canada = await planWaitCanada(map, ${zoom});
+          if (!canada.ready) throw new Error('plan label canada');
+          return canada.placement;
+        })(),
+      };
+    })()`);
+    if (!row || row.ok !== true || row.cameraOk !== true) {
+      throw new Error(`plan label camera ${country} ${zoom} ${JSON.stringify(row)}`);
+    }
+    return await body(row);
+  } finally {
+    await releasePlanCamera(send);
+  }
+}
+
+function planPairDir() {
+  const surface = process.env.OPD_VERIFY_SURFACE || 'desktop';
+  const size = process.env.OPD_VERIFY_VIEWPORT || 'default';
+  return resolve(process.env.OPD_VERIFY_PLAN_PAIRS || resolve(tmpdir(), 'opd-plan-pairs'), `${surface}-${size}`);
+}
+
+function recordMainCheckout() {
+  const checkout = process.env.OPD_VERIFY_MAIN_CHECKOUT;
+  if (!checkout) throw new Error('plan label main capture needs OPD_VERIFY_MAIN_CHECKOUT');
+  const sha = execFileSync('git', ['-C', checkout, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error('plan label main checkout has no commit');
+  const dir = planPairDir();
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(resolve(dir, 'main-sha.txt'), `${sha}\n`);
+  console.log(`plan labels main ${sha} ${dir}`);
+  return sha;
+}
+
+function writePlanPng(file, bytes) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      writeFileSync(file, bytes);
+      return;
+    } catch (error) {
+      if (!error || error.code !== 'EAGAIN' || attempt === 4) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50 * (attempt + 1));
+    }
+  }
+}
+
+function savePlanPair(name, head, main) {
+  const dir = planPairDir();
+  mkdirSync(dir, { recursive: true });
+  if (head && head.png) writePlanPng(resolve(dir, `${name}-head.png`), head.png);
+  if (main && main.png) writePlanPng(resolve(dir, `${name}-main.png`), main.png);
+}
+
+async function leaseMainFixture(url, home) {
+  const state = JSON.parse(readFileSync(resolve(home, 'state.json'), 'utf8'));
+  const token = randomBytes(8).toString('hex');
+  const dir = resolve(home, 'fixtures');
+  const registered = await fetch(`${url}/api/verify/fixtures`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-opd-verify-registry': state.registrySecret },
+    body: JSON.stringify({ token, dir, pid: process.pid }),
+  });
+  if (!registered.ok) throw new Error(`plan label main register ${registered.status}`);
+  const secret = (await registered.json()).secret;
+  return { token, secret, url };
+}
+
+async function releaseMainLease(lease) {
+  if (!lease) return;
+  const home = process.env.OPD_VERIFY_MAIN_HOME;
+  const state = JSON.parse(readFileSync(resolve(home, 'state.json'), 'utf8'));
+  await fetch(`${lease.url}/api/verify/fixtures`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-opd-verify-registry': state.registrySecret },
+    body: JSON.stringify({ token: lease.token, secret: lease.secret, forget: true }),
+  }).catch(() => {});
+}
+
+async function openPlanMain(send) {
+  const url = process.env.OPD_VERIFY_MAIN_URL;
+  const home = process.env.OPD_VERIFY_MAIN_HOME;
+  if (!url || !home) throw new Error('plan label main capture needs OPD_VERIFY_MAIN_URL and OPD_VERIFY_MAIN_HOME');
+  const lease = await leaseMainFixture(url, home);
+  let close = async () => {};
+  let handed = false;
+  try {
+  const metrics = await evaluate(send, '({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio })');
+  let twin;
+  const cartoDark = [];
+  if (send.session) {
+    const measured = {
+      ...send.session.descriptor,
+      viewport: { width: metrics.w, height: metrics.h },
+      screen: { ...(send.session.descriptor.screen || {}), width: metrics.w, height: metrics.h },
+      deviceScaleFactor: metrics.dpr,
+    };
+    const opened = await openDeviceContext(send.session.browser, {
+      ...send.session.spec,
+      viewport: { width: metrics.w, height: metrics.h },
+      deviceScaleFactor: metrics.dpr,
+    }, {
+      baseUrl: url,
+      fixtureToken: lease.token,
+      initScripts: [...(send.session.initScripts || [])],
+      baseDescriptor: measured,
+      requestHandlers: [(request) => noteRequest(cartoDark, request.url())],
+    });
+    twin = playwrightSend(opened);
+    twin.cartoDark = cartoDark;
+    close = async () => { await opened.context.close(); };
+  } else if (send.debugPort) {
+    const port = 20000 + Math.floor(Math.random() * 2000);
+    const pid = startChrome(resolve(tmpdir(), `opd-main-chrome-${port}`), port);
+    const conn = await connectCdp(port);
+    twin = conn.send;
+    twin.cartoDark = cartoDark;
+    conn.on('Network.requestWillBeSent', (params) => noteRequest(cartoDark, params.request && params.request.url));
+    await twin('Network.enable');
+    await twin('Emulation.setDeviceMetricsOverride', {
+      width: metrics.w,
+      height: metrics.h,
+      deviceScaleFactor: metrics.dpr,
+      mobile: false,
+    });
+    await pinFixtureCookie(twin, url, lease.token);
+    close = async () => {
+      conn.close();
+      try { process.kill(pid, 'SIGTERM'); } catch { /* the twin browser already exited */ }
+      untrackBrowser(pid);
+    };
+  } else {
+    throw new Error('plan label main capture has no browser session');
+  }
+  try {
+    await openApp(twin, url, 0);
+    await click(twin, '#tab-iss');
+    await waitForPip(twin, 'plan', 'main plan', 30000);
+    const twinMetrics = await evaluate(twin, '({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio })');
+    if (twinMetrics.w !== metrics.w || twinMetrics.h !== metrics.h || twinMetrics.dpr !== metrics.dpr) {
+      throw new Error(`plan label main size ${JSON.stringify({ head: metrics, main: twinMetrics })}`);
+    }
+    twin.closeMain = close;
+    twin.lease = lease;
+    handed = true;
+    return twin;
+  } catch (error) {
+    await close().catch(() => {});
+    throw error;
+  }
+  } finally {
+    if (!handed) await releaseMainLease(lease);
+  }
+}
+
+async function forgetMainLease(twin) {
+  if (!twin || !twin.lease) return;
+  const home = process.env.OPD_VERIFY_MAIN_HOME;
+  const state = JSON.parse(readFileSync(resolve(home, 'state.json'), 'utf8'));
+  await fetch(`${twin.lease.url}/api/verify/fixtures`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-opd-verify-registry': state.registrySecret },
+    body: JSON.stringify({ token: twin.lease.token, secret: twin.lease.secret, forget: true }),
+  }).catch(() => {});
+}
+
+async function capturePlanCanvas(send) {
+  const box = await evaluate(send, `(async () => {
+    ${PLAN_TILE_HELPERS}
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    const canvas = frame && frame.querySelector('canvas');
+    const map = frame && frame.__opdTrackInset;
+    if (!canvas || !map) return null;
+    if (map.__opdRasterCamera && !planCameraMatches(map, map.__opdRasterCamera).ok) map.jumpTo(map.__opdRasterCamera);
+    for (const id of ['inset-track', 'inset-night']) {
+      if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', 'none');
+    }
+    const marker = frame.querySelector('.maplibregl-marker');
+    if (marker) marker.style.visibility = 'hidden';
+    for (const node of document.querySelectorAll('[data-iss-clock], [data-iss-edition]')) node.style.visibility = 'hidden';
+    const waited = await planWaitTiles(map, true);
+    if (!waited.tilesOk) return { ok: false, detail: waited.detail };
+    const rect = canvas.getBoundingClientRect();
+    const ignore = [];
+    const chrome = [];
+    const take = (node, bucket) => {
+      const area = node.getBoundingClientRect();
+      if (area.width < 2 || area.height < 2) return;
+      if (area.right <= rect.left || area.left >= rect.right || area.bottom <= rect.top || area.top >= rect.bottom) return;
+      bucket.push({ left: area.left - rect.left, top: area.top - rect.top, right: area.right - rect.left, bottom: area.bottom - rect.top });
+    };
+    for (const node of document.querySelectorAll('[data-iss-clock], [data-iss-edition]')) take(node, ignore);
+    for (const node of document.querySelectorAll('[data-iss-controls], [data-iss-split-chrome], .maplibregl-ctrl')) take(node, chrome);
+    return { ok: true, x: rect.x, y: rect.y, width: rect.width, height: rect.height, ignore, chrome };
+  })()`);
+  if (box && box.ok === false) {
+    throw new Error(`plan label tiles ${JSON.stringify({ ok: false, check: 'tiles', reason: 'paint', detail: box.detail })}`);
+  }
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  if (!box || !(box.width > 2) || !(box.height > 2)) return null;
+  const image = await send('Page.captureScreenshot', {
+    format: 'png',
+    clip: { x: box.x, y: box.y, width: box.width, height: box.height, scale: 1 },
+  });
+  const png = Buffer.from(image.data, 'base64');
+  const decoded = decodePng(png);
+  await evaluate(send, `(() => {
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    const map = frame && frame.__opdTrackInset;
+    if (!map) return null;
+    for (const id of ['inset-track', 'inset-night']) {
+      if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', 'visible');
+    }
+    const marker = frame.querySelector('.maplibregl-marker');
+    if (marker) marker.style.visibility = '';
+    for (const node of document.querySelectorAll('[data-iss-clock], [data-iss-edition]')) node.style.visibility = '';
+    return { ok: true };
+  })()`);
+  if (!decoded) return null;
+  const scaleX = decoded.width / box.width;
+  const scaleY = decoded.height / box.height;
+  const scaleRect = (rect) => ({
+    left: rect.left * scaleX,
+    top: rect.top * scaleY,
+    right: rect.right * scaleX,
+    bottom: rect.bottom * scaleY,
+  });
+  return {
+    ...decoded,
+    png,
+    ignore: (box.ignore || []).map(scaleRect),
+    chrome: (box.chrome || []).map(scaleRect),
+  };
+}
+
+function visiblePlanNames(row) {
+  const hidden = new Set(row.hidden || []);
+  return (row.names || []).filter((name) => !hidden.has(name));
+}
+
+function shownLabelNames(row) {
+  if (row.headPlacement && Array.isArray(row.headPlacement.labels)) {
+    return row.headPlacement.labels
+      .filter((label) => label && Number(label.opacity) > 0 && typeof label.name === 'string' && label.name)
+      .map((label) => label.name);
+  }
+  return visiblePlanNames(row);
+}
+
+/** Tiles, country identity, occurrence count, and main parity. Each check throws on its own. */
+export function assertPlanLabelChecks(row) {
+  const tiles = tilesLoaded(row);
+  if (!tiles.ok) throw new Error(`plan label tiles ${JSON.stringify(tiles)}`);
+  const names = shownLabelNames(row);
+  const identity = countryIdentity(names, row.country);
+  if (!identity.ok) throw new Error(`plan label country ${JSON.stringify(identity)}`);
+  const zoom = Number(row.zoom);
+  const contract = row.contract || planCameraContract(row.country, zoom, row.center);
+  if (Array.isArray(contract.expectedNames) && contract.expectedNames.length > 0 && names.length === 0) {
+    throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, expected: contract.expectedNames })}`);
+  }
+  if (Array.isArray(contract.expectedNames) && contract.expectedNames.includes(row.country) && !names.includes(row.country)) {
+    throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, expected: contract.expectedNames })}`);
+  }
+  if (zoom >= 3) {
+    const count = occurrenceCount(names.length, 0);
+    if (!count.ok) throw new Error(`plan label count ${JSON.stringify({ ...count, zoom, country: row.country, names })}`);
+    const parity = matchesMain(names, []);
+    if (!parity.ok) throw new Error(`plan label parity ${JSON.stringify(parity)}`);
+    const pixels = pairedRasterNames(row.headShot, row.mainShot, { ignoreRects: row.ignoreRects || [] });
+    if (!pixels.ok) throw new Error(`plan label raster ${JSON.stringify({ country: row.country, zoom, reason: pixels.reason, ratio: pixels.ratio })}`);
+    const regions = imageryLabelRegions({ country: row.country, zoom, center: row.center, viewport: row.viewport, width: row.headShot && row.headShot.width, height: row.headShot && row.headShot.height, head: row.headShot, main: row.mainShot });
+    if (regions.length) {
+      const region = imageryRegionDiff(row.headShot, row.mainShot, regions);
+      if (!region.ok) throw new Error(`plan label region ${JSON.stringify({ country: row.country, zoom, reason: region.reason, box: region.box })}`);
+    }
+    const placed = placementVerdict(row, contract);
+    if (!placed.ok) throw new Error(`plan label place ${JSON.stringify({ country: row.country, zoom, ...placed })}`);
+    const raster = rasterNameVerdict(row, contract);
+    if (!raster.ok) throw new Error(`plan label raster-name ${JSON.stringify({ country: row.country, zoom, ...raster })}`);
+    return { tiles, identity, count, parity, raster: pixels, placed, rasterName: raster };
+  }
+  const lowContract = contract;
+  if (lowContract.raster || (row.headPlacement && row.mainPlacement)) {
+    const placed = placementVerdict(row, lowContract);
+    if (!placed.ok) throw new Error(`plan label place ${JSON.stringify({ country: row.country, zoom, ...placed })}`);
+    const raster = rasterNameVerdict(row, lowContract);
+    if (!raster.ok) throw new Error(`plan label raster-name ${JSON.stringify({ country: row.country, zoom, ...raster })}`);
+    return { tiles, identity, placed, rasterName: raster };
+  }
+  return { tiles, identity };
+}
+
+function placementVerdict(row, contract) {
+  if (!row.headPlacement || !row.mainPlacement) return { ok: true, skipped: true };
+  return labelScreenVerdict({
+    head: row.headPlacement,
+    main: row.mainPlacement,
+    expectedNames: contract.expectedNames,
+    hide: contract.hide,
+  });
+}
+
+function screenshotLabelBox(row, position) {
+  const canvas = row.headPlacement && row.headPlacement.canvas;
+  const shot = row.headShot;
+  if (!position || !canvas || !shot) return null;
+  const clientW = canvas.clientWidth || (canvas.right - canvas.left);
+  const clientH = canvas.clientHeight || (canvas.bottom - canvas.top);
+  const scaleX = clientW ? shot.width / clientW : 1;
+  const scaleY = clientH ? shot.height / clientH : 1;
+  return {
+    left: (position.left - canvas.left) * scaleX,
+    top: (position.top - canvas.top) * scaleY,
+    right: (position.right - canvas.left) * scaleX,
+    bottom: (position.bottom - canvas.top) * scaleY,
+  };
+}
+
+function canadaShotBox(row) {
+  const shot = row.headShot;
+  if (!shot || !Array.isArray(row.center) || !Number.isFinite(Number(row.zoom))) return null;
+  const view = imageryViewport(row.center, row.zoom, shot.width, shot.height);
+  const world = 512 * (2 ** Number(row.zoom));
+  const ink = [0.205078125, 0.313476562, 0.236816406, 0.317871094];
+  return {
+    left: view.origin.x + ink[0] * world,
+    top: view.origin.y + ink[1] * world,
+    right: view.origin.x + ink[2] * world,
+    bottom: view.origin.y + ink[3] * world,
+  };
+}
+
+function ocrLabelText(row, position) {
+  const local = canadaShotBox(row) || screenshotLabelBox(row, position);
+  if (!local || !(local.right > local.left) || !(local.bottom > local.top)) return ocrFrame(row.headShot.png).text;
+  return ocrFrameBox(row.headShot.png, local).text;
+}
+
+function rasterNameVerdict(row, contract) {
+  if (!contract.raster) return { ok: true, skipped: true };
+  const hasFrame = !!(row.headShot && row.headShot.png);
+  const hasText = row.rasterText != null;
+  if (!hasFrame && !hasText) return { ok: false, reason: 'raster', declared: contract.raster };
+  const position = row.rasterPosition !== undefined
+    ? row.rasterPosition
+    : (row.headPlacement && row.headPlacement.rasterBox) || null;
+  const text = hasText ? row.rasterText : ocrLabelText(row, position);
+  const opacity = row.labelOpacity != null
+    ? row.labelOpacity
+    : (row.headPlacement && row.headPlacement.opacity ? row.headPlacement.opacity[row.country] : null);
+  return rasterDuplicateVerdict({ declared: contract.raster, text, opacity, position });
+}
+
+function assertLowZoomNames(row) {
+  const tiles = tilesLoaded(row);
+  if (!tiles.ok) throw new Error(`plan label tiles ${JSON.stringify(tiles)}`);
+  const names = shownLabelNames(row).map((name) => {
+    const found = PLAN_COUNTRIES.find((entry) => entry.name.toLowerCase() === String(name).toLowerCase());
+    return found ? found.name : name;
+  });
+  const identity = countryIdentity(names, row.country);
+  if (!identity.ok) throw new Error(`plan label country ${JSON.stringify(identity)}`);
+  const zoom = Number(row.zoom);
+  const contract = row.contract || planCameraContract(row.country, zoom, row.center);
+  if (Array.isArray(contract.expectedNames) && contract.expectedNames.length > 0 && names.length === 0) {
+    throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, expected: contract.expectedNames })}`);
+  }
+  if (Array.isArray(contract.expectedNames) && contract.expectedNames.includes(row.country) && !names.includes(row.country)) {
+    throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, expected: contract.expectedNames })}`);
+  }
+  if (Array.isArray(row.mainNames)) {
+    const fold = (list) => (list || [])
+      .filter((name) => typeof name === 'string' && name)
+      .filter((name) => !(contract.hide && name.toLowerCase() === String(contract.hide).toLowerCase()))
+      .filter((name) => name.toLowerCase() !== 'canada')
+      .map((name) => name.toLowerCase())
+      .sort()
+      .join('|');
+    if (fold(names) !== fold(row.mainNames)) {
+      throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, main: row.mainNames, showsSame: row.showsSame, hidden: row.hidden, placed: (row.placement && row.placement.labels || []).map((label) => label && label.name) })}`);
+    }
+  } else if (names.length === 0 && row.country !== 'Canada') {
+    throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, expected: contract.expectedNames })}`);
+  }
+  return { tiles, identity, names };
+}
+
+/** A sweep row that did not reach its camera is a failure, including a zoom that was never checked. */
+export function acceptPlanSweepRow(row) {
+  if (!row || row.cameraOk !== true || !Number.isFinite(Number(row.requestedZoom))) {
+    throw new Error(`plan label camera ${JSON.stringify({ zoom: row && row.zoom, requested: row && row.requestedZoom, center: row && row.center, cameraOk: row && row.cameraOk })}`);
+  }
+  if (Number(row.requestedZoom) < 3) {
+    assertLowZoomNames(row);
+    return { below: true };
+  }
+  return { below: false };
+}
+
+async function compareLockedPair(headSend, mainSend, lng, lat, zoom, country) {
+  const hideWait = process.env.OPD_VERIFY_CANADA_WAIT !== '0';
+  const head = await withLockedPlan(headSend, lng, lat, zoom, country, async (row) => ({ row, shot: await capturePlanCanvas(headSend) }), hideWait);
+  const main = await withLockedPlan(mainSend, lng, lat, zoom, country, async (row) => ({ row, shot: await capturePlanCanvas(mainSend) }), false);
+  savePlanPair(`${country}-z${zoom}-${lng}-${lat}`, head.shot, main.shot);
+  const contract = planContractForDrive(country, zoom, [lng, lat], process.env.OPD_VERIFY_CANADA_WAIT !== '0', head.row.showsSame === true);
+  const verdict = assertPlanLabelChecks({
+    ...head.row,
+    headShot: head.shot,
+    mainShot: main.shot,
+    headPlacement: head.row.placement,
+    mainPlacement: main.row.placement,
+    contract,
+    labelOpacity: head.row.placement && head.row.placement.opacity ? head.row.placement.opacity[country] : null,
+    ignoreRects: head.shot ? head.shot.ignore : [],
+    chromeRects: head.shot ? head.shot.chrome : [],
+    mainIgnoreRects: main.shot ? main.shot.ignore : [],
+    mainChromeRects: main.shot ? main.shot.chrome : [],
+  });
+  return { row: head.row, verdict };
+}
+
+export async function proveFractionalPlanLabels(send, progress = () => {}) {
+  const zooms = countrySweepZooms();
+  const expectedBelow = zooms.filter((zoom) => zoom < 3).length * PLAN_COUNTRIES.length;
+  let mainSend = null;
+  let belowZ3 = 0;
+  try {
+    const fitted = await coldPlanTileCaches(send);
+    if (!fitted.inside || !fitted.inside.includes('Australia')) {
+      throw new Error(`plan label fitted ${JSON.stringify({ zoom: fitted.zoom, tileZ: fitted.tileZ, inside: fitted.inside, names: fitted.names })}`);
+    }
+    progress({ phase: 'cold', tilesOk: fitted.tilesOk, zoom: fitted.zoom, stats: { ...rasterOcrStats } });
+    console.log(`plan labels cold tilesOk:${fitted.tilesOk} fitted:${fitted.zoom}`);
+    const audited = auditRasterLevels(loadCountryRasterLevels());
+    if (!audited.ok) throw new Error(`plan label raster audit ${JSON.stringify(audited)}`);
+    for (const country of fitted.inside) {
+      const fittedRow = { ...fitted, country, names: fitted.names, hidden: fitted.hidden || [] };
+      if (Number(fitted.zoom) < 3) assertLowZoomNames(fittedRow);
+      else assertPlanLabelChecks(fittedRow);
+    }
+    recordMainCheckout();
+    mainSend = await openPlanMain(send);
+    const rows = [];
+    for (const zoom of [1.5, 2.99, 3, 3.01]) {
+      const paired = await compareLockedPair(send, mainSend, -100, 50, zoom, 'Canada');
+      rows.push(paired.row);
+    }
+    const fractional = { counts: rows.map(row => ({ zoom: row.zoom, count: row.names.length })) };
+    const sweepNotes = [];
+    for (const country of PLAN_COUNTRIES) {
+      await focusMapPage(send);
+      progress({ phase: 'sampling', country: country.name, samples: zooms.length, stats: { ...rasterOcrStats } });
+      console.log(`plan labels sampling ${country.name}:${zooms.length}`);
+      const swept = await evaluate(send, `(async () => {
+        ${PLAN_TILE_HELPERS}
+        const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+        const map = frame && frame.__opdTrackInset;
+        if (!map || typeof map.jumpTo !== 'function') return { ok: false, reason: 'map' };
+        planHold(map);
+        const rows = [];
+        for (const zoom of ${JSON.stringify(zooms)}) {
+          const camera = { center: [${country.lng}, ${country.lat}], zoom };
+          map.jumpTo(camera);
+          const waited = await planWaitTiles(map);
+          const seen = planCameraMatches(map, camera);
+          const settled = await planCanadaSettled(map);
+          if (settled.changed) await planWaitTiles(map);
+          const showsSame = settled.showsSame;
+          rows.push({
+            tilesOk: waited.tilesOk,
+            detail: waited.detail,
+            urls: waited.urls,
+            viewport: planViewport(map),
+            requestedZoom: zoom,
+            cameraOk: seen.ok,
+            center: seen.center,
+            zoom: seen.zoom,
+            tileZ: waited.tileZ,
+            placement: planLabelPlacement(map),
+            names: planSymbolNames(map),
+            showsSame,
+            hidden: (frame.dataset.insetHiddenCountries || '').split('|').filter(Boolean),
+            country: ${JSON.stringify(country.name)},
+            centered: true,
+            covers: planLayerCovers(map, ${JSON.stringify(country.name)}, map.getZoom()),
+          });
+        }
+        return { ok: true, rows };
+      })()`);
+      if (!swept || swept.ok !== true || !swept.rows || swept.rows.length !== zooms.length) {
+        throw new Error(`plan label skipped ${country.name} ${swept && swept.rows ? swept.rows.length : 0}/${zooms.length}`);
+      }
+      const mainSwept = await evaluate(mainSend, `(async () => {
+        ${PLAN_TILE_HELPERS}
+        const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+        const map = frame && frame.__opdTrackInset;
+        if (!map || typeof map.jumpTo !== 'function') return { ok: false, reason: 'map' };
+        planHold(map);
+        const rows = [];
+        for (const zoom of ${JSON.stringify(zooms)}) {
+          const camera = { center: [${country.lng}, ${country.lat}], zoom };
+          map.jumpTo(camera);
+          const waited = await planWaitTiles(map);
+          rows.push({ names: planSymbolNames(map), tilesOk: waited.tilesOk });
+        }
+        return { ok: true, rows };
+      })()`);
+      if (!mainSwept || mainSwept.ok !== true || !mainSwept.rows || mainSwept.rows.length !== zooms.length) {
+        throw new Error(`plan label main names ${country.name}`);
+      }
+      for (let index = 0; index < swept.rows.length; index += 1) {
+        swept.rows[index].mainNames = mainSwept.rows[index].names;
+        const accepted = acceptPlanSweepRow(swept.rows[index]);
+        if (accepted.below) belowZ3 += 1;
+        if (index % 10 === 0 || index === swept.rows.length - 1) progress({ phase: 'verdicts', country: country.name, completed: index + 1, samples: swept.rows.length, stats: { ...rasterOcrStats } });
+      }
+      for (const zoom of zooms.filter((zoom) => zoom >= 3)) {
+        const paired = await compareLockedPair(send, mainSend, country.lng, country.lat, zoom, country.name);
+        if (paired.row && paired.row.repaintMs != null) console.log(`plan labels repaint ${country.name} z${zoom} ${paired.row.repaintMs}ms`);
+      }
+      sweepNotes.push(`${country.name}:${swept.rows.length}`);
+      console.log(`plan labels sweep ${country.name}:${swept.rows.length} OCR:${rasterOcrStats.calls}`);
+    }
+    const offCentroid = [
+      { country: 'France', center: [-0.33, 46], zooms: [5.5, 6.5, 6.51], once: true },
+      { country: 'Australia', center: [134, -25], zooms: [6.5, 6.51], once: true },
+      { country: 'Australia', center: [131.772, -25], zooms: [5.5], once: true },
+      { country: 'Australia', center: [132.723, -25], zooms: [5.5], once: true },
+      { country: 'Argentina', center: [-63.36, -34], zooms: [6.5], once: true },
+      { country: 'India', center: [79, 22], zooms: [6.5, 6.51], once: true },
+      { country: 'Nigeria', center: [8, 10], zooms: [6.5], once: true },
+      { country: 'Nigeria', center: [9, 10], zooms: [6.5, 6.51], once: true },
+      { country: 'Nigeria', center: [8.5, 11], zooms: [6.5, 6.51], once: true },
+      { country: 'Nigeria', center: [8.6386, 10], zooms: [6.5, 6.51], once: true },
+      { country: 'Kenya', center: [37.5, 2], zooms: [6.5, 6.51], once: true },
+      { country: 'Kenya', center: [37, 1], zooms: [6.5, 6.51], once: true },
+      { country: 'Kenya', center: [38.3, 1], zooms: [6.5, 6.51], once: true },
+      { country: 'Kenya', center: [38.15, 1.15], zooms: [6.5, 6.51], once: true },
+      { country: 'Kenya', center: [37.99, 0.95], zooms: [6.5, 6.51], once: true },
+    ];
+    for (const camera of offCentroid) {
+      for (const zoom of camera.zooms) {
+        const contract = planCameraContract(camera.country, zoom, camera.center);
+        const paired = await withLockedPlan(send, camera.center[0], camera.center[1], zoom, camera.country, async (row) => {
+          if (!row.markerVisible) throw new Error(`plan label marker ${camera.country} ${zoom}`);
+          const shot = await capturePlanCanvas(send);
+          const main = await withLockedPlan(mainSend, camera.center[0], camera.center[1], zoom, camera.country, async (mainRow) => ({ row: mainRow, shot: await capturePlanCanvas(mainSend) }));
+          savePlanPair(`${camera.country}-z${zoom}-${camera.center[0]}-${camera.center[1]}`, shot, main.shot);
+          assertPlanLabelChecks({
+            ...row,
+            headShot: shot,
+            mainShot: main.shot,
+            headPlacement: row.placement,
+            mainPlacement: main.row.placement,
+            contract,
+            labelOpacity: row.placement && row.placement.opacity ? row.placement.opacity[camera.country] : null,
+            ignoreRects: shot ? shot.ignore : [],
+            chromeRects: shot ? shot.chrome : [],
+            mainIgnoreRects: main.shot ? main.shot.ignore : [],
+            mainChromeRects: main.shot ? main.shot.chrome : [],
+          });
+          return row;
+        });
+        await releasePlanCamera(send);
+        await releasePlanCamera(mainSend);
+        if (paired.repaintMs != null) console.log(`plan labels repaint ${camera.country} z${zoom} ${paired.repaintMs}ms`);
+        sweepNotes.push(`${camera.country}@${zoom}`);
+        console.log(`plan labels off-centroid ${camera.country} ${zoom} tiles:${paired.tilesOk} symbols:${(paired.names || []).length}`);
+      }
+    }
+    await releasePlanCamera(send);
+    if (belowZ3 !== expectedBelow) throw new Error(`plan label skipped below z3 ${belowZ3}/${expectedBelow}`);
+    const france = await readPlanLabelZoom(send, 1.2, 2, 46);
+    if (!france.tilesOk || Math.abs(france.zoom - 1.2) > 0.02) throw new Error(`plan label camera ${JSON.stringify({ zoom: france.zoom, detail: france.detail })}`);
+    const franceKept = keptCountrySymbol(france.names, 'France');
+    if (!franceKept.ok) throw new Error(`plan label France ${JSON.stringify(franceKept)}`);
+    const japan = await readPlanLabelZoom(send, 1.2, 138, 36);
+    if (!japan.tilesOk || Math.abs(japan.zoom - 1.2) > 0.02) throw new Error(`plan label camera ${JSON.stringify({ zoom: japan.zoom, detail: japan.detail })}`);
+    const japanKept = keptCountrySymbol(japan.names, 'Japan');
+    if (!japanKept.ok) throw new Error(`plan label Japan ${JSON.stringify(japanKept)}`);
+    console.log(`plan labels belowZ3:${belowZ3}`);
+    return `tilesOk:true belowZ3:${belowZ3} OCR ${JSON.stringify(rasterOcrStats)} caches cold fitted ${fitted.zoom.toFixed(3)} z${fitted.tileZ} ${sweepNotes.join(' ')} ${fractional.counts.map((row) => `${row.zoom}:${row.count}`).join(' ')}`;
+  } finally {
+    try { await releasePlanCamera(send); } catch { /* the page may already be gone */ }
+    if (mainSend) {
+      try { await mainSend.closeMain(); } catch { /* the twin page may already be gone */ }
+      try { await forgetMainLease(mainSend); } catch { /* the main proxy may already be gone */ }
+    }
+    await restorePlanLabelCamera(send);
+  }
+}
+
 async function proveIssFullscreen(send, evidenceDir, viewport) {
   const phone = viewport.mobile && viewport.width < 600;
   if (phone && !await evaluate(send, ISS_FULLSCREEN_STRIP)) throw new Error('iss fullscreen request methods still present');
@@ -6534,8 +7825,10 @@ async function proveIssFullscreen(send, evidenceDir, viewport) {
     }
     await pressIssFullscreen(send);
     const back = await waitFor(send, ISS_FULLSCREEN_OFF, 'iss fullscreen exit by button', 10000);
+    let planSymbols = '';
     if (insetViewportFits(viewport.width, viewport.height)) {
       await waitForPip(send, 'plan', 'plan inset back after fullscreen', 20000);
+      planSymbols = await proveFractionalPlanLabels(send);
     }
     if (!sameFrame(idle, back)) throw new Error(`iss frame after fullscreen ${JSON.stringify(back)} is not ${JSON.stringify(idle)}`);
     await click(send, '[data-iss-preset="nadir"]');
@@ -6579,7 +7872,8 @@ async function proveIssFullscreen(send, evidenceDir, viewport) {
       10000,
     );
     const followed = viewport.mobile ? '' : ', 2x device drew at 1.5x';
-    return `sheet press, ${expected} ${held.width}x${held.height} at ${held.ratio}x${followed}, labels ${beforePlaces} then ${held.places}, boxes ${held.telemetry}x${held.control}, telemetry open ${telemetryOpen}, split ${split}, Escape kept aim`;
+    const symbolNote = planSymbols ? `, plan symbols ${planSymbols}` : '';
+    return `sheet press, ${expected} ${held.width}x${held.height} at ${held.ratio}x${followed}, labels ${beforePlaces} then ${held.places}, boxes ${held.telemetry}x${held.control}, telemetry open ${telemetryOpen}, split ${split}${symbolNote}, Escape kept aim`;
   } finally {
     if (phone) await evaluate(send, ISS_FULLSCREEN_RESTORE);
   }
@@ -7170,6 +8464,54 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
   return `${held.join(', ')}; restored ${restored.stage}x${restored.frame} scroll ${restored.scrollHeight}/${restored.clientHeight} controls ${restored.controlsBottom} scene ${restored.sceneBottom}`;
 }
 
+export async function settleCatalogFreeze(catalog, freeze) {
+  if (typeof catalog.settledPath !== 'function') return { ok: false, reason: 'catalog', path: '' };
+  const path = await catalog.settledPath() || '';
+  const frozen = catalogFreezeTime(null, path);
+  if (!(frozen > 0)) return { ok: false, reason: 'catalog', path };
+  freeze(frozen);
+  return { ok: true, path, frozen };
+}
+
+export function nextPinFreeze(lastPath, path) {
+  const frozen = catalogFreezeTime(null, path);
+  if (!(frozen > 0)) return { ok: false, reason: 'catalog', path: path || '' };
+  return { ok: true, path, frozen, refroze: path !== lastPath };
+}
+
+export async function pollPinnedCatalog({ readStep, sleep, now, deadlineMs }) {
+  const started = now();
+  let lastPath = '';
+  let last = null;
+  while (now() - started < deadlineMs) {
+    const remaining = deadlineMs - (now() - started);
+    if (remaining <= 0) break;
+    const step = await readStep(lastPath, remaining);
+    if (step?.expired || now() - started >= deadlineMs) break;
+    if (!step || step.ok === false || !(step.frozen > 0)) {
+      return { ok: false, reason: 'catalog', path: step && step.path || '' };
+    }
+    if (step.path !== lastPath) {
+      if (step.refroze !== true) return { ok: false, reason: 'stale', path: step.path };
+      lastPath = step.path;
+    }
+    last = step.pin;
+    if (now() - started >= deadlineMs) break;
+    if (last && last.ok === true) return last;
+    const left = deadlineMs - (now() - started);
+    if (left <= 0) break;
+    await sleep(Math.min(250, left));
+  }
+  throw new Error(`iss all launches pin in frame timed out. Last value: ${JSON.stringify(last)}`);
+}
+
+export function catalogFreezeTime(_entries, acceptedPath) {
+  const match = String(acceptedPath || '').match(/(?:^|\/)launch\/catalog\/v\/c(\d+)/);
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
 export function fixtureInstant(evidenceDir, fixtureDir) {
   if (fixtureDir) {
     for (const [name, key] of [['catalog-clock.json', 'anchor'], ['meta.json', 'now']]) {
@@ -7420,17 +8762,18 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
     send,
     `(() => {
       const picker = document.querySelector('[data-iss-launch-picker]');
-      if (!(picker instanceof HTMLSelectElement) || picker.value !== '') return null;
+      if (!(picker instanceof HTMLSelectElement)) return { ok: false, reason: 'picker' };
       const groups = [...picker.querySelectorAll('optgroup')].map((entry) => entry.label);
-      for (const name of ['Shot', 'Likely', 'Watch', 'All launches']) {
-        if (!groups.includes(name)) return null;
-      }
       const closed = picker.selectedOptions[0]?.textContent || '';
-      if (!/^Verify Ascent · Shot · [A-Z][a-z]{2} \\d{1,2}$/.test(closed)) return null;
+      if (picker.value !== '') return { ok: false, reason: 'value', value: picker.value, closed, groups };
+      for (const name of ['Shot', 'Likely', 'Watch', 'All launches']) {
+        if (!groups.includes(name)) return { ok: false, reason: 'groups', groups, closed };
+      }
+      if (!/^Verify Ascent · Shot · [A-Z][a-z]{2} \\d{1,2}$/.test(closed)) return { ok: false, reason: 'label', closed, groups };
       return { ok: true, closed };
     })()`,
     'iss tier groups',
-    20000,
+    75000,
   );
   const horizon = await waitFor(
     send,
@@ -7469,38 +8812,58 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
     15000,
   );
   await shot(send, evidenceDir, 'iss-all-launches');
-  const loadedAnchor = await evaluate(send, `(() => {
-    const entries = performance.getEntriesByType('resource');
-    let anchor = 0;
-    for (const entry of entries) {
-      const match = String(entry.name).match(/\\/launch\\/catalog\\/v\\/c(\\d+)/);
-      if (match) anchor = Number(match[1]);
+  const freezeAccepted = async () => evaluate(send, `(async () => {
+    const { launchCatalog } = await import('/src/launch-catalog.ts');
+    if (typeof launchCatalog.acceptedPath !== 'function' && typeof launchCatalog.settledPath !== 'function') {
+      return { ok: false, reason: 'catalog', path: '' };
     }
-    return anchor > 0 ? anchor : null;
+    const catalogFreezeTime = ${catalogFreezeTime.toString()};
+    const settleCatalogFreeze = ${settleCatalogFreeze.toString()};
+    const freezeFixtureClock = ${freezeFixtureClock.toString()};
+    return settleCatalogFreeze(launchCatalog, freezeFixtureClock);
   })()`);
-  const frozen = loadedAnchor || fixtureInstant(evidenceDir, send.fixtureDir);
-  await evaluate(send, `(${freezeFixtureClock.toString()})(${frozen})`);
+  const firstFreeze = await freezeAccepted();
+  if (!firstFreeze?.ok) throw new Error(`iss catalog freeze ${JSON.stringify(firstFreeze)}`);
   try {
   await click(send, '[data-iss-preset="nadir"]');
-  await waitFor(
-    send,
-    `(() => {
-      const pressed = document.querySelector('[data-iss-preset="nadir"]')?.getAttribute('aria-pressed') === 'true';
-      const card = document.querySelector('[data-iss-launch-card]');
-      const name = card?.querySelector('[data-iss-launch-name]')?.textContent ?? null;
-      const visibility = card?.querySelector('[data-iss-launch-visibility]')?.textContent ?? null;
-      const pin = !!document.querySelector('.iss-launch-pin');
-      const edge = !!document.querySelector('[data-iss-launch-edge]');
-      const look = document.querySelector('[data-iss-launch-label]')?.textContent ?? null;
-      const status = document.querySelector('[data-iss-status]')?.textContent ?? null;
-      if (!pressed || name !== 'Verify Horizon' || !pin) {
-        return { pressed, name, visibility, pin, edge, look, status: status && status.slice(0, 180) };
-      }
-      return { ok: true };
-    })()`,
-    'iss all launches pin in frame',
-    15000,
-  );
+  const pinFreeze = await freezeAccepted();
+  if (!pinFreeze?.ok) throw new Error(`iss catalog freeze ${JSON.stringify(pinFreeze)}`);
+  const pinned = await pollPinnedCatalog({
+    now: () => Date.now(),
+    sleep,
+    deadlineMs: 15000,
+    readStep: (lastPath, remaining) => evaluate(send, `(async () => {
+      const { launchCatalog } = await import('/src/launch-catalog.ts');
+      const catalogFreezeTime = ${catalogFreezeTime.toString()};
+      const nextPinFreeze = ${nextPinFreeze.toString()};
+      const freezeFixtureClock = ${freezeFixtureClock.toString()};
+      const path = await Promise.race([
+        typeof launchCatalog.settledPath === 'function' ? launchCatalog.settledPath() : Promise.resolve(''),
+        new Promise((resolve) => setTimeout(() => resolve(null), ${Math.max(0, Number.isFinite(remaining) ? remaining : 0)})),
+      ]);
+      if (path == null) return { expired: true };
+      const decision = nextPinFreeze(${JSON.stringify(lastPath)}, path || '');
+      if (!decision.ok) return decision;
+      if (decision.refroze) freezeFixtureClock(decision.frozen);
+      const pin = (() => {
+        const pressed = document.querySelector('[data-iss-preset="nadir"]')?.getAttribute('aria-pressed') === 'true';
+        const card = document.querySelector('[data-iss-launch-card]');
+        const name = card?.querySelector('[data-iss-launch-name]')?.textContent ?? null;
+        const visibility = card?.querySelector('[data-iss-launch-visibility]')?.textContent ?? null;
+        const pin = !!document.querySelector('.iss-launch-pin');
+        const edge = !!document.querySelector('[data-iss-launch-edge]');
+        const look = document.querySelector('[data-iss-launch-label]')?.textContent ?? null;
+        const status = document.querySelector('[data-iss-status]')?.textContent ?? null;
+        if (!pressed || name !== 'Verify Horizon' || !pin) {
+          return { pressed, name, visibility, pin, edge, look, status: status && status.slice(0, 180) };
+        }
+        return { ok: true };
+      })();
+      return { path: decision.path, frozen: decision.frozen, refroze: decision.refroze, pin };
+    })()`),
+    label: 'iss all launches pin in frame',
+  });
+  if (!pinned?.ok) throw new Error(`iss catalog freeze ${JSON.stringify(pinned)}`);
   const aimBeforePin = await evaluate(send, `(() => {
     const center = window.__opdIss?.getCenter?.();
     return center ? { ok: true, lat: center.lat, lng: center.lng } : null;

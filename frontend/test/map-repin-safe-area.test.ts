@@ -71,6 +71,7 @@ for (const engine of [
     const context = await browser.newContext({ viewport: { width, height }, isMobile: true, hasTouch: true, serviceWorkers: 'block' });
     try {
       const page = await context.newPage();
+      page.setDefaultTimeout(12_000);
       const cdp = engine.name === 'Chrome' ? await context.newCDPSession(page) : null;
       if (cdp) await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets });
       else await emulateInsets(page, insets);
@@ -99,7 +100,10 @@ for (const engine of [
         const map = (window as unknown as { __opdMap?: import('maplibre-gl').Map }).__opdMap;
         return map?.isStyleLoaded() && !!map.getSource('iss-track');
       });
-      await page.evaluate(() => document.fonts.ready);
+      await Promise.race([
+        page.evaluate(() => document.fonts.ready),
+        page.waitForTimeout(2_000),
+      ]);
       const appliedInsets = await page.evaluate(() => {
         const probe = document.createElement('div');
         for (const side of ['Top', 'Right', 'Bottom', 'Left']) probe.style.setProperty(`padding-${side.toLowerCase()}`, `env(safe-area-inset-${side.toLowerCase()}, 0px)`);
@@ -147,12 +151,22 @@ for (const engine of [
         const map = (window as unknown as { __opdMap: import('maplibre-gl').Map }).__opdMap;
         const source = map.getSource('dropped-pin') as import('maplibre-gl').GeoJSONSource;
         const deadline = performance.now() + 5_000;
-        do {
-          const data = await source.getData();
+        let pending: ReturnType<typeof source.getData> | null = null;
+        while (performance.now() < deadline) {
+          if (!pending) pending = source.getData();
+          const remaining = Math.max(0, deadline - performance.now());
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const data = await Promise.race([
+            pending,
+            new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), remaining); }),
+          ]);
+          if (timer) clearTimeout(timer);
+          if (!data) break;
+          pending = null;
           if (data.type === 'FeatureCollection' && data.features[0]?.geometry.type === 'Point'
             && data.features[0].geometry.coordinates.every((value, index) => value === expected[index])) return;
           await new Promise((resolve) => setTimeout(resolve, 25));
-        } while (performance.now() < deadline);
+        }
         throw new Error(`Native hold did not update the pin to ${expected}`);
       }, before.expected);
       if (cdp) {
