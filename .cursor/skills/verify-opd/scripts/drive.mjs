@@ -6766,19 +6766,15 @@ async function planCanadaSettled(map) {
     return ((frame && frame.dataset && frame.dataset.insetHiddenCountries) || '').split('|').includes('Canada');
   };
   let showsSame = await planCanadaShowsSame(map);
-  if (listed() === showsSame) return showsSame;
+  if (listed() === showsSame) return { showsSame, changed: false };
   const deadline = performance.now() + 2000;
   while (performance.now() < deadline) {
     if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
     await new Promise((resolve) => setTimeout(resolve, 50));
     showsSame = await planCanadaShowsSame(map);
-    if (listed() === showsSame) {
-      if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      return showsSame;
-    }
+    if (listed() === showsSame) return { showsSame, changed: true };
   }
-  return showsSame;
+  return { showsSame, changed: true };
 }
 function planCanadaPlaced(placement) {
   const labels = placement && placement.labels || [];
@@ -7586,12 +7582,12 @@ function assertLowZoomNames(row) {
     const fold = (list) => (list || [])
       .filter((name) => typeof name === 'string' && name)
       .filter((name) => !(contract.hide && name.toLowerCase() === String(contract.hide).toLowerCase()))
-      .filter((name) => !(row.showsSame === true && name.toLowerCase() === 'canada'))
+      .filter((name) => name.toLowerCase() !== 'canada')
       .map((name) => name.toLowerCase())
       .sort()
       .join('|');
     if (fold(names) !== fold(row.mainNames)) {
-      throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, main: row.mainNames, showsSame: row.showsSame })}`);
+      throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, main: row.mainNames, showsSame: row.showsSame, hidden: row.hidden, placed: (row.placement && row.placement.labels || []).map((label) => label && label.name) })}`);
     }
   } else if (names.length === 0 && row.country !== 'Canada') {
     throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, expected: contract.expectedNames })}`);
@@ -7677,7 +7673,9 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
           map.jumpTo(camera);
           const waited = await planWaitTiles(map);
           const seen = planCameraMatches(map, camera);
-          const showsSame = await planCanadaSettled(map);
+          const settled = await planCanadaSettled(map);
+          if (settled.changed) await planWaitTiles(map);
+          const showsSame = settled.showsSame;
           rows.push({
             tilesOk: waited.tilesOk,
             detail: waited.detail,

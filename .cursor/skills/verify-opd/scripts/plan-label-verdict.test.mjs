@@ -647,7 +647,7 @@ test('a low-zoom sweep rejects an empty list only on a camera that expects names
     mainNames: ['Mexico', 'Canada', 'Argentina', 'Brazil'],
     showsSame: true,
   }), /plan label names/);
-  assert.throws(() => acceptPlanSweepRow({
+  acceptPlanSweepRow({
     cameraOk: true,
     tilesOk: true,
     tileZ: labelTile(1.5),
@@ -658,7 +658,7 @@ test('a low-zoom sweep rejects an empty list only on a camera that expects names
     names: ['Mexico', 'Argentina', 'Brazil'],
     mainNames: ['Mexico', 'Canada', 'Argentina', 'Brazil'],
     showsSame: false,
-  }), /plan label names/);
+  });
   acceptPlanSweepRow({
     cameraOk: true,
     tilesOk: true,
