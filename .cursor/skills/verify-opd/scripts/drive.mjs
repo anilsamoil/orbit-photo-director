@@ -6631,6 +6631,15 @@ function planVisibleTiles(map, sourceId) {
   }
   return { z, tiles, center };
 }
+function planFadeDone(map) {
+  const managers = map.style && map.style.tileManagers;
+  if (!managers) return false;
+  for (const id of ['inset-labels', 'inset-basemap']) {
+    const manager = managers[id];
+    if (!manager || typeof manager.hasTransition !== 'function' || manager.hasTransition()) return false;
+  }
+  return true;
+}
 function planRasterReady(map) {
   const ready = (pack) => {
     if (!pack || pack.state === 'manager' || pack.tiles.length === 0) return false;
@@ -6640,7 +6649,7 @@ function planRasterReady(map) {
     if (!drawn.some((tile) => tile.x === pack.center.x && tile.y === pack.center.y)) return false;
     return pack.tiles.every((tile) => tile.state === 'loaded' || tile.state === 'errored');
   };
-  return ready(planVisibleTiles(map, 'inset-labels')) && ready(planVisibleTiles(map, 'inset-basemap'));
+  return ready(planVisibleTiles(map, 'inset-labels')) && ready(planVisibleTiles(map, 'inset-basemap')) && planFadeDone(map);
 }
 function planTileUrls(map, sourceId, tiles) {
   const spec = map.getStyle() && map.getStyle().sources && map.getStyle().sources[sourceId];
@@ -6948,6 +6957,7 @@ async function planWaitTiles(map) {
       idle: painted,
       are: map.areTilesLoaded(),
       loaded: typeof map.loaded === 'function' ? map.loaded() : null,
+      fading: !planFadeDone(map),
     },
   };
 }

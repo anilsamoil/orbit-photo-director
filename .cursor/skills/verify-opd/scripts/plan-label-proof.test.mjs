@@ -44,7 +44,11 @@ function waitingMap({ idle, unloadAfterRepaint, idleAfterMs = 0, center = { lng:
   const yRaw = Math.floor((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2 * n);
   const y = Math.max(0, Math.min(n - 1, yRaw));
   const coord = { canonical: { z, x, y } };
-  const manager = { getVisibleCoordinates: () => [coord], getTile: () => ({ state: tilesReady ? 'loaded' : 'loading' }) };
+  const manager = {
+    getVisibleCoordinates: () => [coord],
+    getTile: () => ({ state: tilesReady ? 'loaded' : 'loading' }),
+    hasTransition: () => false,
+  };
   let pending = null;
   let listeners = 0;
   return {
@@ -95,6 +99,7 @@ function cappedFranceMap(zoom) {
   const manager = (z) => ({
     getVisibleCoordinates: () => [centerTile(z)],
     getTile: () => ({ state: 'loaded' }),
+    hasTransition: () => false,
   });
   return {
     getZoom: () => zoom,
@@ -290,6 +295,21 @@ test('a loading in-view raster tile omitted from the renderable list holds the g
   const waited = await planWaitTiles(map);
   assert.equal(waited.tilesOk, true, JSON.stringify(waited.detail));
   assert.ok(Date.now() - started >= 200, Date.now() - started);
+  assert.equal(map.listeners(), 0);
+});
+
+test('a loaded raster that is still fading does not settle until the fade ends', async () => {
+  const { planWaitTiles } = loadHelpers();
+  const map = waitingMap({ idle: true, idleAfterMs: 0 });
+  let fading = true;
+  for (const id of ['inset-labels', 'inset-basemap']) {
+    map.style.tileManagers[id].hasTransition = () => fading;
+  }
+  setTimeout(() => { fading = false; }, 350);
+  const started = Date.now();
+  const waited = await planWaitTiles(map);
+  assert.equal(waited.tilesOk, true, JSON.stringify(waited.detail));
+  assert.ok(Date.now() - started >= 300, Date.now() - started);
   assert.equal(map.listeners(), 0);
 });
 
