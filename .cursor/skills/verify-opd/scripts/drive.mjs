@@ -6759,6 +6759,27 @@ async function planCanadaShowsSame(map) {
   if (!view) return false;
   return canadaTrack.rasterShowsSameCountry(view.zoom, view.drawn, view.entry, view.project, view.viewport, view.occlusions) === true;
 }
+async function planCanadaSettled(map) {
+  const listed = () => {
+    const canvas = map.getCanvas();
+    const frame = canvas && typeof canvas.closest === 'function' ? canvas.closest('[data-pip-frame]') : null;
+    return ((frame && frame.dataset && frame.dataset.insetHiddenCountries) || '').split('|').includes('Canada');
+  };
+  let showsSame = await planCanadaShowsSame(map);
+  if (listed() === showsSame) return showsSame;
+  const deadline = performance.now() + 2000;
+  while (performance.now() < deadline) {
+    if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    showsSame = await planCanadaShowsSame(map);
+    if (listed() === showsSame) {
+      if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return showsSame;
+    }
+  }
+  return showsSame;
+}
 function planCanadaPlaced(placement) {
   const labels = placement && placement.labels || [];
   for (let index = 0; index < labels.length; index += 1) {
@@ -7570,7 +7591,7 @@ function assertLowZoomNames(row) {
       .sort()
       .join('|');
     if (fold(names) !== fold(row.mainNames)) {
-      throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, main: row.mainNames })}`);
+      throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, main: row.mainNames, showsSame: row.showsSame })}`);
     }
   } else if (names.length === 0 && row.country !== 'Canada') {
     throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, expected: contract.expectedNames })}`);
@@ -7656,6 +7677,7 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
           map.jumpTo(camera);
           const waited = await planWaitTiles(map);
           const seen = planCameraMatches(map, camera);
+          const showsSame = await planCanadaSettled(map);
           rows.push({
             tilesOk: waited.tilesOk,
             detail: waited.detail,
@@ -7668,7 +7690,7 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
             tileZ: waited.tileZ,
             placement: planLabelPlacement(map),
             names: planSymbolNames(map),
-            showsSame: await planCanadaShowsSame(map),
+            showsSame,
             hidden: (frame.dataset.insetHiddenCountries || '').split('|').filter(Boolean),
             country: ${JSON.stringify(country.name)},
             centered: true,
