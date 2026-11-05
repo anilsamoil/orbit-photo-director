@@ -344,14 +344,64 @@ test('a loading in-view raster tile omitted from the renderable list holds the g
 test('the Canada hide wait is not applied to the main page', () => {
   const source = readFileSync(new URL('./drive.mjs', import.meta.url), 'utf8');
   const pair = source.slice(source.indexOf('async function compareLockedPair'), source.indexOf('export async function proveFractionalPlanLabels'));
-  assert.match(pair, /withLockedPlan\(mainSend,[\s\S]*false\)/);
-  assert.doesNotMatch(pair, /withLockedPlan\(mainSend,[\s\S]*true\)/);
+  assert.match(pair, /withLockedPlan\(mainSend[^\n]*false\)/);
+  assert.doesNotMatch(pair, /withLockedPlan\(mainSend[^\n]*true\)/);
   assert.match(pair, /planContractForDrive\([\s\S]*OPD_VERIFY_CANADA_WAIT !== '0'/);
+  const ready = source.slice(source.indexOf('function planCanadaReady'), source.indexOf('let canadaTrack'));
+  assert.doesNotMatch(ready, /Math\.round/);
+  assert.match(source, /canadaTrack\.rasterShowsSameCountry\(/);
+  assert.match(source, /canadaRasterView\(/);
 });
 
+function placedCanadaMap(hidden) {
+  return {
+    getZoom: () => 1.5,
+    project: () => ({ x: 40, y: 40 }),
+    getCanvas: () => ({
+      clientWidth: 400,
+      clientHeight: 300,
+      getBoundingClientRect: () => ({ left: 0, top: 0, right: 400, bottom: 300, width: 400, height: 300 }),
+      closest: () => ({ dataset: { insetHiddenCountries: hidden }, clientWidth: 400, clientHeight: 300 }),
+    }),
+    getStyle: () => ({ sources: { 'inset-labels': { maxzoom: 19 } }, layers: [] }),
+    triggerRepaint() {},
+    style: {
+      _serializedAllLayers: () => ({}),
+      imageManager: { listImages: () => [] },
+      _layers: {},
+      placement: {
+        collisionIndex: {
+          grid: { query: () => [{ key: { bucketInstanceId: 'b', featureIndex: 0 }, x1: 120, y1: 120, x2: 180, y2: 140 }] },
+        },
+        retainedQueryData: {
+          b: {
+            featureIndex: {
+              lookupSymbolFeatures: () => ({
+                'inset-countries': [{
+                  feature: {
+                    properties: { name: 'Canada' },
+                    layer: {
+                      source: 'inset-countries',
+                      layout: { 'text-field': ['get', 'name'] },
+                      paint: { 'text-opacity': hidden ? 0 : 1, 'text-color': '#f7f4ea' },
+                    },
+                  },
+                }],
+              }),
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
 test('the Canada hide wait fails closed when the hide never arrives', async () => {
-  const { planWaitCanada } = loadHelpers();
+  const helpers = loadHelpers();
+  helpers.rasterShowsSameCountry = () => true;
   const map = {
+    getZoom: () => 1.5,
+    project: () => ({ x: 0, y: 0 }),
     getCanvas: () => ({
       clientWidth: 100,
       clientHeight: 100,
@@ -362,20 +412,32 @@ test('the Canada hide wait fails closed when the hide never arrives', async () =
     triggerRepaint() {},
   };
   const started = Date.now();
-  const waited = await planWaitCanada(map, 1.5);
+  const waited = await helpers.planWaitCanada(map, 1.5);
   assert.equal(waited.ready, false);
+  assert.equal(waited.showsSame, true);
   assert.ok(Date.now() - started >= 8000, Date.now() - started);
 });
 
-test('Canada below zoom 3 is ready only when the hide matches the drawn tile', () => {
-  const { planCanadaReady } = loadHelpers();
-  assert.equal(planCanadaReady(1.5, ['Canada'], 0), true);
-  assert.equal(planCanadaReady(1.5, [], 0), false);
-  assert.equal(planCanadaReady(1.5, ['Canada'], 1), false);
-  assert.equal(planCanadaReady(2.99, [], 1), true);
-  assert.equal(planCanadaReady(2.99, ['Canada'], 0), false);
-  assert.equal(planCanadaReady(2.99, [], 0), false);
-  assert.equal(planCanadaReady(3, [], undefined), true);
+test('Canada is hidden only when rasterShowsSameCountry holds, and otherwise stays visible and placed', async () => {
+  const helpers = loadHelpers();
+  const { planCanadaReady } = helpers;
+  assert.equal(planCanadaReady(1.5, ['Canada'], 0, true, false), true);
+  assert.equal(planCanadaReady(1.5, [], 1, true, true), false);
+  assert.equal(planCanadaReady(1.5, ['Canada'], 1, true, true), false);
+  assert.equal(planCanadaReady(1.5, [], 1, false, true), true);
+  assert.equal(planCanadaReady(1.5, ['Canada'], 0, false, true), false);
+  assert.equal(planCanadaReady(1.5, [], 1, false, false), false);
+  assert.equal(planCanadaReady(2.99, [], 1, false, true), true);
+  assert.equal(planCanadaReady(2.99, ['Canada'], 0, false, false), false);
+  assert.equal(planCanadaReady(3, [], undefined, false, false), true);
+  helpers.rasterShowsSameCountry = () => false;
+  const visible = await helpers.planWaitCanada(placedCanadaMap(''), 1.5);
+  assert.equal(visible.ready, true);
+  assert.equal(visible.showsSame, false);
+  helpers.rasterShowsSameCountry = () => true;
+  assert.equal(planCanadaReady(1.5, [], 1, true, true), false);
+  const hidden = helpers.planCanadaReady(1.5, ['Canada'], 0, helpers.rasterShowsSameCountry(), false);
+  assert.equal(hidden, true);
 });
 
 test('a loaded raster that is still fading does not settle until the fade ends', async () => {

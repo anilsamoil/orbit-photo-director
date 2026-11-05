@@ -152,7 +152,7 @@ vi.mock('maplibre-gl', () => {
   return { Map, Marker };
 });
 
-import { createTrackInset, letterboxCamera, PLAN_WHEEL_RESIZE_CAP_MS, rasterShowsSameCountry } from '../src/map/adapters/maplibre/track-inset';
+import { canadaRasterView, createTrackInset, letterboxCamera, PLAN_WHEEL_RESIZE_CAP_MS, rasterShowsSameCountry } from '../src/map/adapters/maplibre/track-inset';
 
 function project(lngLat: [number, number], center: [number, number], zoom: number, width: number, height: number): { x: number; y: number } {
   const yOf = (latitude: number) => (1 - Math.asinh(Math.tan(latitude * Math.PI / 180)) / Math.PI) / 2;
@@ -254,6 +254,23 @@ describe('plan inset labels', () => {
     for (const width of [429, 430, 431]) {
       expect(rasterShowsSameCountry(1.5, 3, canada, at(1.5, [-100, 50], width, 800), { left: 0, top: 0, right: width, bottom: 800 }, [])).toBe(true);
     }
+  });
+
+  it('canadaRasterView is the frame rasterShowsSameCountry sees', () => {
+    const frame = document.createElement('div');
+    Object.defineProperty(frame, 'clientWidth', { configurable: true, value: 478 });
+    Object.defineProperty(frame, 'clientHeight', { configurable: true, value: 690 });
+    const decide = (center: [number, number]) => {
+      const map = {
+        getZoom: () => 1.5,
+        project: (lngLat: [number, number]) => project(lngLat, center, 1.5, 478, 690),
+      };
+      const view = canadaRasterView(map as unknown as Parameters<typeof canadaRasterView>[0], frame);
+      expect(view).toBeTruthy();
+      return rasterShowsSameCountry(view!.zoom, view!.drawn, view!.entry, view!.project, view!.viewport, view!.occlusions);
+    };
+    expect(decide([-100, 50])).toBe(true);
+    expect(decide([2, 46])).toBe(false);
   });
 
   it('drops Canada at zoom 1.5 and puts the vector back when the raster name leaves the frame', () => {

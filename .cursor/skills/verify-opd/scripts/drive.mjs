@@ -6732,12 +6732,40 @@ function planPaintOpacity(paint) {
 function planCanadaInk() {
   return [0.205078125, 0.313476562, 0.236816406, 0.317871094];
 }
-function planCanadaReady(zoom, hidden, opacity) {
+function planCanadaReady(zoom, hidden, opacity, showsSame, placed) {
   if (!(Number(zoom) < 3)) return true;
-  const expectsHide = Math.round(Number(zoom) + 1) === 3;
   const listed = Array.isArray(hidden) && hidden.includes('Canada');
-  if (expectsHide) return listed && opacity === 0;
-  return !listed && typeof opacity === 'number' && opacity > 0;
+  if (showsSame === true) return listed && opacity === 0;
+  const visible = !listed && typeof opacity === 'number' && opacity > 0;
+  return visible && placed === true;
+}
+let canadaTrack = null;
+async function planCanadaShowsSame(map) {
+  const canvas = map.getCanvas();
+  const frame = canvas && typeof canvas.closest === 'function' ? (canvas.closest('[data-pip-frame]') || canvas) : canvas;
+  const viewport = { left: 0, top: 0, right: frame && frame.clientWidth || 0, bottom: frame && frame.clientHeight || 0 };
+  if (typeof rasterShowsSameCountry === 'function') {
+    return rasterShowsSameCountry(map.getZoom(), 0, null, (lngLat) => map.project(lngLat), viewport, []) === true;
+  }
+  if (!canadaTrack) {
+    try {
+      canadaTrack = await import('/src/map/adapters/maplibre/track-inset.ts');
+    } catch (error) {
+      canadaTrack = {};
+    }
+  }
+  if (typeof canadaTrack.rasterShowsSameCountry !== 'function' || typeof canadaTrack.canadaRasterView !== 'function' || !frame) return false;
+  const view = canadaTrack.canadaRasterView(map, frame);
+  if (!view) return false;
+  return canadaTrack.rasterShowsSameCountry(view.zoom, view.drawn, view.entry, view.project, view.viewport, view.occlusions) === true;
+}
+function planCanadaPlaced(placement) {
+  const labels = placement && placement.labels || [];
+  for (let index = 0; index < labels.length; index += 1) {
+    const label = labels[index];
+    if (label && label.name === 'Canada' && label.box && Number(label.opacity) > 0) return true;
+  }
+  return false;
 }
 async function planWaitCanada(map, zoom) {
   const deadline = performance.now() + 8000;
@@ -6746,12 +6774,14 @@ async function planWaitCanada(map, zoom) {
     const frame = map.getCanvas().closest('[data-pip-frame]');
     const hidden = ((frame && frame.dataset.insetHiddenCountries) || '').split('|').filter(Boolean);
     const opacity = placement.opacity ? placement.opacity.Canada : undefined;
-    if (planCanadaReady(zoom, hidden, opacity)) return { ready: true, placement };
+    const showsSame = await planCanadaShowsSame(map);
+    if (planCanadaReady(zoom, hidden, opacity, showsSame, planCanadaPlaced(placement))) return { ready: true, placement, showsSame };
     if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
     await new Promise((resolve) => setTimeout(resolve, 50));
     placement = planLabelPlacement(map);
   }
-  return { ready: false, placement };
+  const showsSame = await planCanadaShowsSame(map);
+  return { ready: false, placement, showsSame };
 }
 function planProjectRasterBox(map, ink) {
   if (!ink || ink.length < 4 || typeof map.project !== 'function') return null;
@@ -7159,6 +7189,7 @@ async function withLockedPlan(send, lng, lat, zoom, country, body, canadaWait) {
         hidden: (frame.dataset.insetHiddenCountries || '').split('|').filter(Boolean),
         country: ${JSON.stringify(country)},
         markerVisible: !!(marker && marker.getClientRects().length > 0),
+        showsSame: await planCanadaShowsSame(map),
         placement: await (async () => {
           if (!${canadaWait ? 'true' : 'false'} || ${JSON.stringify(country)} !== 'Canada' || !(${zoom} < 3)) return planLabelPlacement(map);
           const canada = await planWaitCanada(map, ${zoom});
@@ -7531,11 +7562,10 @@ function assertLowZoomNames(row) {
     throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, expected: contract.expectedNames })}`);
   }
   if (Array.isArray(row.mainNames)) {
-    const hideCanada = zoom < 3 && Math.round(zoom + 1) === 3;
     const fold = (list) => (list || [])
       .filter((name) => typeof name === 'string' && name)
       .filter((name) => !(contract.hide && name.toLowerCase() === String(contract.hide).toLowerCase()))
-      .filter((name) => !(hideCanada && name.toLowerCase() === 'canada'))
+      .filter((name) => !(row.showsSame === true && name.toLowerCase() === 'canada'))
       .map((name) => name.toLowerCase())
       .sort()
       .join('|');
@@ -7565,7 +7595,7 @@ async function compareLockedPair(headSend, mainSend, lng, lat, zoom, country) {
   const head = await withLockedPlan(headSend, lng, lat, zoom, country, async (row) => ({ row, shot: await capturePlanCanvas(headSend) }), hideWait);
   const main = await withLockedPlan(mainSend, lng, lat, zoom, country, async (row) => ({ row, shot: await capturePlanCanvas(mainSend) }), false);
   savePlanPair(`${country}-z${zoom}-${lng}-${lat}`, head.shot, main.shot);
-  const contract = planContractForDrive(country, zoom, [lng, lat], process.env.OPD_VERIFY_CANADA_WAIT !== '0');
+  const contract = planContractForDrive(country, zoom, [lng, lat], process.env.OPD_VERIFY_CANADA_WAIT !== '0', head.row.showsSame === true);
   const verdict = assertPlanLabelChecks({
     ...head.row,
     headShot: head.shot,
@@ -7638,6 +7668,7 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
             tileZ: waited.tileZ,
             placement: planLabelPlacement(map),
             names: planSymbolNames(map),
+            showsSame: await planCanadaShowsSame(map),
             hidden: (frame.dataset.insetHiddenCountries || '').split('|').filter(Boolean),
             country: ${JSON.stringify(country.name)},
             centered: true,

@@ -394,13 +394,13 @@ function nearCenter(center, lng, lat) {
   return Array.isArray(center) && Math.abs(center[0] - lng) <= 0.25 && Math.abs(center[1] - lat) <= 0.25;
 }
 
-/** Each camera has its own expected names. Below zoom 3, Canada may hide behind the raster name. */
-export function planCameraContract(country, zoom, center) {
+/** Each camera has its own expected names. Canada hides only when rasterShowsSameCountry says the reference name is in frame. */
+export function planCameraContract(country, zoom, center, showsSame = false) {
   const z = Number(zoom);
   if (country === 'France' && near(z, 1.2, 0.05) && nearCenter(center, 2, 46)) {
     return { expectedNames: FRANCE_Z12_NAMES.slice(), raster: null };
   }
-  if (country === 'Canada' && z < 3 && Math.round(z + 1) === 3) {
+  if (country === 'Canada' && showsSame === true) {
     return { expectedNames: null, raster: 'CANADA', hide: 'Canada' };
   }
   if (z >= 3 && (country === 'France' || country === 'Kenya')) return { expectedNames: [], raster: null };
@@ -408,9 +408,9 @@ export function planCameraContract(country, zoom, center) {
   return { expectedNames: null, raster: null };
 }
 
-/** The Canada hide is the head build's contract. A main comparison does not assert it. */
-export function planContractForDrive(country, zoom, center, enforceCanadaHide = true) {
-  const contract = planCameraContract(country, zoom, center);
+/** The Canada hide is the head build's contract, and only when the product's predicate holds. A main comparison does not assert it. */
+export function planContractForDrive(country, zoom, center, enforceCanadaHide = true, showsSame = false) {
+  const contract = planCameraContract(country, zoom, center, enforceCanadaHide !== false && showsSame === true);
   if (enforceCanadaHide !== false) return contract;
   return { expectedNames: contract.expectedNames, raster: null };
 }

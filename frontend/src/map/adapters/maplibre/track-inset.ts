@@ -147,19 +147,33 @@ function frameOcclusions(frame: HTMLElement): ScreenBox[] {
     });
 }
 
-function hiddenCountryNames(map: MapLibreMap, frame: HTMLElement): string[] {
+function rasterDuplicateView(map: MapLibreMap, frame: HTMLElement, item: { name: string; tile: number; service: 'reference' }) {
   const zoom = map.getZoom();
-  const tile = drawnTile(zoom, INSET_LABEL_MAX_ZOOM);
-  const viewport = { left: 0, top: 0, right: frame.clientWidth, bottom: frame.clientHeight };
-  const occlusions = frameOcclusions(frame);
+  const entries = COUNTRY_RASTER_LEVELS.bounds?.[item.name]?.[String(item.tile)] ?? [];
+  const ink = entries.find((entry) => entry.service === item.service);
+  return {
+    zoom,
+    drawn: drawnTile(zoom, INSET_LABEL_MAX_ZOOM),
+    entry: ink ? { tile: item.tile, service: item.service, ink: ink.ink } : undefined,
+    project: (lngLat: [number, number]) => map.project(lngLat),
+    viewport: { left: 0, top: 0, right: frame.clientWidth, bottom: frame.clientHeight },
+    occlusions: frameOcclusions(frame),
+  };
+}
+
+function hiddenCountryNames(map: MapLibreMap, frame: HTMLElement): string[] {
   const hidden: string[] = [];
   for (const item of DEMONSTRATED_DUPLICATE_RASTER) {
-    const entries = COUNTRY_RASTER_LEVELS.bounds?.[item.name]?.[String(item.tile)] ?? [];
-    const ink = entries.find((entry) => entry.service === item.service);
-    const evidence = ink ? { tile: item.tile, service: item.service, ink: ink.ink } : undefined;
-    if (rasterShowsSameCountry(zoom, tile, evidence, (lngLat) => map.project(lngLat), viewport, occlusions)) hidden.push(item.name);
+    const view = rasterDuplicateView(map, frame, item);
+    if (rasterShowsSameCountry(view.zoom, view.drawn, view.entry, view.project, view.viewport, view.occlusions)) hidden.push(item.name);
   }
   return hidden;
+}
+
+/** The Canada duplicate, as rasterShowsSameCountry sees this frame. */
+export function canadaRasterView(map: MapLibreMap, frame: HTMLElement) {
+  const item = DEMONSTRATED_DUPLICATE_RASTER.find((entry) => entry.name === 'Canada');
+  return item ? rasterDuplicateView(map, frame, item) : null;
 }
 
 type InsetFrame = HTMLElement & { __opdTrackInset?: MapLibreMap };

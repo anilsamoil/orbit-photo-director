@@ -491,8 +491,10 @@ test('label placement mutants fail and the healthy controls pass on both engines
       const verdict = labelScreenVerdict({ head: open, main: { ...open }, expectedNames: contract.expectedNames });
       if (!verdict.ok || contract.raster !== null || contract.expectedNames.length !== 0) controls.push(`${engine} ${country}`);
     }
-    const canada = planCameraContract('Canada', 1.5, [-100, 50]);
+    const canada = planCameraContract('Canada', 1.5, [-100, 50], true);
     if (canada.hide !== 'Canada' || canada.raster !== 'CANADA') controls.push(`${engine} Canada`);
+    const openCanada = planCameraContract('Canada', 1.5, [-100, 50], false);
+    if (openCanada.hide || openCanada.raster) controls.push(`${engine} Canada visible`);
     const shown = planCameraContract('Canada', 2.99, [-100, 50]);
     if (shown.hide || shown.raster) controls.push(`${engine} Canada shown`);
     const fitted = planCameraContract('Canada', 1.2, [-100, 50]);
@@ -631,6 +633,7 @@ test('a low-zoom sweep rejects an empty list only on a camera that expects names
     country: 'Mexico',
     names: ['Mexico', 'Argentina', 'Brazil'],
     mainNames: ['Mexico', 'Canada', 'Argentina', 'Brazil'],
+    showsSame: true,
   });
   assert.throws(() => acceptPlanSweepRow({
     cameraOk: true,
@@ -642,14 +645,40 @@ test('a low-zoom sweep rejects an empty list only on a camera that expects names
     country: 'Mexico',
     names: ['Argentina', 'Brazil'],
     mainNames: ['Mexico', 'Canada', 'Argentina', 'Brazil'],
+    showsSame: true,
   }), /plan label names/);
-  const duplicate = planCameraContract('Canada', 1.5, [-100, 50]);
+  assert.throws(() => acceptPlanSweepRow({
+    cameraOk: true,
+    tilesOk: true,
+    tileZ: labelTile(1.5),
+    zoom: 1.5,
+    requestedZoom: 1.5,
+    center: [-102, 23],
+    country: 'Mexico',
+    names: ['Mexico', 'Argentina', 'Brazil'],
+    mainNames: ['Mexico', 'Canada', 'Argentina', 'Brazil'],
+    showsSame: false,
+  }), /plan label names/);
+  acceptPlanSweepRow({
+    cameraOk: true,
+    tilesOk: true,
+    tileZ: labelTile(1.5),
+    zoom: 1.5,
+    requestedZoom: 1.5,
+    center: [-102, 23],
+    country: 'Mexico',
+    names: ['Mexico', 'Canada', 'Argentina', 'Brazil'],
+    mainNames: ['Mexico', 'Canada', 'Argentina', 'Brazil'],
+    showsSame: false,
+  });
+  const duplicate = planCameraContract('Canada', 1.5, [-100, 50], true);
   assert.equal(duplicate.expectedNames, null);
   assert.equal(duplicate.hide, 'Canada');
   assert.equal(duplicate.raster, 'CANADA');
-  const wider = planCameraContract('Canada', 2, [2, 46]);
+  const wider = planCameraContract('Canada', 2, [2, 46], true);
   assert.equal(wider.hide, 'Canada');
   assert.equal(wider.raster, 'CANADA');
+  assert.equal(planCameraContract('Canada', 1.5, [-100, 50], false).hide, undefined);
   const filtered = {
     cameraOk: true,
     tilesOk: true,
@@ -662,16 +691,18 @@ test('a low-zoom sweep rejects an empty list only on a camera that expects names
     headPlacement: { labels: [{ name: 'Canada', opacity: 0, box: { left: 10, top: 10, right: 40, bottom: 24 } }], canvas: { left: 0, top: 0, right: 400, bottom: 800 }, chrome: [] },
   };
   acceptPlanSweepRow(filtered);
-  assert.equal(planCameraContract('Canada', 1.5, [-100, 50]).raster, 'CANADA');
-  assert.equal(planCameraContract('Canada', 2.49, [-100, 50]).hide, 'Canada');
+  assert.equal(planCameraContract('Canada', 1.5, [-100, 50], true).raster, 'CANADA');
+  assert.equal(planCameraContract('Canada', 2.49, [-100, 50], true).hide, 'Canada');
+  assert.equal(planCameraContract('Canada', 2.49, [-100, 50], false).hide, undefined);
   assert.equal(planCameraContract('Canada', 2.5, [-100, 50]).hide, undefined);
   assert.equal(planCameraContract('Canada', 2.99, [-100, 50]).hide, undefined);
   assert.equal(planCameraContract('Canada', 3, [-100, 50]).hide, undefined);
-  const compared = planContractForDrive('Canada', 1.5, [-100, 50], false);
+  const compared = planContractForDrive('Canada', 1.5, [-100, 50], false, true);
   assert.equal(compared.raster, null);
   assert.equal(compared.hide, undefined);
-  assert.equal(planContractForDrive('Canada', 1.5, [-100, 50], true).raster, 'CANADA');
-  assert.equal(planContractForDrive('Canada', 1.5, [-100, 50], true).hide, 'Canada');
+  assert.equal(planContractForDrive('Canada', 1.5, [-100, 50], true, true).raster, 'CANADA');
+  assert.equal(planContractForDrive('Canada', 1.5, [-100, 50], true, true).hide, 'Canada');
+  assert.equal(planContractForDrive('Canada', 1.5, [-100, 50], true, false).hide, undefined);
 });
 
 test('the Canada duplicate allows only the declared hide, and a half-off label fails', () => {
@@ -681,13 +712,13 @@ test('the Canada duplicate allows only the declared hide, and a half-off label f
   const canada = { name: 'Canada', opacity: 1, box: { left: 30, top: 120, right: 80, bottom: 140 } };
   const head = { labels: [mexico, brazil], canvas, chrome: [] };
   const main = { labels: [canada, mexico, brazil], canvas, chrome: [] };
-  const contract = planCameraContract('Canada', 1.5, [-100, 50]);
+  const contract = planCameraContract('Canada', 1.5, [-100, 50], true);
   const healthy = labelScreenVerdict({ head, main, expectedNames: contract.expectedNames, hide: contract.hide });
   assert.equal(healthy.ok, true);
   const otherSize = labelScreenVerdict({
     head: { labels: [mexico], canvas, chrome: [] },
     main: { labels: [canada, mexico], canvas, chrome: [] },
-    hide: planCameraContract('Canada', 2, [-80, 55]).hide,
+    hide: planCameraContract('Canada', 2, [-80, 55], true).hide,
   });
   assert.equal(otherSize.ok, true);
   const faded = labelScreenVerdict({
