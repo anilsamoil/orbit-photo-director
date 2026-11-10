@@ -345,6 +345,14 @@ test('the plan-inset docs follow the label tile the source draws', () => {
   assert.doesNotMatch(skill, /reference raster caps at tile level 6/);
   assert.match(iss, /min\(round\(zoom \+ 1\), source maxzoom\)/);
   assert.match(skill, /min\(round\(zoom \+ 1\), source maxzoom\)/);
+  assert.match(iss, /rasterShowsSameCountry/);
+  assert.match(skill, /rasterShowsSameCountry/);
+  assert.match(iss, /Zero names are valid when main's list is empty/);
+  assert.match(skill, /Zero names are valid when main's list is empty/);
+  assert.doesNotMatch(iss, /exactly one name source/);
+  assert.doesNotMatch(skill, /exactly one name source/);
+  assert.doesNotMatch(iss, /those symbols are gone/);
+  assert.doesNotMatch(skill, /those symbols are gone/);
 });
 
 test('glyph ink, not the padded OCR box, meets the shared one-pixel clock rule', () => {
