@@ -70,13 +70,14 @@ describe('tier projection', () => {
     expect(tiers.groups.likely.map((launch) => launch.eventId)).toEqual(['likely-1']);
     expect(tiers.groups.watch.map((launch) => launch.eventId)).toEqual(['watch-1']);
     expect(tiers.pins.map((launch) => launch.eventId)).toEqual(['shot-1', 'likely-1']);
+    expect(tiers.mapPins.map((launch) => launch.eventId)).toEqual(['shot-1', 'likely-1', 'watch-1', 'open-1', 'none-1']);
     expect(tiers.upcoming.map((launch) => launch.eventId)).toEqual(['shot-1', 'likely-1']);
     expect(tiers.highlights.map((launch) => launch.eventId)).toEqual(['shot-1', 'likely-1']);
     expect(tiers.all.map((launch) => launch.eventId)).toEqual(['shot-1', 'likely-1', 'watch-1', 'open-1']);
     expect(tiers.all[0]).toBe(tiers.groups.shot[0]);
     expect(tiers.all[2]).toBe(tiers.groups.watch[0]);
     expect(tiers.pins.some((launch) => launch.eventId === 'none-1')).toBe(false);
-    expect(tiers.find('none-1')).toBeNull();
+    expect(tiers.find('none-1')?.tier).toBe('none');
     expect(tiers.find('watch-1')?.eventId).toBe('watch-1');
     expect(tiers.upcoming[0]).toBe(tiers.pins[0]);
   });

@@ -409,6 +409,13 @@ main.view-map { padding-top: 0; }
   overflow-wrap: anywhere;
   color: var(--text);
 }
+.card.launch-tier {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto;
+  grid-template-areas: "name" "summary" "reason" "actions";
+  overflow-wrap: anywhere;
+}
+.launch-tier > p { grid-area: reason; }
 .launch-name {
   background: none;
   border: 0;

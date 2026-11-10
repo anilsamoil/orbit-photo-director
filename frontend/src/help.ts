@@ -154,7 +154,9 @@ const HELP_SECTIONS: HelpSection[] = [
           'seven days come first. All launches lists every scheduled ' +
           'launch in the next 14 days that is Go, Confirmed, or TBC, ' +
           'timed to the second, minute, or hour. That list is not limited ' +
-          'to chances. Map and Upcoming list chances only. Choosing one ' +
+          'to chances. Upcoming lists chances only. The map also marks ' +
+          'scheduled launches in the next seven days that are not chances, ' +
+          'and it keeps their Watch, Unassessed, or No shot label. Choosing one ' +
           'keeps the aim and shows that pad, its time, and whether the ' +
           'site is in the picture now. None clears it.',
       },

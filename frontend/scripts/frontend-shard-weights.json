@@ -81,6 +81,7 @@
   "test/launch-catalog.test.ts": 0.476,
   "test/launch-census.test.ts": 0.493,
   "test/launch-map-brief.test.ts": 0.66,
+  "test/launch-map-schedule.test.ts": 0.035,
   "test/launch-review-regressions.test.ts": 0.444,
   "test/launch-selectors.test.ts": 0.468,
   "test/launch-store.test.ts": 0.53,

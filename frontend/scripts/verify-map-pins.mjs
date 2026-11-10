@@ -40,6 +40,7 @@ const PIN_FILES = [
   'src/map/features/lightning/lightning.test.ts',
   'src/map/features/targets/targets.test.ts',
   'src/map/features/launch-corridor/launch-corridor.test.ts',
+  'test/launch-map-schedule.test.ts',
 ];
 
 const MUTATIONS = [
@@ -200,10 +201,10 @@ const MUTATIONS = [
     replace: '    const onEdit = props.is_personal && props.target_id',
   },
   {
-    contract: 'Watch is not a map pin',
+    contract: 'a scheduled Watch launch remains a map pin without a photography chance',
     file: LAUNCH_CORRIDOR,
-    find: '  const pins = tiers.pins;',
-    replace: '  const pins = [...tiers.pins, ...tiers.groups.watch];',
+    find: '  const pins = tiers.mapPins;',
+    replace: '  const pins = tiers.pins;',
   },
   {
     contract: 'a tier pin with no corridor draws no line',

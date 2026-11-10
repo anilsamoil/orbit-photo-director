@@ -1,6 +1,6 @@
 import { wrapLon } from '../../../geo';
 import { legacyLaunchInHorizon, selectLaunches } from '../../../launch-selectors';
-import { shotForecastLabel, type TierCatalog } from '../../../launch-tiers';
+import { shotForecastLabel, tierWord, type TierCatalog } from '../../../launch-tiers';
 import type { LaunchState } from '../../../launch-store';
 import type { PassEntry } from '../../../types';
 
@@ -62,7 +62,7 @@ export function buildLaunchMapFeatures(launchState: LaunchState, now: number): {
 export function buildTierMapFeatures(tiers: TierCatalog, now: number): { lines: GeoJSON.Feature[]; pads: GeoJSON.Feature[] } {
   const lines: GeoJSON.Feature[] = [];
   const pads: GeoJSON.Feature[] = [];
-  const pins = tiers.pins;
+  const pins = tiers.mapPins;
   for (const pin of pins) {
     const forecast = pin.tier === 'shot'
       ? shotForecastLabel(pin.schedule.netMs, pin.schedule.windowEndMs, now)
@@ -70,7 +70,7 @@ export function buildTierMapFeatures(tiers: TierCatalog, now: number): { lines: 
     const properties = {
       event_id: pin.eventId,
       revision: pin.revision,
-      label: forecast ?? `LAUNCH / ${pin.tier === 'shot' ? 'SHOT' : 'LIKELY'}`,
+      label: forecast ?? `LAUNCH / ${tierWord(pin.tier).toUpperCase()}`,
       catalog: 'tier',
       launch_name: pin.name,
     };

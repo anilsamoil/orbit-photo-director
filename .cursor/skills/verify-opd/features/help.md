@@ -5,7 +5,7 @@ The ? button opens a dialog that explains the six tabs, Aiming the ISS view, the
 ## Sub-features
 
 - `help-open` opens the dialog named `Help — how to use SNAP`.
-- `help-aim` is the section `Aiming the ISS view`. It names Horizon with `keep a pinched field`, Straight down with `n / N`, pan with `W, A, S, and D` and Shift, `#iss=` for a saved aim, a Launch line (`The Launch menu sits beside Telemetry`, `Chances for the next seven days come first`, `All launches`, `14 days`, `That list is not limited to chances.`, `Map and Upcoming list chances only`, and `None clears it.`), a pad name beside Telemetry, a tap of about 18°, a gold pin, an arrow on the edge, and a gold path only when that launch includes a trajectory. The dialog text has no `Reset`, no `double-tap`, and no `Horizon opens first`.
+- `help-aim` is the section `Aiming the ISS view`. It names Horizon with `keep a pinched field`, Straight down with `n / N`, pan with `W, A, S, and D` and Shift, `#iss=` for a saved aim, a Launch line (`The Launch menu sits beside Telemetry`, `Chances for the next seven days come first`, `All launches`, `14 days`, `That list is not limited to chances.`, `Upcoming lists chances only`, and `None clears it.`), a pad name beside Telemetry, a tap of about 18°, a gold pin, an arrow on the edge, and a gold path only when that launch includes a trajectory. The dialog text has no `Reset`, no `double-tap`, and no `Horizon opens first`.
 - `help-close` closes it from the close button.
 
 ## How to get to it (user POV)

@@ -127,6 +127,26 @@ describe('launch catalog store', () => {
     await expect(validateLaunchBytes(packed.pointer, new TextEncoder().encode(`${packed.text} `).buffer)).rejects.toThrow(/hash/i);
   });
 
+  it('publishes expiry of a map-only schedule even when no photography or ISS selection changes', async () => {
+    const item = catalogItem({
+      tier: 'none', shots: [],
+      schedule: { net: iso(1), window_start: iso(1), window_end: iso(2), precision: 'Minute', status: 'Go', destination: null },
+    });
+    const packed = await catalogEnvelope(catalog([item]));
+    const store = new LaunchCatalogStore(catalogFetcher(packed));
+    vi.spyOn(Date, 'now').mockReturnValue(NOW);
+    const changed = vi.fn();
+    store.subscribe(changed);
+    await store.refresh();
+    expect(store.read(NOW)?.mapPins).toHaveLength(1);
+    expect(store.read(NOW)?.all).toEqual([]);
+    changed.mockClear();
+    store.tick(NOW + 2 * 60_000);
+    expect(changed).toHaveBeenCalledOnce();
+    expect(store.read(NOW + 2 * 60_000)?.mapPins).toEqual([]);
+    vi.restoreAllMocks();
+  });
+
   it('ignores an older pointer and drops the hold when the pointer changes during download', async () => {
     const current = await catalogEnvelope(catalog([], { revision: 'r2', generated_at: iso(-1) }));
     const older = await catalogEnvelope(catalog([], { revision: 'r1', generated_at: iso(-5) }));
