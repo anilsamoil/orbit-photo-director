@@ -7532,6 +7532,14 @@ export function labelsForCapture(early, shot) {
   };
 }
 
+/** Head and the main reference both use the post-barrier snapshot. */
+export function assembleLockedPair(head, main) {
+  return {
+    headView: labelsForCapture(head.row, head.shot),
+    mainView: labelsForCapture(main.row, main.shot),
+  };
+}
+
 function visiblePlanNames(row) {
   const hidden = new Set(row.hidden || []);
   return (row.names || []).filter((name) => !hidden.has(name));
@@ -7703,14 +7711,14 @@ async function compareLockedPair(headSend, mainSend, lng, lat, zoom, country) {
   const head = await withLockedPlan(headSend, lng, lat, zoom, country, async (row) => ({ row, shot: await capturePlanCanvas(headSend) }), hideWait);
   const main = await withLockedPlan(mainSend, lng, lat, zoom, country, async (row) => ({ row, shot: await capturePlanCanvas(mainSend) }), false);
   savePlanPair(`${country}-z${zoom}-${lng}-${lat}`, head.shot, main.shot);
-  const headView = labelsForCapture(head.row, head.shot);
+  const { headView, mainView } = assembleLockedPair(head, main);
   const contract = planContractForDrive(country, zoom, [lng, lat], process.env.OPD_VERIFY_CANADA_WAIT !== '0', headView.showsSame === true);
   const verdict = assertPlanLabelChecks({
     ...headView,
     headShot: head.shot,
     mainShot: main.shot,
     headPlacement: headView.placement,
-    mainPlacement: main.row.placement,
+    mainPlacement: mainView.placement,
     contract,
     labelOpacity: head.row.placement && head.row.placement.opacity ? head.row.placement.opacity[country] : null,
     ignoreRects: head.shot ? head.shot.ignore : [],
