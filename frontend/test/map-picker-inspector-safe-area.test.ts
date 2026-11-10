@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { chromium, webkit, type Browser, type Page } from 'playwright';
+import { chromium, webkit, type Page } from 'playwright';
 import { build } from 'vite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { closeBrowser, launchTracked, type TrackedBrowser } from './close-browser.mjs';
 import { tleEpochMs } from '../src/iss-sgp4';
 import { freezeDate } from './freeze-date';
 import fixture from './fixtures/iss-sgp4-fixture.json';
@@ -102,11 +103,11 @@ for (const engine of [
   { name: 'Chrome', type: chromium, executablePath: chromePath ?? chromium.executablePath() },
   { name: 'WebKit', type: webkit, executablePath: webkit.executablePath() },
 ]) describe.skipIf(!existsSync(engine.executablePath))(`picker inspector safe insets ${engine.name}`, () => {
-  let browser: Browser;
-  beforeAll(async () => { browser = await engine.type.launch({ headless: true, executablePath: engine.executablePath }); }, 30_000);
-  afterAll(async () => { await browser?.close(); }, 30_000);
+  let session: TrackedBrowser;
+  beforeAll(async () => { session = await launchTracked(engine.type, { headless: true, executablePath: engine.executablePath }); }, 30_000);
+  afterAll(async () => { await closeBrowser(session, `picker inspector ${engine.name}`); }, 30_000);
   it.each([[719, 521], [402, 874]].flatMap(([width, height]) => ['ISS', longHeading].map((heading) => ({ width: width!, height: height!, heading }))))('keeps rendered $heading and first pass safe at $width×$height after native picker click', async ({ width, height, heading }) => {
-    const context = await browser.newContext({ viewport: { width, height }, serviceWorkers: 'block', hasTouch: true });
+    const context = await session.browser.newContext({ viewport: { width, height }, serviceWorkers: 'block', hasTouch: true });
     try {
       const page = await context.newPage();
       page.setDefaultTimeout(10_000);

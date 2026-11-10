@@ -49,7 +49,8 @@ describe('openHelpModal', () => {
     expect(aiming).toContain('beside Telemetry');
     expect(aiming).toContain('All launches');
     expect(aiming).toContain('14 days');
-    expect(aiming).toContain('Map and Upcoming list chances only');
+    expect(aiming).toContain('Upcoming lists chances only');
+    expect(aiming).toContain('not chances');
     expect(aiming).toContain('None clears it.');
     expect(aiming).not.toContain('possible shot');
     expect(aiming).toContain('about 18°');

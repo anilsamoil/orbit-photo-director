@@ -59,7 +59,7 @@ describe('launch-corridor', () => {
     expect(drawn.lines).toEqual([]);
   });
 
-  it('draws a corridor line for a Shot pin and nothing for Watch', () => {
+  it('draws existing corridors for Shot and scheduled Watch with their actual labels', () => {
     const watch = catalogItem({ event_id: 'watch-1', tier: 'watch', name: 'Watch' });
     const ascent = catalogItem({ event_id: 'ascent', tier: 'shot', name: 'Ascent' });
     const tiers = tiersAt(catalog([watch, ascent]), NOW);
@@ -67,12 +67,12 @@ describe('launch-corridor', () => {
     expect(tiers.groups.watch.map((launch) => launch.eventId)).toEqual(['watch-1']);
     expect(tiers.find('watch-1')?.corridor).not.toBeNull();
     const drawn = api().buildTierMapFeatures(tiers, NOW);
-    expect(drawn.pads.map((feature) => feature.properties?.event_id)).toEqual(['ascent']);
+    expect(drawn.pads.map((feature) => feature.properties?.event_id)).toEqual(['ascent', 'watch-1']);
+    expect(drawn.pads[1]?.properties?.label).toBe('LAUNCH / WATCH');
     expect(drawn.lines.length).toBeGreaterThan(0);
     expect(drawn.lines.every((feature) => feature.geometry.type === 'LineString')).toBe(true);
-    expect(drawn.lines.every((feature) => feature.properties?.event_id === 'ascent')).toBe(true);
+    expect(new Set(drawn.lines.map((feature) => feature.properties?.event_id))).toEqual(new Set(['ascent', 'watch-1']));
     expect(drawn.lines.every((feature) => feature.properties?.catalog === 'tier')).toBe(true);
-    expect(drawn.pads.some((feature) => feature.properties?.event_id === 'watch-1')).toBe(false);
   });
 
   const CRS35_ID = 'bf2c3027-a314-403e-a416-2bfd5d165ad1';

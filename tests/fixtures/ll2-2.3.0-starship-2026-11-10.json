@@ -1,0 +1,115 @@
+{
+  "count": 2,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": "6aa7b90b-e5ed-45d8-a52e-04fbf399d178",
+      "name": "Falcon 9 Block 5 | USSF-627",
+      "last_updated": "2026-11-09T21:22:26Z",
+      "net": "2026-11-11T02:49:00Z",
+      "window_start": "2026-11-11T02:49:00Z",
+      "window_end": "2026-11-11T06:49:00Z",
+      "status": {
+        "id": 1,
+        "name": "Go for Launch",
+        "abbrev": "Go",
+        "description": "Current T-0 confirmed by official or reliable sources."
+      },
+      "net_precision": {
+        "id": 1,
+        "name": "Minute",
+        "abbrev": "MIN",
+        "description": "The T-0 is accurate to the minute."
+      },
+      "rocket": {
+        "configuration": {
+          "id": 164,
+          "name": "Falcon 9",
+          "full_name": "Falcon 9 Block 5"
+        },
+        "spacecraft_stage": []
+      },
+      "pad": {
+        "name": "Space Launch Complex 4E",
+        "latitude": 34.632,
+        "longitude": -120.611,
+        "location": {
+          "name": "Vandenberg SFB, CA, USA",
+          "latitude": 34.75133,
+          "longitude": -120.52023,
+          "timezone_name": "America/Los_Angeles"
+        }
+      },
+      "mission": {
+        "name": "USSF-627",
+        "orbit": {
+          "id": 8,
+          "name": "Low Earth Orbit",
+          "abbrev": "LEO",
+          "celestial_body": {
+            "response_mode": "list",
+            "id": 1,
+            "name": "Earth"
+          }
+        }
+      }
+    },
+    {
+      "id": "0f867f0c-5422-4d44-93b8-d7faaae7019b",
+      "name": "Starship | Starlink Group 31-2 (Starship Flight 15)",
+      "last_updated": "2026-11-09T23:06:16Z",
+      "net": "2026-11-13T22:45:00Z",
+      "window_start": "2026-11-13T22:45:00Z",
+      "window_end": "2026-11-14T00:00:00Z",
+      "status": {
+        "id": 8,
+        "name": "To Be Confirmed",
+        "abbrev": "TBC",
+        "description": "Awaiting official confirmation - current date is known with some certainty."
+      },
+      "net_precision": {
+        "id": 1,
+        "name": "Minute",
+        "abbrev": "MIN",
+        "description": "The T-0 is accurate to the minute."
+      },
+      "rocket": {
+        "configuration": {
+          "id": 522,
+          "name": "Starship",
+          "full_name": "Starship V3"
+        },
+        "spacecraft_stage": [
+          {
+            "destination": "Low Earth Orbit"
+          }
+        ]
+      },
+      "pad": {
+        "name": "Orbital Launch Pad 2",
+        "latitude": 25.99677,
+        "longitude": -97.15799,
+        "location": {
+          "name": "SpaceX Starbase, TX, USA",
+          "latitude": 25.997,
+          "longitude": -97.157,
+          "timezone_name": "America/Chicago"
+        }
+      },
+      "mission": {
+        "name": "Starlink Group 31-2 (Starship Flight 15)",
+        "orbit": {
+          "id": 8,
+          "name": "Low Earth Orbit",
+          "abbrev": "LEO",
+          "celestial_body": {
+            "response_mode": "list",
+            "id": 1,
+            "name": "Earth"
+          }
+        }
+      }
+    }
+  ]
+}

@@ -4395,7 +4395,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
     send,
     `(() => {
       const text = document.querySelector('.map-launch-brief')?.textContent || '';
-      if (!text.includes(${JSON.stringify(meta.names.launch)}) || !text.includes('Verify Likely') || text.includes('Verify Horizon')) return null;
+      if (!text.includes(${JSON.stringify(meta.names.launch)}) || !text.includes('Verify Likely') || !text.includes('Verify Horizon')) return null;
       return { ok: true };
     })()`,
     'map tier launch brief',
@@ -4412,7 +4412,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
       const lineData = await lines.getData();
       const padIds = (padData.features || []).map((feature) => feature.properties && feature.properties.event_id);
       const lineIds = (lineData.features || []).map((feature) => feature.properties && feature.properties.event_id);
-      if (!padIds.includes('verify-ascent') || !padIds.includes('verify-likely') || padIds.includes('verify-horizon')) return null;
+      if (!padIds.includes('verify-ascent') || !padIds.includes('verify-likely') || !padIds.includes('verify-horizon')) return null;
       if (!lineIds.includes('verify-ascent') || lineIds.includes('verify-likely') || lineIds.includes('verify-horizon')) return null;
       return { ok: true, pads: padIds, lines: lineIds.length };
     })()`,
@@ -10386,7 +10386,7 @@ async function driveHelp(send, evidenceDir) {
     'All launches',
     '14 days',
     'That list is not limited to chances.',
-    'Map and Upcoming list chances only',
+    'Upcoming lists chances only',
     'None clears it.',
     'beside Telemetry',
     'about 18°',

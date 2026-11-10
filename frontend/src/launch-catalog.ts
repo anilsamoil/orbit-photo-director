@@ -23,6 +23,7 @@ function signature(tiers: TierCatalog | null, now: number): string {
     tiers.closedLabel,
     forecast,
     ids(tiers.pins),
+    ids(tiers.mapPins),
     ids(tiers.highlights),
     ids(tiers.upcoming),
     ids(tiers.groups.shot),

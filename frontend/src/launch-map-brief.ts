@@ -90,8 +90,8 @@ function renderTierMapBrief(container: HTMLElement, tiers: TierCatalog, now: num
   if (previousPrimary) savePrimaryOpen(container, primaryWasOpen);
   const moreWasOpen = container.querySelector<HTMLDetailsElement>('.map-launch-more')?.open ?? false;
   container.className = 'map-launch-brief';
-  const primary = tiers.highlights[0] ?? null;
-  const rest = tiers.pins.filter((pin) => pin !== primary);
+  const primary = tiers.highlights[0] ?? tiers.mapPins[0] ?? null;
+  const rest = tiers.mapPins.filter((pin) => pin !== primary);
   const nodes: HTMLElement[] = [];
   if (primary) {
     const details = document.createElement('details');
@@ -121,7 +121,7 @@ function renderTierMapBrief(container: HTMLElement, tiers: TierCatalog, now: num
   }
   if (!primary) {
     const empty = document.createElement('p');
-    empty.textContent = 'No Shot or Likely launch in the current forecast.';
+    empty.textContent = 'No upcoming launch is listed in the available schedule.';
     nodes.push(empty);
   }
   container.replaceChildren(...nodes);
