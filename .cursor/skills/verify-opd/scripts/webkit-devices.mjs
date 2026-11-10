@@ -766,11 +766,11 @@ async function settleFocusedPose(page, pose) {
           ...(selections.length <= 1 ? ['map-launch-more'] : []),
         ];
       }
-      const primary = tiers.highlights[0];
+      const primary = tiers.highlights[0] ?? tiers.mapPins[0] ?? null;
       return [
         'launch-data-details',
         ...(!primary ? ['map-launch-primary'] : []),
-        ...(!tiers.pins.some((pin) => pin !== primary) ? ['map-launch-more'] : []),
+        ...(!tiers.mapPins.some((pin) => pin !== primary) ? ['map-launch-more'] : []),
       ];
     });
   }

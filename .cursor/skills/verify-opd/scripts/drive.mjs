@@ -4390,6 +4390,24 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
     `(() => {
       const text = document.querySelector('.map-launch-brief')?.textContent || '';
       if (!text.includes(${JSON.stringify(meta.names.launch)}) || !text.includes('Verify Likely') || !text.includes('Verify Horizon')) return null;
+      const primaryDetails = document.querySelector('.map-launch-primary');
+      const more = document.querySelector('.map-launch-more');
+      if (primaryDetails) primaryDetails.open = true;
+      if (more) more.open = true;
+      const fact = (card, label) => {
+        const row = [...card.querySelectorAll('.launch-fact')].find((line) => line.querySelector('.launch-fact-label')?.textContent === label);
+        return row?.lastElementChild?.textContent || '';
+      };
+      const columnsOf = (card) => getComputedStyle(card).gridTemplateColumns.trim().split(/\\s+/).filter(Boolean);
+      for (const id of ['verify-ascent', 'verify-likely']) {
+        const card = document.querySelector('.map-launch-brief [data-event-id="' + id + '"]');
+        if (!card || !card.classList.contains('launch-tier')) return null;
+        if (columnsOf(card).length !== 1) return null;
+        if (fact(card, 'Vehicle') !== 'Verify Rocket' || !fact(card, 'Status') || !fact(card, 'Time precision')) return null;
+      }
+      const starship = document.querySelector('.map-launch-brief [data-event-id="0f867f0c-5422-4d44-93b8-d7faaae7019b"]');
+      if (!starship || fact(starship, 'Status') !== 'TBC · Tentative' || fact(starship, 'Vehicle') !== 'Starship V3' || fact(starship, 'Pad') !== 'Orbital Launch Pad 2') return null;
+      if (columnsOf(starship).length !== 1) return null;
       return { ok: true };
     })()`,
     'map tier launch brief',
@@ -4406,8 +4424,11 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
       const lineData = await lines.getData();
       const padIds = (padData.features || []).map((feature) => feature.properties && feature.properties.event_id);
       const lineIds = (lineData.features || []).map((feature) => feature.properties && feature.properties.event_id);
-      if (!padIds.includes('verify-ascent') || !padIds.includes('verify-likely') || !padIds.includes('verify-horizon')) return null;
-      if (!lineIds.includes('verify-ascent') || lineIds.includes('verify-likely') || lineIds.includes('verify-horizon')) return null;
+      const starship = '0f867f0c-5422-4d44-93b8-d7faaae7019b';
+      const starshipPad = (padData.features || []).find((feature) => feature.properties && feature.properties.event_id === starship);
+      if (!padIds.includes('verify-ascent') || !padIds.includes('verify-likely') || !padIds.includes('verify-horizon') || !starshipPad) return null;
+      if (starshipPad.properties.label !== 'LAUNCH / WATCH') return null;
+      if (!lineIds.includes('verify-ascent') || lineIds.includes('verify-likely') || lineIds.includes('verify-horizon') || lineIds.includes(starship)) return null;
       return { ok: true, pads: padIds, lines: lineIds.length };
     })()`,
     'tier launch pads and corridor',
@@ -9024,6 +9045,8 @@ async function driveHelp(send, evidenceDir) {
     '14 days',
     'That list is not limited to chances.',
     'Upcoming lists chances only',
+    'The map also marks scheduled launches in the next seven days that are not chances',
+    'Watch, Unassessed, or No shot label',
     'None clears it.',
     'beside Telemetry',
     'about 18°',
