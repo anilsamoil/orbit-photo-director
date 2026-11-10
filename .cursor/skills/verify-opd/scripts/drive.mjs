@@ -7886,20 +7886,21 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
           const shot = await capturePlanCanvas(send);
           const main = await withLockedPlan(mainSend, camera.center[0], camera.center[1], zoom, camera.country, async (mainRow) => ({ row: mainRow, shot: await capturePlanCanvas(mainSend) }));
           savePlanPair(`${camera.country}-z${zoom}-${camera.center[0]}-${camera.center[1]}`, shot, main.shot);
+          const { headView, mainView } = assembleLockedPair({ row, shot }, main);
           assertPlanLabelChecks({
-            ...row,
+            ...headView,
             headShot: shot,
             mainShot: main.shot,
-            headPlacement: row.placement,
-            mainPlacement: main.row.placement,
+            headPlacement: headView.placement,
+            mainPlacement: mainView.placement,
             contract,
-            labelOpacity: row.placement && row.placement.opacity ? row.placement.opacity[camera.country] : null,
+            labelOpacity: headView.placement && headView.placement.opacity ? headView.placement.opacity[camera.country] : null,
             ignoreRects: shot ? shot.ignore : [],
             chromeRects: shot ? shot.chrome : [],
             mainIgnoreRects: main.shot ? main.shot.ignore : [],
             mainChromeRects: main.shot ? main.shot.chrome : [],
           });
-          return row;
+          return headView;
         });
         await releasePlanCamera(send);
         await releasePlanCamera(mainSend);

@@ -937,6 +937,7 @@ test('the paired capture rejects EGYPT that arrives on main after the early row'
   const pair = source.slice(source.indexOf('async function compareLockedPair'), source.indexOf('export async function proveFractionalPlanLabels'));
   assert.match(pair, /assembleLockedPair\(head, main\)/);
   assert.match(pair, /mainView\.placement/);
+  assert.doesNotMatch(source, /mainPlacement: main\.row\.placement/);
   const canvas = { left: 0, top: 0, right: 400, bottom: 300 };
   const box = { left: 40, top: 40, right: 120, bottom: 70 };
   const place = (name) => ({ labels: [{ name, opacity: 1, box }], canvas, chrome: [] });
