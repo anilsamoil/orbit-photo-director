@@ -175,7 +175,7 @@ export function createIssRenderer(
         0,
       );
       map.jumpTo({ ...solved, bearing: aim.pose.bearingDeg, roll: EARTH_VIEW_ROLL_DEG });
-      const sawCamera = publishAppliedCamera(map, aim);
+      aim.onCamera?.(map.getVerticalFieldOfView(), aim.fovEpoch ?? 0);
       launchState.aim = aim;
       if (labels) {
         requestNear();
@@ -184,7 +184,6 @@ export function createIssRenderer(
       }
       syncLaunchOverlay(map, frame, launchMarkers, launchEdges, launchState, hooks);
       await idle(map);
-      if (!sawCamera) publishAppliedCamera(map, aim);
     },
     showLaunches(sites) {
       launchState.sites = sites.slice(0, 1);
@@ -502,15 +501,6 @@ function sceneSky(): SkySpecification {
     'sky-horizon-blend': 0.45,
     'atmosphere-blend': 0.55,
   };
-}
-
-function publishAppliedCamera(map: MapLibreMap, aim: IssAim): boolean {
-  const applied = map.getVerticalFieldOfView();
-  const roll = map.getRoll();
-  const wrapped = ((roll % 360) + 360) % 360;
-  if (!Number.isFinite(applied) || !Number.isFinite(wrapped) || Math.abs(wrapped - EARTH_VIEW_ROLL_DEG) > 0.5) return false;
-  aim.onCamera?.(applied, aim.fovEpoch ?? 0, wrapped);
-  return true;
 }
 
 function idle(map: MapLibreMap): Promise<void> {

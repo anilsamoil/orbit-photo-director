@@ -214,8 +214,6 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   let snapshot: SceneSnapshot | null = null;
   let renderer: IssRenderer | null = null;
   let rendererReady = false;
-  let contextLost = false;
-  const retiredRenderers = new WeakSet<IssRenderer>();
   let frameState: SceneFrame | null = null;
   let imagery: ImageryState = { kind: 'ready' };
   let held: IssScenePhase = 'running';
@@ -500,6 +498,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     });
 
   void boot(bootGeneration);
+  if (options.drive !== 'manual') startTimer();
 
   const scene: IssScene = {
     generation: () => generation,
@@ -519,13 +518,14 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       if (phase === 'dormant' || phase === 'suspended') return;
       held = phase;
       setPhase('suspended');
+      stopTimer();
       paintSerial += 1;
     },
     resume() {
       if (phase !== 'suspended') return;
-      const next = held === 'loading' && rendererReady && snapshot ? 'running'
-        : held === 'error' || held === 'loading' || held === 'running' ? held : 'running';
+      const next = held === 'error' || held === 'loading' || held === 'running' ? held : 'running';
       setPhase(next);
+      if (options.drive !== 'manual' && next === 'running') startTimer();
       if (next === 'running') void paint();
     },
     retry() {
@@ -541,6 +541,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       generation += 1;
       paintSerial += 1;
       setPhase('dormant');
+      stopTimer();
       document.removeEventListener('visibilitychange', onVisibility);
       splitMedia?.removeEventListener('change', onSplitChange);
       window.removeEventListener('resize', onResize);
@@ -548,7 +549,8 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       fullscreen.dispose();
       stopLaunches();
       storedAim.flush();
-      dropRenderer(renderer);
+      renderer?.destroy();
+      renderer = null;
       rendererReady = false;
       parkSplit();
       root.remove();
@@ -559,11 +561,8 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   return scene;
 
   async function boot(token: number): Promise<void> {
-    appliedFovDeg = null;
-    paintFov();
-    let created: IssRenderer | null = null;
     try {
-      created = factory(frame, {
+      renderer = factory(frame, {
         onLaunchLook(eventId) {
           const active = activePick();
           if (active.kind !== 'held' || eventId !== active.eventId) return;
@@ -592,34 +591,21 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
         },
         onContextLost() {
           if (token !== generation) return;
-          generation += 1;
-          contextLost = true;
-          rendererReady = false;
-          dropRenderer(renderer);
           fail('WebGL context lost');
         },
       });
-      if (token !== generation) {
-        dropRenderer(created);
-        return;
-      }
-      renderer = created;
-      await created.ready();
+      await renderer.ready();
     } catch (error) {
-      if (token !== generation) {
-        dropRenderer(created);
-        return;
-      }
-      dropRenderer(created);
+      if (token !== generation) return;
       fail(explainBoot(error));
       return;
     }
     if (token !== generation) {
-      dropRenderer(created);
+      renderer?.destroy();
+      renderer = null;
       return;
     }
     rendererReady = true;
-    contextLost = false;
     if (snapshot && phase === 'loading') {
       setPhase('running');
       await paint();
@@ -665,10 +651,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
         heightPx: fit.heightPx,
         lightingUtcMs: when,
         fovEpoch: issued,
-        onCamera(applied, epoch, rollDeg) {
-          if (token !== generation) return;
-          confirmAppliedFov(applied, epoch, rollDeg);
-        },
+        onCamera: confirmAppliedFov,
       });
     } catch (error) {
       if (token !== generation) return;
@@ -1056,6 +1039,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     retry.hidden = false;
     mapButton.hidden = false;
     setTelemetryOpen(true);
+    stopTimer();
   }
 
   function setTelemetryOpen(open: boolean): void {
@@ -1232,7 +1216,6 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   }
 
   function setOpticalFov(value: number): void {
-    if (contextLost) return;
     const next = clampFov(value);
     if (next === opticalFovDeg) return;
     opticalFovDeg = next;
@@ -1242,22 +1225,10 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     if (phase === 'running' && rendererReady) void paint();
   }
 
-  function confirmAppliedFov(applied: number, token: number, rollDeg?: number): void {
+  function confirmAppliedFov(applied: number, token: number): void {
     if (token !== fovEpoch || phase !== 'running' || !Number.isFinite(applied)) return;
-    const wrapped = (((rollDeg ?? Number.NaN) % 360) + 360) % 360;
-    if (!Number.isFinite(wrapped) || Math.abs(wrapped - EARTH_VIEW_ROLL_DEG) > 0.5) return;
     appliedFovDeg = applied;
     paintFov();
-  }
-
-  function dropRenderer(created: IssRenderer | null): void {
-    if (!created || retiredRenderers.has(created)) return;
-    retiredRenderers.add(created);
-    created.destroy();
-    if (renderer === created) {
-      renderer = null;
-      rendererReady = false;
-    }
   }
 
   function paintFov(): void {
@@ -1333,8 +1304,6 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   function setPhase(next: IssScenePhase): void {
     phase = next;
     root.dataset.issPhase = next;
-    if (next === 'running' && options.drive !== 'manual') startTimer();
-    else stopTimer();
   }
 
   function hideActions(): void {
@@ -1376,7 +1345,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   }
 
   function startTimer(): void {
-    if (timer !== 0) return;
+    stopTimer();
     timer = window.setInterval(() => {
       void paint('timer');
     }, 500);
