@@ -7594,8 +7594,7 @@ function assertLowZoomNames(row) {
   if (Array.isArray(row.mainNames)) {
     const fold = (list) => (list || [])
       .filter((name) => typeof name === 'string' && name)
-      .filter((name) => !(contract.hide && name.toLowerCase() === String(contract.hide).toLowerCase()))
-      .filter((name) => name.toLowerCase() !== 'canada')
+      .filter((name) => !(row.showsSame === true && name.toLowerCase() === 'canada'))
       .map((name) => name.toLowerCase())
       .sort()
       .join('|');
