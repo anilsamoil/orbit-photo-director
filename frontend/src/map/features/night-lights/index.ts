@@ -1,4 +1,5 @@
-import { gibsBlackMarbleUrl } from '../../../tile-precache';
+import { nightLightsMinute, viirsAlphaUrl } from '../../../night-lights';
+import type { Clock } from '../../map-core/clock';
 import type { MapCore } from '../../map-core/core';
 import type { MapFeature } from '../../map-core/feature';
 import { PREF_KEYS } from '../../map-core/prefs';
@@ -21,6 +22,8 @@ type Runtime = {
   visible: boolean;
   bound: boolean;
   errorLogged: boolean;
+  clock: Clock | null;
+  minute: number | null;
 };
 
 const state: Runtime = {
@@ -28,12 +31,19 @@ const state: Runtime = {
   visible: readNightLightsVisible(),
   bound: false,
   errorLogged: false,
+  clock: null,
+  minute: null,
 };
 
 setDimNightLights(state.visible);
 
-function tiles(): string[] {
-  return [`viirs-alpha://${gibsBlackMarbleUrl(CANONICAL_VIIRS_DATE)}`];
+function refreshNightLightsTime(): void {
+  const core = state.core;
+  if (!core || !state.visible) return;
+  const minute = nightLightsMinute(core.clock.viewMs());
+  if (minute === state.minute) return;
+  state.minute = minute;
+  core.setRasterTiles('viirs-night-lights', [viirsAlphaUrl(CANONICAL_VIIRS_DATE, minute)]);
 }
 
 function applyNightLightsVisibility(): void {
@@ -52,8 +62,8 @@ function reflectButton(): void {
   btn.classList.toggle('active', state.visible);
   btn.setAttribute('aria-pressed', state.visible ? 'true' : 'false');
   btn.title = state.visible
-    ? 'VIIRS night lights shown — click to hide'
-    : 'VIIRS night lights hidden — click to show (annual composite, slow first load)';
+    ? 'Night-side city lights — static 2016 VIIRS composite; click to hide'
+    : 'Show night-side city lights (static 2016 VIIRS composite)';
 }
 
 function armErrorHandler(): void {
@@ -85,10 +95,10 @@ function bindNightLightsToggle(): void {
   btn.addEventListener('click', () => {
     if (state.errorLogged) {
       state.errorLogged = false;
-      const core = state.core;
-      if (core) core.setRasterTiles('viirs-night-lights', tiles());
+      state.minute = null;
     }
     state.visible = !state.visible;
+    refreshNightLightsTime();
     try {
       localStorage.setItem(PREF_KEYS.nightLightsVisible, state.visible ? '1' : '0');
     } catch {}
@@ -101,6 +111,15 @@ function bindNightLightsToggle(): void {
 /** Put the dim and the raster on the map and apply the preference. */
 export function refreshNightLights(core: MapCore): void {
   state.core = core;
+  if (state.clock !== core.clock) {
+    state.clock = core.clock;
+    state.minute = null;
+    core.clock.onViewTime(refreshNightLightsTime);
+    core.clock.every(30_000, () => {
+      if (!core.clock.isScrubbed()) refreshNightLightsTime();
+    });
+  }
+  refreshNightLightsTime();
   core.ensureLayer(GLOBAL_DIM_LAYER);
   core.ensureLayer(NIGHT_LIGHTS_LAYER);
   applyNightLightsVisibility();
@@ -110,6 +129,7 @@ export function refreshNightLights(core: MapCore): void {
  *  button stay. */
 export function resetNightLightsForTest(): void {
   state.visible = false;
+  state.minute = null;
   setDimNightLights(false);
   try {
     localStorage.removeItem(PREF_KEYS.nightLightsVisible);

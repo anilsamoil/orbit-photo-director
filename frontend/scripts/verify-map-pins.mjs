@@ -123,10 +123,10 @@ const MUTATIONS = [
     replace: "    const stored = localStorage.getItem(PREF_KEYS.labelsVisible);\n    return stored === '1';",
   },
   {
-    contract: 'the night lights raster paints at 95% opacity',
+    contract: 'night lights preserve overview intensity and restrain high-zoom glare',
     file: NIGHT_LIGHTS,
-    find: "  source: 'viirs-night-lights',\n  layout: { visibility: 'none' },\n  paint: { 'raster-opacity': 0.95 },",
-    replace: "  source: 'viirs-night-lights',\n  layout: { visibility: 'none' },\n  paint: { 'raster-opacity': 0.55 },",
+    find: "  source: 'viirs-night-lights',\n  layout: { visibility: 'none' },\n  paint: { 'raster-opacity': ['interpolate', ['linear'], ['zoom'], 2, 0.95, 4, 0.95, 6, 0.85, 8, 0.74] },",
+    replace: "  source: 'viirs-night-lights',\n  layout: { visibility: 'none' },\n  paint: { 'raster-opacity': ['interpolate', ['linear'], ['zoom'], 2, 0.95, 4, 0.95, 6, 0.85, 8, 1] },",
   },
   {
     contract: 'the global dim shows only with lights on and the terminator off',
