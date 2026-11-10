@@ -1,15 +1,16 @@
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const html = readFileSync(resolve('index.html'), 'utf8');
 import { describe, expect, it } from 'vitest';
-import { layoutMapNavigation } from '../src/map-navigation-layout';
-import { paintEqualDigits } from '../src/digits';
 
 const css = readFileSync(resolve('src/style.css'), 'utf8');
 
 function mount(viewClass: string): void {
-  document.head.innerHTML = `<style>${css}</style>`;
+  const zeroRightInset = css.replace(/env\(safe-area-inset-right(?:\s*,[^)]*)?\)/g, '0px')
+    .replace(/calc\((\d+)px \+ 0px\)/g, '$1px');
+  document.head.innerHTML = `<style>${zeroRightInset}</style>`;
   document.body.innerHTML = `
     <header class="topbar">
       <span class="brand-expansion">SNAP</span>
@@ -317,8 +318,9 @@ describe('map chrome layout', () => {
     expect(wideShort).toContain('height: 52px;');
     expect(css).toContain('--map-banner-clearance: calc(0.2rem + 0.75rem * 1.3 + 0.2rem + 1px);');
     expect(css).toContain('--map-command-bottom: calc(var(--map-banner-clearance) + env(safe-area-inset-bottom, 0px));');
-    expect(css).toContain('bottom: var(--map-command-bottom, env(safe-area-inset-bottom, 0px));');
-    expect(css).toContain('max-height: calc(100% - var(--topbar-height) - var(--map-command-height) - var(--map-command-bottom, 0px) - 16px);');
+    expect(css).toContain('bottom: calc(var(--map-command-bottom, env(safe-area-inset-bottom, 0px)) + var(--map-time-lift, 0px));');
+    expect(css).toContain('--map-dock-clear: max(calc(var(--map-command-height) + var(--map-command-bottom, 0px) + var(--map-time-lift, 0px)), calc(var(--map-corner-bottom) + var(--map-corner-lift, 0px) + 44px + var(--map-corner-gap)))');
+    expect(css).toContain('max-height: calc(100% - var(--topbar-height) - var(--map-dock-clear) - 16px);');
     expect(css).toContain('--map-command-bottom: calc(4rem + env(safe-area-inset-bottom, 0px));');
     expect(css).toContain('--map-corner-bottom: calc(4rem + 4px + env(safe-area-inset-bottom, 0px));');
     expect(css).toContain('body.shotlist-bar-visible:has(> #view.view-map) main {\n    padding-bottom: 0;');
@@ -326,116 +328,45 @@ describe('map chrome layout', () => {
     expect(heights).not.toContain('104px');
   });
 
-  it.each([
-    { name: '320×568 closed', width: 320, height: 568, timeTop: 262.40625, timeWidth: 108, shotlist: false },
-    { name: '320×568 shot list', width: 320, height: 568, timeTop: 182.40625, timeWidth: 108, shotlist: true },
-    { name: '320×568 shot list and legend', width: 320, height: 568, timeTop: 182.40625, timeWidth: 108, shotlist: true },
-    { name: '320×568 deep scrub, shot list and legend', width: 320, height: 568, timeTop: 182.40625, timeWidth: 108, shotlist: true },
-    { name: '390×564 closed', width: 390, height: 564, timeTop: 354.40625, timeWidth: 178, shotlist: false },
-    { name: '390×564 shot list', width: 390, height: 564, timeTop: 274.40625, timeWidth: 178, shotlist: true },
-    { name: '390×564 shot list and legend', width: 390, height: 564, timeTop: 274.40625, timeWidth: 178, shotlist: true },
-    { name: '430×400 closed with expanded legend', width: 430, height: 400, timeTop: 243.40625, timeWidth: 202, shotlist: false },
-    { name: '430×400 shot list', width: 430, height: 400, timeTop: 202.40625, timeWidth: 202, shotlist: true },
-    { name: '430×400 shot list and legend', width: 430, height: 400, timeTop: 202.40625, timeWidth: 202, shotlist: true },
-    { name: '664×390 shot list', width: 664, height: 390, timeTop: 222, timeWidth: 436, shotlist: true },
-    { name: '844×390 shot list', width: 844, height: 390, timeTop: 270, timeWidth: 604.765625, shotlist: true },
-  ])('keeps all three full navigation hit areas clear of the measured time strip: $name', (sample) => {
-    mount('view-map');
-    const pane = document.getElementById('map-pane')!;
-    const map = document.getElementById('map')!;
-    const short = sample.height <= 520;
-    const mapTop = short ? 48 : 89;
-    const toolbarBottom = short ? 105 : 146;
-    const inset = short ? 16 : 8;
-    const rect = (x: number, y: number, width: number, height: number) => new DOMRect(x, y, width, height);
-    pane.style.setProperty('--map-nav-toolbar-gap', `${short ? 5 : 14}px`);
-    map.getBoundingClientRect = () => rect(0, mapTop, sample.width, sample.height - mapTop - (sample.shotlist && !short ? 80 : 0));
-    const toolbar = pane.querySelector('.map-toolbar')!;
-    toolbar.getBoundingClientRect = () => rect(8, mapTop + 5, sample.width === 320 ? 193.8125 : 203.40625, toolbarBottom - mapTop - 5);
-    const dock = pane.querySelector('.map-control-dock')!;
-    const dockBottom = short ? sample.height - (sample.shotlist ? 215 : 174) : sample.height - (sample.shotlist ? 231 : 151);
-    dock.getBoundingClientRect = () => rect(sample.width - 74.15625, mapTop + 5, 66.15625, dockBottom - mapTop - 5);
-    const legend = pane.querySelector('.map-legend-panel')!;
-    const deep = sample.name.includes('deep scrub');
-    const legendTop = short ? (sample.shotlist ? 132 : 164) : sample.height - 235.953125 - (sample.shotlist ? 80 : 0) - (deep ? 18 : 0);
-    if (sample.name.includes('legend')) legend.getBoundingClientRect = () => rect(sample.width - 196, legendTop, 88, deep ? 169.953125 : 151.953125);
-    const legendToggle = pane.querySelector('.map-legend-toggle')!;
-    const cornerTop = short ? sample.height - (sample.shotlist ? 112 : 80) : sample.height - (sample.shotlist ? 160 : 80);
-    legendToggle.getBoundingClientRect = () => rect(sample.width - 196, cornerTop, 88, 44);
-    pane.insertAdjacentHTML('beforeend', '<button class="map-chrome-toggle">Hide</button>');
-    const hide = pane.querySelector('.map-chrome-toggle')!;
-    hide.getBoundingClientRect = () => rect(sample.width - 100, cornerTop, 88, 44);
-    map.insertAdjacentHTML('beforeend', `<div class="maplibregl-ctrl-top-left"><div class="maplibregl-ctrl maplibregl-ctrl-group">
-      <button class="maplibregl-ctrl-zoom-in"></button><button class="maplibregl-ctrl-zoom-out"></button><button class="maplibregl-ctrl-compass"></button>
-    </div></div>`);
-    pane.insertAdjacentHTML('beforeend', '<div class="map-command"><div class="map-controls-time"><div class="time-slider-row"><input class="time-slider" /><span class="time-slider-readout"></span></div></div></div>');
-    const time = pane.querySelector<HTMLElement>('.map-controls-time')!;
-    time.getBoundingClientRect = () => rect(inset, sample.timeTop, sample.timeWidth, sample.height - sample.timeTop - (sample.shotlist ? 108 : 28));
-    const row = time.querySelector<HTMLElement>('.time-slider-row')!;
-    row.getBoundingClientRect = () => rect(inset + 8, sample.timeTop + 4, Math.max(160, sample.timeWidth - 16), 24);
-    const slider = time.querySelector<HTMLElement>('.time-slider')!;
-    slider.getBoundingClientRect = () => rect(inset + 39, sample.timeTop - 6, 27, 44);
-    const readout = time.querySelector<HTMLElement>('.time-slider-readout')!;
-    readout.getBoundingClientRect = () => deep ? rect(108, 186.40625, 64, 24) : rect(0, 0, 0, 0);
-    const corner = map.querySelector<HTMLElement>('.maplibregl-ctrl-top-left')!;
-    const group = corner.querySelector<HTMLElement>('.maplibregl-ctrl-group')!;
-    const buttons = [...group.querySelectorAll('button')];
-    const horizontal = () => pane.dataset.mapNavigation === 'row'
-      && ruleStyle('.view-map #map-pane[data-map-navigation="row"] .maplibregl-ctrl-top-left .maplibregl-ctrl-group').display === 'flex';
-    group.getBoundingClientRect = () => {
-      const style = getComputedStyle(corner);
-      const shift = Number.parseFloat(style.transform.match(/translateX\(\s*([-\d.]+)px/)?.[1] ?? '0');
-      return rect(8 + shift, mapTop + Number.parseFloat(style.top), horizontal() ? 132 : 44, horizontal() ? 44 : 132);
-    };
-    for (const [index, button] of buttons.entries()) {
-      button.getBoundingClientRect = () => {
-        const box = group.getBoundingClientRect();
-        return rect(box.left + (horizontal() ? index * 44 : 0), box.top + (horizontal() ? 0 : index * 44), px(`.${button.className}`, 'width'), px(`.${button.className}`, 'height'));
-      };
-    }
-
-    layoutMapNavigation(pane);
-    const first = group.getBoundingClientRect();
-    layoutMapNavigation(pane);
-    expect(group.getBoundingClientRect()).toEqual(first);
-    const obstacles = [time, row, slider, readout, toolbar, dock, legendToggle, hide].map((element) => element.getBoundingClientRect());
-    if (sample.name.includes('legend')) obstacles.push(legend.getBoundingClientRect());
-    if (sample.name === '430×400 closed with expanded legend') {
-      expect(first.left).toBe(8);
-    }
-    for (const button of buttons) {
-      const box = button.getBoundingClientRect();
-      expect(box.width).toBe(44);
-      expect(box.height).toBe(44);
-      expect(box.top).toBeGreaterThanOrEqual(mapTop);
-      expect(box.right).toBeLessThanOrEqual(sample.width);
-      expect(box.bottom).toBeLessThanOrEqual(map.getBoundingClientRect().bottom);
-      for (const obstacle of obstacles) {
-        expect(box.left >= obstacle.right || box.right <= obstacle.left || box.top >= obstacle.bottom || box.bottom <= obstacle.top,
-          JSON.stringify({ control: button.className, box, obstacle, layout: pane.dataset.mapNavigation })).toBe(true);
-      }
-      for (const [x, y] of [[box.left + 1, box.top + 1], [box.right - 1, box.top + 1], [box.left + 1, box.bottom - 1], [box.right - 1, box.bottom - 1], [box.left + 22, box.top + 22]] as const) {
-        expect(obstacles.some((obstacle) => x >= obstacle.left && x < obstacle.right && y >= obstacle.top && y < obstacle.bottom)).toBe(false);
-      }
-    }
-    if (sample.name === '390×564 closed') {
-      expect(first.left).toBe(8);
-      expect(time.getBoundingClientRect().top - buttons[2]!.getBoundingClientRect().bottom).toBeCloseTo(62.40625, 4);
-    }
-  });
-
-  it('wraps the complete deep-scrub time and stale-TLE warning inside its measured readout', () => {
-    mount('view-map');
-    document.getElementById('map-pane')!.insertAdjacentHTML('beforeend', '<div class="map-command"><div class="map-controls-time"><span class="time-slider-readout time-slider-scrubbed time-slider-stale"></span></div></div>');
-    const readout = document.querySelector<HTMLElement>('.time-slider-readout')!;
-    const label = '+2d 04:54Z · stale TLE';
-    paintEqualDigits(readout, label);
-    const style = getComputedStyle(readout);
-    expect(readout.textContent).toBe(label);
-    expect(style.whiteSpace).toBe('normal');
-    expect(style.overflowWrap).toBe('anywhere');
-    expect(style.overflow).not.toBe('hidden');
-    expect(style.textOverflow).not.toBe('ellipsis');
+  it('keeps the narrow command token and leaves placement to the slot owner', () => {
+    const narrow = css.slice(css.indexOf('@media (max-width: 719px)'), css.indexOf('@media (min-width: 701px)'));
+    expect(narrow).toContain('--map-time-block: 120px');
+    expect(narrow).toContain('--map-command-height: calc(36px + 44px + 8px + var(--map-time-block) + env(safe-area-inset-bottom, 0px))');
+    expect(narrow).not.toContain('max(0px');
+    expect(narrow).not.toContain('max(28px');
+    expect(narrow).not.toContain('container-type');
+    expect(narrow).not.toContain('@container');
+    expect(narrow).not.toContain('map-chrome-reflow');
+    expect(narrow).not.toContain('map-dock-row');
+    expect(narrow).not.toContain('position:');
+    expect(narrow).not.toContain('top:');
+    expect(narrow).not.toContain('left:');
+    const commandRules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .filter(([, selector]) => selector!.includes('.map-command'));
+    expect(commandRules.length).toBeGreaterThan(0);
+    for (const [, , declarations] of commandRules) expect(declarations).not.toContain('container-type');
+    expect(css).not.toMatch(/@container[^{}]*\{[^{}]*\.map-command\b/);
+    expect(css).not.toContain('map-chrome-reflow');
+    expect(css).not.toContain('map-dock-row');
+    expect(css).toContain('body.map-slot-time .view-map .map-command');
+    expect(css).toContain('body.map-slot-dock .view-map .map-control-dock');
+    expect(css).toContain('body.map-slot-legend .view-map .map-legend-panel');
+    expect(css).toContain('margin: 0;');
+    const panel = css.slice(css.indexOf('.view-map .map-legend-panel {'), css.indexOf('.view-map .map-legend-rows'));
+    expect(panel).toContain('width: max-content');
+    expect(panel).toContain('max-width: min(11rem,');
+    expect(panel).toContain('overflow: auto');
+    expect(panel).toContain('pointer-events: auto');
+    expect(panel).not.toContain('width: 100%');
+    expect(css).toContain('--map-legend-panel-bottom: max(calc(44px + 4px), calc(var(--map-command-height) - var(--map-corner-bottom) + 12px))');
+    expect(css).toContain('max-height: calc(100% - var(--horizon-top) - var(--horizon-height) - var(--horizon-gap) - var(--map-dock-clear) - 16px)');
+    expect(css).toContain('max-height: calc(100% - var(--topbar-height) - var(--map-dock-clear) - 16px);');
+    expect(css).toContain('--map-shotlist-block: calc(5rem + env(safe-area-inset-bottom, 0px))');
+    expect(css).toContain('--map-shotlist-block: 0px');
+    expect(css).toContain('--map-pane-budget: calc(100dvh - var(--map-shotlist-block))');
+    expect(css).toContain('max-height: calc(var(--map-pane-budget) - var(--horizon-top) - var(--horizon-height) - var(--map-corner-bottom) - var(--map-legend-panel-bottom) - 8px)');
+    execFileSync('node', ['scripts/census-narrow-chrome.mjs'], { cwd: resolve('.') });
+    execFileSync('node', ['scripts/census-narrow-chrome.mjs', '--fixture'], { cwd: resolve('.') });
   });
 
   it('lays the time strip on the map', () => {
@@ -494,7 +425,7 @@ describe('map chrome layout', () => {
     expect(blocks).toContain(
       'min(40dvh, 260px, max(0px, calc(100dvh - var(--topbar-height) - var(--map-command-height) - var(--map-hit-min))))',
     );
-    expect(blocks).toContain('min(28dvh, 120px)');
+    expect(blocks).toContain('260px');
     const hit = rulesFor('#map-pane.map-inspector-open').map((style) => style.getPropertyValue('--map-hit-min')).find(Boolean);
     expect(hit).toBe('calc(2 * (28px + 64px + 24px + env(safe-area-inset-bottom, 0px)))');
   });

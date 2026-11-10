@@ -2,7 +2,7 @@ import { wrapLon } from '../../../geo';
 import { openLaunchDetails, renderLegacyLaunchCard } from '../../../launch-card';
 import { launchCatalog, subscribeLaunchSlots } from '../../../launch-catalog';
 import { openTierDetails } from '../../../launch-tier-card';
-import type { Highlight } from '../../../launch-tiers';
+import type { TierLaunch } from '../../../launch-tiers';
 import { launchStore, type LaunchState } from '../../../launch-store';
 import { selectLaunches } from '../../../launch-selectors';
 import { getMapLaunchMode, setMapLaunchMode, subscribeMapLaunchMode } from '../../../map-launch-mode';
@@ -81,7 +81,7 @@ export function refreshAscentTrajectorySource(): void {
   const tiers = launchCatalog.read(now);
   const launchState: LaunchState = launchStore.getState();
   const { lines, pads } = tiers
-    ? buildTierMapFeatures(tiers)
+    ? buildTierMapFeatures(tiers, now)
     : launchState.artifact
       ? buildLaunchMapFeatures(launchState, now)
       : buildAscentFeatures(legacyPassesInHorizon(state.passes, now));
@@ -155,7 +155,7 @@ export function bindAscentPad(host: MapCore): void {
       const now = state.core?.clock.now();
       const tiers = typeof now === 'number' ? launchCatalog.read(now) : null;
       const found = props.catalog === 'tier' && tiers ? tiers.find(eventId) : null;
-      if (found && tiers?.pins.some((pin) => pin.eventId === eventId)) {
+      if (found && tiers?.mapPins.some((pin) => pin.eventId === eventId)) {
         openTierDetails(found);
         return;
       }
@@ -184,7 +184,7 @@ function fitLaunch(core: MapCore, points: [number, number][]): void {
   else core.fitBounds(boundsOf(points), { padding: 50, maxZoom: 5, duration: 600 });
 }
 
-function tierFocusPoints(pin: Highlight): [number, number][] {
+function tierFocusPoints(pin: TierLaunch): [number, number][] {
   const points: [number, number][] = [[pin.site.lon, pin.site.lat]];
   if (!pin.corridor) return points;
   let longitude = pin.site.lon;
@@ -202,7 +202,7 @@ export function focusLaunchOnMap(eventId: string): boolean {
   const now = nowMs();
   const tiers = launchCatalog.read(now);
   if (tiers) {
-    const pin = tiers.pins.find((launch) => launch.eventId === eventId);
+    const pin = tiers.mapPins.find((launch) => launch.eventId === eventId);
     if (!pin) return false;
     fitLaunch(core, tierFocusPoints(pin));
     return true;

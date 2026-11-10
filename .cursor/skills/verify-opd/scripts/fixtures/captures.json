@@ -1,0 +1,63 @@
+{
+  "pngs": [
+    {
+      "file": ".cursor/skills/verify-opd/scripts/fixtures/label-cameras/kenya-west-37-1.png",
+      "sha256": "ae50ffac9725e2f4444604e2ab36c3bbf73537a9ba0c5785259c77de86f6ad47",
+      "bytes": 150062,
+      "kind": "plan-column screenshot",
+      "size": [
+        274,
+        984
+      ],
+      "camera": [
+        37,
+        1
+      ],
+      "commit": "565750c",
+      "environmentRecord": "incomplete",
+      "note": "Historical plan-column screenshot. The environment record is incomplete; browser, OS, and device were not stored with the file."
+    },
+    {
+      "file": ".cursor/skills/verify-opd/scripts/fixtures/label-cameras/nigeria-diagonal-8.5-11.png",
+      "sha256": "0f0533e64982bc39915c432ae427f64b93f7f5458da3ba9cb50bd805c33fd8b1",
+      "bytes": 105234,
+      "kind": "plan-column screenshot",
+      "size": [
+        274,
+        984
+      ],
+      "camera": [
+        8.5,
+        11
+      ],
+      "commit": "ee2112f",
+      "environmentRecord": "incomplete",
+      "note": "Historical plan-column screenshot. The environment record is incomplete; browser, OS, and device were not stored with the file."
+    },
+    {
+      "file": ".cursor/skills/verify-opd/scripts/fixtures/label-cameras/nigeria-east-9-10.png",
+      "sha256": "a2c7118f8955ded1025299a3057897967c1d604cac8726b6343a444bdb2f1d1c",
+      "bytes": 113762,
+      "kind": "plan-column screenshot",
+      "size": [
+        274,
+        984
+      ],
+      "camera": [
+        9,
+        10
+      ],
+      "commit": "ee2112f",
+      "environmentRecord": "incomplete",
+      "note": "Historical plan-column screenshot. The environment record is incomplete; browser, OS, and device were not stored with the file."
+    },
+    {
+      "file": "frontend/test/fixtures/country-raster/Australia-z5-reference.png",
+      "sha256": "52187a89d937822350294a33725adf040d490d27bfa86768a730b1576044e08e",
+      "bytes": 24128,
+      "kind": "Esri reference mosaic",
+      "record": "frontend/test/fixtures/country-raster/Australia-z5-reference.json",
+      "note": "Nine World Boundaries and Places tiles at z5, fetched 2026-10-10 and stitched. The sibling JSON lists each tile URL, finish time, and sha256."
+    }
+  ]
+}

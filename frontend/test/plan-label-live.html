@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      html, body { margin: 0; background: #111; }
+      #frame { width: 478px; height: 690px; }
+    </style>
+  </head>
+  <body>
+    <div id="frame" data-pip-frame="plan"></div>
+    <div id="marker"></div>
+    <script type="module">
+      import { createTrackInset } from '../src/map/adapters/maplibre/track-inset.ts';
+      const frame = document.querySelector('#frame');
+      const marker = document.querySelector('#marker');
+      createTrackInset(frame, marker);
+      window.__planMap = frame.__opdTrackInset;
+    </script>
+  </body>
+</html>

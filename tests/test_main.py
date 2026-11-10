@@ -342,7 +342,7 @@ def test_score_pass_for_target_serializes_sprite_on_night_limb_storm(
         """Always reports a vigorous limb cluster, regardless of position."""
 
         def sample(self, lat: float, lon: float, w: datetime) -> LightningSample:
-            return _empty_sample(lat, lon, w)
+            return LightningSample(0.5, 3.0, w, "glm-2m", w - timedelta(minutes=2))
 
         def strongest_cluster_in_annulus(self, lat: float, lon: float, **_: object):
             return StrongCluster(distance_km=1480.0, bearing_deg=216.8, flash_count=1689)
@@ -371,12 +371,15 @@ def test_score_pass_for_target_serializes_sprite_on_night_limb_storm(
 
     # NIGHT ISS sub-point + storm → sprite serialized verbatim.
     night = _score(180.0, _StormSampler())
+    assert night["lightning_observed_at"] == "2024-10-17T11:58:00Z"
     assert night["sprite"] == {
         "distance_km": 1480.0, "bearing_deg": 216.8, "flash_count": 1689,
     }
 
     # NIGHT but quiet sky → key absent (NOT null) so bytes are unchanged.
-    assert "sprite" not in _score(180.0, _QuietSampler())
+    quiet = _score(180.0, _QuietSampler())
+    assert "sprite" not in quiet
+    assert "lightning_observed_at" not in quiet
 
     # The night gate itself: a DAYLIT ISS sub-point omits sprite even though
     # the very same storm sampler would report a cluster.
@@ -929,7 +932,10 @@ def test_ariss_newer_epoch_wins_when_celestrak_times_out(
         raise AssertionError(url)
 
     with caplog.at_level(logging.INFO, logger="generator.main"):
-        tle = fetch_tle(DEFAULT_TLE_URL, cache, sources=_client(cache, transport))
+        tle = fetch_tle(
+            DEFAULT_TLE_URL, cache, now=datetime(2024, 10, 17, 12, tzinfo=UTC),
+            sources=_client(cache, transport),
+        )
     assert budgets == [5.0, 5.0]
     assert tle.line1 == line1
     assert tle.line2 == line2
@@ -957,7 +963,10 @@ def test_ariss_bad_checksum_is_rejected(
         raise AssertionError(url)
 
     with caplog.at_level(logging.WARNING, logger="generator.main"):
-        tle = fetch_tle(DEFAULT_TLE_URL, cache, sources=_client(cache, transport))
+        tle = fetch_tle(
+            DEFAULT_TLE_URL, cache, now=datetime(2024, 10, 17, 12, tzinfo=UTC),
+            sources=_client(cache, transport),
+        )
     assert tle.line1 == SAMPLE_TLE_TEXT.strip().splitlines()[1]
     assert cache.read_text() == SAMPLE_TLE_TEXT
     assert any("checksum" in record.message.lower() for record in caplog.records)
@@ -980,7 +989,10 @@ def test_ariss_wrong_norad_is_rejected(
         raise AssertionError(url)
 
     with caplog.at_level(logging.WARNING, logger="generator.main"):
-        tle = fetch_tle(DEFAULT_TLE_URL, cache, sources=_client(cache, transport))
+        tle = fetch_tle(
+            DEFAULT_TLE_URL, cache, now=datetime(2024, 10, 17, 12, tzinfo=UTC),
+            sources=_client(cache, transport),
+        )
     assert tle.line1 == SAMPLE_TLE_TEXT.strip().splitlines()[1]
     assert "99999" not in cache.read_text()
     assert any("norad" in record.message.lower() for record in caplog.records)
@@ -1036,7 +1048,10 @@ def test_ariss_older_epoch_falls_through_to_wheretheiss(tmp_path: Path) -> None:
             return TextStream(payload)
         raise AssertionError(url)
 
-    tle = fetch_tle(DEFAULT_TLE_URL, cache, sources=_client(cache, transport))
+    tle = fetch_tle(
+        DEFAULT_TLE_URL, cache, now=datetime(2024, 10, 17, 12, tzinfo=UTC),
+        sources=_client(cache, transport),
+    )
     assert calls == [CELESTRAK_URL, ARISS_URL, WHERETHEISS_URL]
     assert tle.line1 == line1
     assert cache.read_text() == f"{line1}\n{line2}\n"
@@ -1063,7 +1078,10 @@ def test_ariss_and_wheretheiss_older_epochs_keep_the_cache(
         raise AssertionError(url)
 
     with caplog.at_level(logging.WARNING, logger="generator.main"):
-        tle = fetch_tle(DEFAULT_TLE_URL, cache, sources=_client(cache, transport))
+        tle = fetch_tle(
+            DEFAULT_TLE_URL, cache, now=datetime(2024, 10, 17, 12, tzinfo=UTC),
+            sources=_client(cache, transport),
+        )
     assert calls == [CELESTRAK_URL, ARISS_URL, WHERETHEISS_URL]
     assert tle.line1 == SAMPLE_TLE_TEXT.strip().splitlines()[1]
     assert cache.read_text() == SAMPLE_TLE_TEXT

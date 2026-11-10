@@ -1,15 +1,13 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { launchWebkit, playwrightSend } from './webkit-devices.mjs';
+import { whenViewportLaidOut } from './drive.mjs';
+import { launchWebkit, openDeviceContext, playwrightSend } from './webkit-devices.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
-const require = createRequire(resolve(root, 'frontend/package.json'));
-const { devices } = require('playwright');
 
 function productViewport() {
   const html = readFileSync(resolve(root, 'frontend/index.html'), 'utf8');
@@ -18,22 +16,21 @@ function productViewport() {
   return content[1];
 }
 
-test('landscape, portrait, then landscape restores the product viewport meta', async () => {
+test('landscape, portrait, then landscape keeps the product viewport meta', async () => {
   const product = productViewport();
-  const html = `<!doctype html><html><head><meta name="viewport" content="${product}"></head><body></body></html>`;
+  const html = `<!doctype html><html><head><meta name="viewport" content="${product}"></head><body><div id="status-banner">Ready</div></body></html>`;
   const server = createServer((req, res) => {
     res.setHeader('content-type', 'text/html; charset=utf-8');
     res.end(html);
   });
   await new Promise((done) => server.listen(0, '127.0.0.1', done));
   const browser = await launchWebkit();
-  const context = await browser.newContext({ ...devices['iPhone 13'] });
-  const page = await context.newPage();
+  const session = await openDeviceContext(browser, { name: 'iPhone 13', standalone: true });
   try {
     const port = server.address();
     if (!port || typeof port === 'string') throw new Error('viewport test server has no port');
-    await page.goto(`http://127.0.0.1:${port.port}/`);
-    const send = playwrightSend(page);
+    await session.page.goto(`http://127.0.0.1:${port.port}/`);
+    const send = playwrightSend(session);
     const rotate = [
       [390, 844],
       [844, 390],
@@ -41,24 +38,115 @@ test('landscape, portrait, then landscape restores the product viewport meta', a
       [844, 390],
     ];
     for (const [width, height] of rotate) {
-      await send('Emulation.setDeviceMetricsOverride', {
-        width,
-        height,
-        deviceScaleFactor: 1,
-        mobile: true,
-      });
+      await whenViewportLaidOut(send, width, height);
     }
-    const laid = await page.evaluate(() => ({
+    const laid = await session.page.evaluate(() => ({
       meta: document.querySelector('meta[name="viewport"]')?.getAttribute('content') || '',
-      width: document.documentElement.clientWidth,
-      height: document.documentElement.clientHeight,
+      width: window.innerWidth,
+      height: window.innerHeight,
+      devicePixelRatio: window.devicePixelRatio,
     }));
     assert.equal(laid.width, 844);
     assert.equal(laid.height, 390);
+    assert.equal(laid.devicePixelRatio, 3);
     assert.equal(laid.meta, product);
+    assert.equal(browser.contexts().length, 1);
   } finally {
-    await context.close();
+    await session.context.close();
     await browser.close();
     server.close();
   }
+});
+
+test('a timed-out replacement cannot commit after navigation resumes', { timeout: 20000 }, async () => {
+  const server = createServer((req, res) => {
+    res.setHeader('content-type', 'text/html');
+    res.end(`<!doctype html><meta name="viewport" content="${productViewport()}"><div id="status-banner">Ready</div>`);
+  });
+  await new Promise((done) => server.listen(0, '127.0.0.1', done));
+  const browser = await launchWebkit();
+  let release;
+  const gate = new Promise((done) => { release = done; });
+  try {
+    const session = await openDeviceContext(browser, { name: 'iPhone 13', standalone: true });
+    const url = `http://127.0.0.1:${server.address().port}/`;
+    await session.page.goto(url);
+    const predecessor = session.page;
+    const original = browser.newContext.bind(browser);
+    browser.newContext = async (...args) => {
+      const context = await original(...args);
+      await context.route(url, async (route) => {
+        await gate;
+        await route.continue().catch(() => {});
+      });
+      return context;
+    };
+    const real = playwrightSend(session);
+    let replacing;
+    const send = Object.assign((method, params, options) => {
+      const pending = real(method, params, options);
+      if (method === 'Emulation.setDeviceMetricsOverride') replacing = pending;
+      return pending;
+    }, real);
+    await assert.rejects(whenViewportLaidOut(send, 844, 390), /"deadline":true/);
+    release();
+    await replacing.catch(() => {});
+    assert.equal(session.page === predecessor, true, 'a timed-out candidate must never replace the live predecessor');
+    assert.equal(predecessor.isClosed(), false);
+    assert.equal(browser.contexts().length, 1, 'the timed-out candidate is closed');
+    await whenViewportLaidOut(send, 844, 390);
+    assert.equal(session.page === predecessor, false, 'a later request can replace the retained predecessor');
+  } finally {
+    release();
+    await browser.close();
+    server.closeAllConnections();
+    await new Promise((done) => server.close(done));
+  }
+});
+
+test('cancelling during context creation discards the late factory result', async () => {
+  const browser = await launchWebkit();
+  let release;
+  const gate = new Promise((done) => { release = done; });
+  try {
+    const session = await openDeviceContext(browser, { name: 'iPhone 13', standalone: true });
+    const predecessor = session.page;
+    let created;
+    const creation = new Promise((done) => { created = done; });
+    const original = browser.newContext.bind(browser);
+    browser.newContext = async (...args) => {
+      const context = await original(...args);
+      created();
+      await gate;
+      return context;
+    };
+    const controller = new AbortController();
+    const pending = playwrightSend(session)('Emulation.setDeviceMetricsOverride', { width: 844, height: 390 }, { signal: controller.signal });
+    const rejected = assert.rejects(pending, /cancel factory/);
+    await creation;
+    controller.abort(new Error('cancel factory'));
+    release();
+    await rejected;
+    assert.equal(session.page === predecessor, true);
+    assert.equal(predecessor.isClosed(), false);
+    assert.equal(browser.contexts().length, 1);
+  } finally {
+    release();
+    await browser.close();
+  }
+});
+
+test('a deadline during initial layout installation prevents a later size command', { timeout: 15000 }, async () => {
+  let release;
+  const gate = new Promise((done) => { release = done; });
+  let metrics = 0;
+  const send = async (method, params) => {
+    if (method === 'Emulation.setDeviceMetricsOverride') metrics += 1;
+    if (params?.expression?.includes('__opdViewportSettled = new Promise')) await gate;
+    return { result: { value: true } };
+  };
+  await assert.rejects(whenViewportLaidOut(send, 844, 390), /"deadline":true/);
+  release();
+  await new Promise((done) => setImmediate(done));
+  assert.equal(metrics, 0, 'cancelled installation must not begin a late context replacement');
 });

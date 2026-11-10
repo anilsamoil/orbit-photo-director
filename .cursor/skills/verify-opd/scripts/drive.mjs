@@ -1,15 +1,48 @@
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
 import { noteRequest, planBasemapVerdict } from './carto-dark-watch.mjs';
-import { planLabelReaders } from './plan-label-verdict.mjs';
-import { BOSTON_NADIR_EPOCH_MS, refreshLaunchClock } from './fixtures.mjs';
+import { earthAfterResizeReaders } from './earth-after-resize.mjs';
+import { auditRasterLevels, countryIdentity, countrySweepZooms, imageryLabelRegions, imageryRegionDiff, imageryViewport, keptCountrySymbol, labelScreenVerdict, loadCountryRasterLevels, matchesMain, occurrenceCount, pairedRasterNames, planCameraContract, planContractForDrive, PLAN_COUNTRIES, planLabelReaders, rasterDuplicateVerdict, tilesLoaded } from './plan-label-verdict.mjs';
+import { decodePng } from './decode-png.mjs';
+import { ocrFrame, ocrFrameBox } from './raster-ocr.mjs';
+import { checkRasterOcr, clearRasterOcrRun, rasterOcrStats } from './raster-ocr.mjs';
+import { pinFixtureCookie } from './fixture-session.mjs';
+import { BOSTON_NADIR_EPOCH_MS, effectiveNowMs, refreshLaunchClock } from './fixtures.mjs';
+import { freezeFixtureClock, restoreFixtureClock } from './fixture-clock.mjs';
 import { proveLaunchPlacement } from './placement-proof.mjs';
-import { deviceDescriptor, deviceViewport, launchWebkit, playwrightSend, proveDeniedFooter, WEBKIT_DEVICES } from './webkit-devices.mjs';
+import { sideColumnReachReaders } from './side-column-reach.mjs';
+import { NARROW_SLIDER_RIGHT_GAP, timeStripLaidFailures } from './map-strip-contract.mjs';
+import { deviceViewport, launchWebkit, openDeviceContext, parseViewportOverride, playwrightSend, proveDeniedFooter, surfacesFor, webkitCatalog } from './webkit-devices.mjs';
 
 export const BROWSER_FEATURES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'iss', 'help', 'profile', 'log', 'phone', 'tracked'];
 
-const DESKTOP = { width: 1400, height: 900, mobile: false };
+const browserPids = new Set();
+let browsersStopped = false;
+
+export function trackBrowser(pid) {
+  if (!pid || browsersStopped) return pid;
+  browserPids.add(pid);
+  return pid;
+}
+
+export function untrackBrowser(pid) {
+  browserPids.delete(pid);
+}
+
+export function stopBrowsers() {
+  browsersStopped = true;
+  for (const pid of browserPids) {
+    try { process.kill(-pid, 'SIGTERM'); } catch { /* not a process group */ }
+    try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ }
+  }
+}
+
+const FIXED_SURFACE = process.env.OPD_VERIFY_FIXED_SURFACE === '1';
+const desktopOverride = process.env.OPD_VERIFY_SURFACE === 'desktop' ? parseViewportOverride('desktop', process.env.OPD_VERIFY_VIEWPORT || '') : null;
+const DESKTOP = { width: desktopOverride?.width ?? 1400, height: desktopOverride?.height ?? 900, mobile: false };
 const ISS_LENS_FOV_DEG = 81.2;
 const SCENE_SCROLLS = 'scene.scrollHeight !== scene.clientHeight || scene.scrollWidth !== scene.clientWidth';
 const ISS_CLOCK_EXPR = `(() => {
@@ -140,24 +173,11 @@ const ISS_CLOCK_EXPR = `(() => {
 })()`;
 
 function selectedSurfaceNames() {
-  const raw = (process.env.OPD_VERIFY_SURFACE || 'all').trim();
-  const known = ['desktop', ...WEBKIT_DEVICES.map((spec) => spec.slug)];
-  if (raw === 'all') return known;
-  if (!known.includes(raw)) throw new Error(`unknown OPD_VERIFY_SURFACE ${raw}. Choose ${known.join(', ')}, or all.`);
-  return [raw];
+  return surfacesFor(process.env.OPD_VERIFY_SURFACE || 'all');
 }
 
 function viewportOverride() {
-  const raw = (process.env.OPD_VERIFY_VIEWPORT || '').trim();
-  if (!raw) return null;
-  const surface = (process.env.OPD_VERIFY_SURFACE || '').trim();
-  const match = /^(\d+)x(\d+)$/.exec(raw);
-  if (!match) throw new Error(`OPD_VERIFY_VIEWPORT must be WIDTHxHEIGHT, got ${raw}`);
-  const width = Number(match[1]);
-  const height = Number(match[2]);
-  if (surface === 'iphone-17-pro') return { width, height, raw };
-  if (surface === 'iphone-13' && width === 844 && height === 390) return { width, height, raw };
-  throw new Error('OPD_VERIFY_VIEWPORT requires OPD_VERIFY_SURFACE=iphone-17-pro, or iphone-13 with 844x390.');
+  return parseViewportOverride((process.env.OPD_VERIFY_SURFACE || '').trim(), process.env.OPD_VERIFY_VIEWPORT || '');
 }
 
 function specForSurface(spec) {
@@ -175,23 +195,8 @@ function chromeBin() {
   return process.env.OPD_VERIFY_CHROME || 'google-chrome';
 }
 
-export async function connectCdp(port) {
-  let list = [];
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/json/list`);
-      if (response.ok) {
-        list = await response.json();
-        if (list.some((entry) => entry.type === 'page' && entry.webSocketDebuggerUrl)) break;
-      }
-    } catch {
-      list = [];
-    }
-    await sleep(200);
-  }
-  const page = list.find((entry) => entry.type === 'page' && entry.webSocketDebuggerUrl);
-  if (!page) throw new Error(`chrome debug port ${port} has no page`);
-  const ws = new WebSocket(page.webSocketDebuggerUrl);
+async function connectSocket(wsUrl) {
+  const ws = new WebSocket(wsUrl);
   await new Promise((resolveOpen, rejectOpen) => {
     const timer = setTimeout(() => rejectOpen(new Error('chrome websocket timed out')), 10000);
     ws.addEventListener('open', () => {
@@ -232,19 +237,35 @@ export async function connectCdp(port) {
     handlers.push(handler);
     listeners.set(method, handlers);
   }
-  return {
-    send,
-    on,
-    close: () => ws.close(),
-  };
+  return { send, on, close: () => ws.close() };
+}
+
+export async function connectCdp(port) {
+  let list = [];
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/json/list`);
+      if (response.ok) {
+        list = await response.json();
+        if (list.some((entry) => entry.type === 'page' && entry.webSocketDebuggerUrl)) break;
+      }
+    } catch {
+      list = [];
+    }
+    await sleep(200);
+  }
+  const page = list.find((entry) => entry.type === 'page' && entry.webSocketDebuggerUrl);
+  if (!page) throw new Error(`chrome debug port ${port} has no page`);
+  return connectSocket(page.webSocketDebuggerUrl);
 }
 
 async function evaluate(send, expression) {
-  const result = await send('Runtime.evaluate', {
+  const params = {
     expression,
     awaitPromise: true,
     returnByValue: true,
-  });
+  };
+  const result = await send('Runtime.evaluate', params);
   if (result.exceptionDetails) {
     const text = result.exceptionDetails.text || result.exceptionDetails.exception?.description || 'evaluate failed';
     throw new Error(text);
@@ -337,13 +358,100 @@ async function mouseClick(send, x, y, button = 'left') {
   await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button, buttons: 0, clickCount: 1 });
 }
 
-async function setViewport(send, width, height, mobile) {
-  await send('Emulation.setDeviceMetricsOverride', {
+async function setViewport(send, width, height, mobile, signal) {
+  signal?.throwIfAborted();
+  if (FIXED_SURFACE) throw new Error(`fixed-surface drive attempted resize to ${width}x${height}`);
+  return send('Emulation.setDeviceMetricsOverride', {
     width,
     height,
     deviceScaleFactor: 1,
     mobile,
-  });
+  }, { signal });
+}
+
+async function reportViewport(send, feature, viewport) {
+  const size = await evaluate(send, '({ w: window.innerWidth, h: window.innerHeight })');
+  const created = (process.env.OPD_VERIFY_VIEWPORT || '').trim();
+  const surface = (process.env.OPD_VERIFY_SURFACE || '').trim() || 'desktop';
+  const opened = `${viewport.width}x${viewport.height}`;
+  const now = size ? `${size.w}x${size.h}` : 'unknown';
+  const how = created && created === opened ? 'created-at-size' : created ? `env ${created}` : surface === 'desktop' ? 'chrome-metrics' : 'device-context';
+  console.log(`viewport ${feature} surface ${surface} opened ${opened} now ${now} ${how}`);
+}
+
+async function provePinInspector(send) {
+  const row = await evaluate(send, `(() => {
+    const inspector = document.getElementById('map-inspector');
+    const body = document.querySelector('#map-inspector .dropped-pin-popup');
+    const popup = body && body.closest('.maplibregl-popup');
+    const map = document.getElementById('map');
+    const pane = document.getElementById('map-pane');
+    const heading = body && body.querySelector('.pin-pass-heading');
+    const pass = body && body.querySelector('.pin-pass-row');
+    const add = body && body.querySelector('.pin-add-button');
+    if (!inspector || !body || !popup || !map || !pane || !heading || !pass || !add) {
+      return { ok: false, missing: true, hasBody: !!body, hasHeading: !!heading, hasPass: !!pass, hasAdd: !!add };
+    }
+    const textBoxes = (element) => {
+      const node = element && element.firstChild;
+      if (!node || node.nodeType !== Node.TEXT_NODE || !node.textContent) return [];
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      return [...range.getClientRects()].filter((rect) => rect.width > 0.5 && rect.height > 0.5);
+    };
+    const overlaps = (a, b) => a.right > b.left + 0.01 && b.right > a.left + 0.01 && a.bottom > b.top + 0.01 && b.bottom > a.top + 0.01;
+    const names = ['pin-pass-rel', 'pin-pass-utc', 'pin-pass-regime', 'pin-pass-shoot'];
+    const fields = {};
+    for (const name of names) fields[name] = pass.querySelector('.' + name);
+    const missingField = names.find((name) => !fields[name]) || '';
+    const shootBoxes = missingField ? [] : textBoxes(fields['pin-pass-shoot']);
+    const hits = [];
+    if (!missingField) {
+      for (const name of ['pin-pass-rel', 'pin-pass-utc', 'pin-pass-regime']) {
+        for (const box of textBoxes(fields[name])) {
+          if (shootBoxes.some((shoot) => overlaps(box, shoot))) hits.push(name);
+        }
+      }
+    }
+    const header = heading.getBoundingClientRect();
+    const previous = inspector.style.pointerEvents;
+    inspector.style.pointerEvents = 'auto';
+    const paint = document.elementFromPoint(header.left + header.width / 2, header.top + Math.min(6, header.height / 2));
+    inspector.style.pointerEvents = previous;
+    const popupBox = popup.getBoundingClientRect();
+    const mapBox = map.getBoundingClientRect();
+    const background = getComputedStyle(inspector).backgroundColor;
+    const inline = getComputedStyle(pane).getPropertyValue('--map-inspector-inline').trim();
+    const rowGap = getComputedStyle(pass).rowGap;
+    const container = body.clientWidth;
+    const transparent = background === 'rgba(0, 0, 0, 0)' || background === 'transparent';
+    const mapUnder = mapBox.right >= popupBox.right - 1 && mapBox.bottom >= popupBox.bottom - 1;
+    const paints = !!(paint && popup.contains(paint));
+    const addText = (add.textContent || '').includes('Add to my targets');
+    const gapOk = container > 260 || rowGap === '3px';
+    const inlineOk = inline === '0px' || inline === '0';
+    return {
+      ok: !missingField && hits.length === 0 && transparent && mapUnder && paints && addText && gapOk && inlineOk,
+      missingField,
+      hits,
+      transparent,
+      mapUnder,
+      paints,
+      addText,
+      gapOk,
+      inlineOk,
+      background,
+      inline,
+      rowGap,
+      container,
+      viewport: window.innerWidth + 'x' + window.innerHeight,
+      sheet: Math.round(popupBox.width) + 'x' + Math.round(popupBox.height),
+    };
+  })()`);
+  if (!row?.ok) throw new Error(`pin inspector ${JSON.stringify(row)}`);
+  const note = `viewport ${row.viewport} sheet ${row.sheet} container ${row.container}px row-gap ${row.rowGap}`;
+  console.log(`pin inspector ${note}`);
+  return note;
 }
 
 async function safeAreaOverride(send, insets) {
@@ -367,17 +475,17 @@ async function removedCuratedIds(send) {
   return Array.isArray(ids) ? ids : [];
 }
 
-async function serverRemoved(baseUrl) {
-  const response = await fetch(`${baseUrl}/api/browser/profiles/anil/targets`);
+async function serverRemoved(send, baseUrl) {
+  const response = await fetch(`${baseUrl}/api/browser/profiles/anil/targets`, { headers: fixtureHeaders(send) });
   if (!response.ok) throw new Error(`profile GET ${response.status}`);
   return response.json();
 }
 
-async function waitServerRemoved(baseUrl, includes, excludes) {
+async function waitServerRemoved(send, baseUrl, includes, excludes) {
   const started = Date.now();
   let last = null;
   while (Date.now() - started < 10000) {
-    last = await serverRemoved(baseUrl);
+    last = await serverRemoved(send, baseUrl);
     const ids = Array.isArray(last.removedCuratedIds) ? last.removedCuratedIds : [];
     const hasAll = includes.every((id) => ids.includes(id));
     const hasNone = excludes.every((id) => !ids.includes(id));
@@ -387,12 +495,14 @@ async function waitServerRemoved(baseUrl, includes, excludes) {
   throw new Error(`profile GET did not reach ${JSON.stringify({ includes, excludes })}. Last: ${JSON.stringify(last)}`);
 }
 
-async function freshProfile(baseUrl, home, run) {
-  const debugPort = 19000 + Math.floor(Math.random() * 1000);
+export async function freshProfile(baseUrl, home, fixtureToken, run) {
+  const debugPort = Number(process.env.OPD_VERIFY_GUEST_CDP_PORT || 19000 + Math.floor(Math.random() * 1000));
+  if (debugPort === Number(process.env.OPD_VERIFY_CDP_PORT)) throw new Error('guest and primary Chrome debugging ports must differ');
   const profile = resolve(home, `chrome-guest-${debugPort}`);
   rmSync(profile, { recursive: true, force: true });
   mkdirSync(profile, { recursive: true });
-  const child = spawn(chromeBin(), [
+  const executable = chromeBin();
+  const child = spawn(executable, [
     '--headless=new',
     '--use-gl=angle',
     '--use-angle=swiftshader',
@@ -407,10 +517,16 @@ async function freshProfile(baseUrl, home, run) {
     'about:blank',
   ], { detached: true, stdio: 'ignore' });
   child.unref();
+  trackBrowser(child.pid);
   try {
+    if (!child.pid) {
+      child.once('error', () => {});
+      throw new Error(`Chrome failed to start: ${executable}`);
+    }
     const cdp = await connectCdp(debugPort);
     try {
       await cdp.send('Page.enable');
+      await pinFixtureCookie(cdp.send, baseUrl, fixtureToken);
       await cdp.send('Page.navigate', { url: `${baseUrl}/?e2e` });
       await waitFor(cdp.send, `document.readyState === 'complete' ? { ok: true } : null`, 'guest page load', 30000);
       await waitFor(
@@ -433,6 +549,7 @@ async function freshProfile(baseUrl, home, run) {
     } catch {
       /* guest already exited */
     }
+    untrackBrowser(child.pid);
     for (let attempt = 0; attempt < 8; attempt += 1) {
       await sleep(150);
       try {
@@ -445,8 +562,8 @@ async function freshProfile(baseUrl, home, run) {
   }
 }
 
-async function expectFreshHide(baseUrl, home, { id, name, updatedAt, visible }) {
-  await freshProfile(baseUrl, home, async (send) => {
+async function expectFreshHide(baseUrl, home, fixtureToken, { id, name, updatedAt, visible }) {
+  await freshProfile(baseUrl, home, fixtureToken, async (send) => {
     await click(send, '#tab-upcoming');
     await waitFor(
       send,
@@ -483,20 +600,26 @@ async function hideNamed(send, container, name) {
   return id;
 }
 
-async function reloadSettled(send) {
+const RELOAD_BANNER_MS = 30_000;
+
+export async function reloadSettled(send) {
   await send('Page.reload');
-  await waitFor(send, `document.readyState === 'complete' ? { ok: true } : null`, 'reload', 30000);
-  await waitFor(
-    send,
-    `(() => {
+  await waitFor(send, `document.readyState === 'complete' ? { ok: true } : null`, 'reload', RELOAD_BANNER_MS);
+  const started = Date.now();
+  let last = null;
+  while (Date.now() - started < RELOAD_BANNER_MS) {
+    last = await evaluate(send, `(() => {
       const banner = document.getElementById('status-banner');
       const text = banner ? banner.textContent || '' : '';
       if (!text || text.includes('Loading')) return null;
       return { ok: true };
-    })()`,
-    'banner after reload',
-    30000,
-  );
+    })()`);
+    if (last && last.ok) return;
+    const remaining = RELOAD_BANNER_MS - (Date.now() - started);
+    if (remaining <= 0) break;
+    await sleep(Math.min(100, remaining));
+  }
+  throw new Error(`banner after reload timed out. Last value: ${JSON.stringify(last)}`);
 }
 
 function touchPoint(x, y) {
@@ -545,7 +668,8 @@ export function startChrome(home, debugPort) {
   const profile = resolve(home, 'chrome-profile');
   rmSync(profile, { recursive: true, force: true });
   mkdirSync(profile, { recursive: true });
-  const child = spawn(chromeBin(), [
+  const executable = chromeBin();
+  const child = spawn(executable, [
     '--headless=new',
     '--use-gl=angle',
     '--use-angle=swiftshader',
@@ -560,6 +684,16 @@ export function startChrome(home, debugPort) {
     'about:blank',
   ], { detached: true, stdio: 'ignore' });
   child.unref();
+  if (!child.pid) {
+    child.once('error', () => {});
+    rmSync(profile, { recursive: true, force: true });
+    throw new Error(`Chrome failed to start: ${executable}`);
+  }
+  if (browsersStopped) {
+    try { process.kill(child.pid, 'SIGTERM'); } catch { /* shutting down */ }
+    throw new Error('drive is shutting down');
+  }
+  trackBrowser(child.pid);
   return child.pid;
 }
 
@@ -568,27 +702,32 @@ const LOG_HOOK = `window.__opdLogs = [];
   const original = console.error;
   console.error = (...args) => { window.__opdLogs.push(args.map(String).join(' ')); return original.apply(console, args); };`;
 
-function slideLaunch(home) {
-  const until = refreshLaunchClock(resolve(home, 'fixtures'));
-  const stateFile = resolve(home, 'state.json');
-  if (!existsSync(stateFile)) return until;
-  const state = JSON.parse(readFileSync(stateFile, 'utf8'));
-  state.launchValidUntil = until;
-  writeFileSync(stateFile, JSON.stringify(state));
-  return until;
+function slideLaunch(dir) {
+  return refreshLaunchClock(dir, effectiveNowMs(dir));
 }
 
-async function resetFixtureProfile(baseUrl) {
+async function resetFixtureProfile(baseUrl, fixtureToken) {
   const response = await fetch(`${baseUrl}/api/browser/profiles/anil/targets`, {
     method: 'PUT',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...fixtureHeaders({ fixtureToken }) },
     body: JSON.stringify({ targets: [], removedCuratedIds: [] }),
   });
   if (!response.ok) throw new Error(`profile reset ${response.status}`);
 }
 
-async function openApp(send, baseUrl) {
+function pageClockSource(startOffset) {
+  return `(() => {
+    const startOffset = ${Number(startOffset)};
+    const real = Date.now.bind(Date);
+    Date.now = () => real() + startOffset;
+  })();`;
+}
+
+async function openApp(send, baseUrl, startOffset) {
   await send('Page.enable');
+  if (Number.isFinite(startOffset)) {
+    await send('Page.addScriptToEvaluateOnNewDocument', { source: pageClockSource(startOffset) });
+  }
   await send('Page.addScriptToEvaluateOnNewDocument', { source: LOG_HOOK });
   await send('Page.navigate', { url: `${baseUrl}/?e2e` });
   await waitFor(send, `document.readyState === 'complete' ? { ok: true } : null`, 'page load', 30000);
@@ -606,19 +745,20 @@ async function openApp(send, baseUrl) {
   );
 }
 
-async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, viewport) {
+async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, viewport, fixtureToken) {
   mkdirSync(evidenceDir, { recursive: true });
   const selected = features.includes('all') ? BROWSER_FEATURES : features;
   const notes = [];
   for (const feature of selected) {
+    await reportViewport(send, feature, viewport);
     if (feature === 'banner') notes.push(await driveBanner(send, evidenceDir, baseUrl));
     else if (feature === 'topbar') notes.push(await driveTopbar(send, evidenceDir, viewport));
     else if (feature === 'queue') notes.push(await driveQueue(send, evidenceDir, meta, baseUrl));
-    else if (feature === 'upcoming') notes.push(await driveUpcoming(send, evidenceDir, meta, baseUrl, home));
+    else if (feature === 'upcoming') notes.push(await driveUpcoming(send, evidenceDir, meta, baseUrl, home, fixtureToken));
     else if (feature === 'map') notes.push(await driveMap(send, evidenceDir, meta, baseUrl, viewport));
     else if (feature === 'iss') notes.push(await driveIss(send, evidenceDir, viewport, baseUrl));
     else if (feature === 'help') notes.push(await driveHelp(send, evidenceDir));
-    else if (feature === 'profile') notes.push(await driveProfile(send, evidenceDir, meta, baseUrl, home, viewport));
+    else if (feature === 'profile') notes.push(await driveProfile(send, evidenceDir, meta, baseUrl, home, viewport, fixtureToken));
     else if (feature === 'log') notes.push(await driveLog(send, evidenceDir, baseUrl));
     else if (feature === 'phone') notes.push(await drivePhone(send, evidenceDir, meta, viewport));
     else if (feature === 'tracked') notes.push(await driveTracked(send, evidenceDir, meta, viewport));
@@ -627,9 +767,10 @@ async function runFeatures(send, evidenceDir, meta, features, baseUrl, home, vie
   return notes;
 }
 
-async function driveChrome({ baseUrl, evidenceDir, meta, features, home }) {
-  slideLaunch(home);
-  const debugPort = 9300 + Math.floor(Math.random() * 500);
+async function driveChrome({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken, startOffset }) {
+  slideLaunch(fixtureDir || resolve(home, 'fixtures'));
+  await resetFixtureProfile(baseUrl, fixtureToken);
+  const debugPort = Number(process.env.OPD_VERIFY_CDP_PORT || 9300 + Math.floor(Math.random() * 500));
   const chromePid = startChrome(home, debugPort);
   writeFileSync(resolve(home, 'chrome.pid'), String(chromePid));
   try {
@@ -646,9 +787,13 @@ async function driveChrome({ baseUrl, evidenceDir, meta, features, home }) {
         noteRequest(cartoDark, params.request && params.request.url);
       });
       await cdp.send('Network.enable');
+      await pinFixtureCookie(cdp.send, baseUrl, fixtureToken);
       cdp.send.cartoDark = cartoDark;
-      await openApp(cdp.send, baseUrl);
-      const notes = await runFeatures(cdp.send, evidenceDir, meta, features, baseUrl, home, DESKTOP);
+      cdp.send.fixtureToken = fixtureToken;
+      cdp.send.debugPort = debugPort;
+      cdp.send.fixtureDir = fixtureDir;
+      await openApp(cdp.send, baseUrl, startOffset);
+      const notes = await runFeatures(cdp.send, evidenceDir, meta, features, baseUrl, home, DESKTOP, fixtureToken);
       return notes.map((note) => `desktop: ${note}`);
     } finally {
       cdp.close();
@@ -658,14 +803,17 @@ async function driveChrome({ baseUrl, evidenceDir, meta, features, home }) {
       process.kill(chromePid, 'SIGTERM');
     } catch {
     }
+    untrackBrowser(chromePid);
   }
 }
 
-async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home }) {
+async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken, startOffset }) {
   const names = new Set(selectedSurfaceNames());
   const notes = [];
-  for (const spec of WEBKIT_DEVICES.filter((entry) => names.has(entry.slug))) {
+  for (const spec of webkitCatalog().filter((entry) => names.has(entry.slug))) {
     const browser = await launchWebkit();
+    const webkitPid = browser.process?.()?.pid;
+    if (webkitPid) trackBrowser(webkitPid);
     try {
       const override = viewportOverride();
       const active = specForSurface(spec);
@@ -674,46 +822,44 @@ async function driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home 
       const folder = overridden ? `${spec.slug}-${override.raw}` : spec.slug;
       const label = overridden ? `${spec.slug}@${override.raw}` : spec.slug;
       const surfaceDir = resolve(evidenceDir, folder);
-      slideLaunch(home);
-      await resetFixtureProfile(baseUrl);
-      const context = await browser.newContext({ ...deviceDescriptor(active), serviceWorkers: 'block' });
-      if (spec.standalone) {
-        await context.addInitScript(() => {
-          Object.defineProperty(navigator, 'standalone', { configurable: true, get: () => true });
-        });
-      }
-      const page = await context.newPage();
+      slideLaunch(fixtureDir || resolve(home, 'fixtures'));
+      await resetFixtureProfile(baseUrl, fixtureToken);
+      const cartoDark = [];
+      const session = await openDeviceContext(browser, active, {
+        baseUrl, fixtureToken,
+        initScripts: Number.isFinite(startOffset) ? [pageClockSource(startOffset)] : [],
+        requestHandlers: [(request) => noteRequest(cartoDark, request.url())],
+      });
       try {
-        const cartoDark = [];
-        page.on('request', (request) => {
-          noteRequest(cartoDark, request.url());
-        });
-        const send = playwrightSend(page);
+        const send = playwrightSend(session);
         send.pointer = 'touch';
         send.cartoDark = cartoDark;
-        await openApp(send, baseUrl);
-        const featureNotes = await runFeatures(send, surfaceDir, meta, features, baseUrl, home, viewport);
+        send.fixtureToken = fixtureToken;
+        send.fixtureDir = fixtureDir;
+        await openApp(send, baseUrl, startOffset);
+        const featureNotes = await runFeatures(send, surfaceDir, meta, features, baseUrl, home, viewport, fixtureToken);
         notes.push(...featureNotes.map((note) => `${label}: ${note}`));
       } finally {
-        await context.close();
+        await session.context.close();
       }
-      notes.push(`${label}: ${await proveDeniedFooter(browser, active, baseUrl, surfaceDir)}`);
+      notes.push(`${label}: ${await proveDeniedFooter(browser, active, baseUrl, surfaceDir, fixtureToken)}`);
     } finally {
       await browser.close();
+      if (webkitPid) untrackBrowser(webkitPid);
     }
   }
   return notes;
 }
 
-export async function driveFeatures({ baseUrl, evidenceDir, meta, features }) {
+export async function driveFeatures({ baseUrl, evidenceDir, meta, features, fixtureDir, fixtureToken, startOffset }) {
   viewportOverride();
   mkdirSync(evidenceDir, { recursive: true });
   const home = resolve(evidenceDir, '..');
   const names = new Set(selectedSurfaceNames());
   const notes = [];
-  if (names.has('desktop')) notes.push(...await driveChrome({ baseUrl, evidenceDir, meta, features, home }));
-  if (WEBKIT_DEVICES.some((spec) => names.has(spec.slug))) {
-    notes.push(...await driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home }));
+  if (names.has('desktop')) notes.push(...await driveChrome({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken, startOffset }));
+  if (webkitCatalog().some((spec) => names.has(spec.slug))) {
+    notes.push(...await driveWebkitSurfaces({ baseUrl, evidenceDir, meta, features, home, fixtureDir, fixtureToken, startOffset }));
   }
   return notes;
 }
@@ -756,10 +902,10 @@ const CORNER_BOX = `
   };
 `;
 
-export async function driveMapCorner({ baseUrl, evidenceDir, home }) {
+export async function driveMapCorner({ baseUrl, evidenceDir, home, fixtureDir, fixtureToken, startOffset }) {
   mkdirSync(evidenceDir, { recursive: true });
-  slideLaunch(home);
-  const debugPort = 9300 + Math.floor(Math.random() * 500);
+  slideLaunch(fixtureDir || resolve(home, 'fixtures'));
+  const debugPort = Number(process.env.OPD_VERIFY_CDP_PORT || 9300 + Math.floor(Math.random() * 500));
   const chromePid = startChrome(home, debugPort);
   writeFileSync(resolve(home, 'chrome.pid'), String(chromePid));
   const lines = [];
@@ -769,7 +915,8 @@ export async function driveMapCorner({ baseUrl, evidenceDir, home }) {
     const send = cdp.send;
     try {
       await setViewport(send, DESKTOP.width, DESKTOP.height, DESKTOP.mobile);
-      await openApp(send, baseUrl);
+      await pinFixtureCookie(send, baseUrl, fixtureToken);
+      await openApp(send, baseUrl, startOffset);
       const shown = await evaluate(send, `/Hide/.test(document.getElementById('map-chrome-toggle')?.textContent || '')`);
       if (!shown) {
         await click(send, '#map-chrome-toggle');
@@ -911,11 +1058,16 @@ export async function driveMapCorner({ baseUrl, evidenceDir, home }) {
             actions: !!document.querySelector('#status-banner .banner-actions'),
           };
         })()`);
-        lines.push(`${frame.name} panel ${cornerRound(sample?.panel?.left)},${cornerRound(sample?.panel?.top)} ${cornerRound(sample?.panel?.width)}x${cornerRound(sample?.panel?.height)} clip-above ${cornerRound(sample?.clipAbovePane)} pip ${cornerRound(sample?.pip?.top)}-${cornerRound(sample?.pip?.bottom)} overlap ${sample?.overlapPip === true}`);
         const clips = [sample?.clipAbovePane, sample?.clipBelowPane, sample?.clipAboveViewport, sample?.clipBelowViewport];
         const warning = /LIVE now|feed unavailable/.test(sample?.text || '');
+        lines.push(`${frame.name} panel ${cornerRound(sample?.panel?.left)},${cornerRound(sample?.panel?.top)} ${cornerRound(sample?.panel?.width)}x${cornerRound(sample?.panel?.height)} clip-above ${cornerRound(sample?.clipAbovePane)} pip ${cornerRound(sample?.pip?.top)}-${cornerRound(sample?.pip?.bottom)} overlap ${sample?.overlapPip === true} warning ${warning} insideX ${sample?.insideX === true}`);
         if (!warning || clips.some((value) => value == null || value > 0.5) || !sample?.insideX) {
-          failures.push(`${frame.name} panel clipped above-pane ${cornerRound(sample?.clipAbovePane)} below-pane ${cornerRound(sample?.clipBelowPane)} above-view ${cornerRound(sample?.clipAboveViewport)} below-view ${cornerRound(sample?.clipBelowViewport)}`);
+          const why = [
+            warning ? '' : 'warning-text',
+            clips.some((value) => value == null || value > 0.5) ? 'clip' : '',
+            sample?.insideX ? '' : 'insideX',
+          ].filter(Boolean).join('+') || 'panel';
+          failures.push(`${frame.name} ${why} above-pane ${cornerRound(sample?.clipAbovePane)} below-pane ${cornerRound(sample?.clipBelowPane)} above-view ${cornerRound(sample?.clipAboveViewport)} below-view ${cornerRound(sample?.clipBelowViewport)}`);
         }
         if (frame.banner && !sample?.actions) failures.push(`${frame.name} banner actions missing during the rect read`);
         if (frame.pip && !sample?.pipShown) failures.push(`${frame.name} horizon inset missing`);
@@ -932,6 +1084,7 @@ export async function driveMapCorner({ baseUrl, evidenceDir, home }) {
       process.kill(chromePid, 'SIGTERM');
     } catch {
     }
+    untrackBrowser(chromePid);
   }
   writeFileSync(resolve(evidenceDir, 'map-corner.txt'), `${lines.join('\n')}\n`);
   for (const line of lines) console.log(line);
@@ -1041,12 +1194,7 @@ async function proveStaleTle(send, evidenceDir, baseUrl) {
   const before = shown.text;
   const beforeAge = bannerAgeToken(before);
   if (!beforeAge) throw new Error(`stale TLE banner has no age label: ${before}`);
-  await evaluate(send, `(() => {
-    window.__opdRealNow = Date.now;
-    const base = Date.now();
-    Date.now = () => base + 70000;
-    return true;
-  })()`);
+  await evaluate(send, `(${freezeFixtureClock.toString()})(Date.now() + 70000)`);
   let afterTick = before;
   let afterAge = beforeAge;
   const started = Date.now();
@@ -1071,7 +1219,7 @@ async function proveStaleTle(send, evidenceDir, baseUrl) {
       await sleep(100);
     }
   } finally {
-    await evaluate(send, `(() => { if (window.__opdRealNow) Date.now = window.__opdRealNow; return true; })()`);
+    await evaluate(send, `(${restoreFixtureClock.toString()})()`);
   }
   if (!afterTick.includes(suffix) || bannerAgeNormalized(afterTick) !== bannerAgeNormalized(before)) {
     throw new Error(`countdown dropped the TLE suffix: ${afterTick}`);
@@ -1445,11 +1593,13 @@ async function proveMapChromeMemory(send) {
   await waitChromeChoice(send, true);
   await reloadSettled(send);
   await waitChromeChoice(send, true);
+  if (FIXED_SURFACE) await click(send, '#tab-map');
   await waitMapLayer(send);
   await click(send, '#map-chrome-toggle');
   await waitChromeChoice(send, false);
   await reloadSettled(send);
   await waitChromeChoice(send, false);
+  if (FIXED_SURFACE) await click(send, '#tab-map');
   await showMapChrome(send);
   await waitMapLayer(send);
 }
@@ -1701,7 +1851,7 @@ async function driveQueue(send, evidenceDir, meta, baseUrl) {
   );
   const stored = await removedCuratedIds(send);
   if (!stored.includes(deltaId)) throw new Error(`queue hide missing ${deltaId} in ${JSON.stringify(stored)}`);
-  await waitServerRemoved(baseUrl, [deltaId], []);
+  await waitServerRemoved(send, baseUrl, [deltaId], []);
   const reefName = meta.names.queue[0];
   const partial = await evaluate(send, `(() => {
     const empty = document.getElementById('empty');
@@ -1746,7 +1896,7 @@ async function driveQueue(send, evidenceDir, meta, baseUrl) {
     10000,
   );
   await shot(send, evidenceDir, 'queue-empty');
-  await waitServerRemoved(baseUrl, [deltaId, reefId], []);
+  await waitServerRemoved(send, baseUrl, [deltaId, reefId], []);
   const restoredAt = new Date().toISOString();
   const restoredIds = await evaluate(send, `(() => {
     const key = 'opd-profile-anil';
@@ -1762,11 +1912,11 @@ async function driveQueue(send, evidenceDir, meta, baseUrl) {
   }
   const put = await fetch(`${baseUrl}/api/browser/profiles/anil/targets`, {
     method: 'PUT',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...fixtureHeaders(send) },
     body: JSON.stringify({ removedCuratedIds: restoredIds, removedCuratedUpdatedAt: restoredAt }),
   });
   if (!put.ok) throw new Error(`queue restore PUT ${put.status}`);
-  await waitServerRemoved(baseUrl, [deltaId], [reefId]);
+  await waitServerRemoved(send, baseUrl, [deltaId], [reefId]);
   await reloadSettled(send);
   await waitFor(
     send,
@@ -1797,7 +1947,7 @@ function upcomingListExpression(mesa, ascent, { hidden }) {
   })()`;
 }
 
-async function driveUpcoming(send, evidenceDir, meta, baseUrl, home) {
+async function driveUpcoming(send, evidenceDir, meta, baseUrl, home, fixtureToken) {
   const mesa = meta.names.upcoming[0];
   const ascent = meta.names.launch;
   await click(send, '#tab-upcoming');
@@ -1827,37 +1977,14 @@ async function driveUpcoming(send, evidenceDir, meta, baseUrl, home) {
   const storedAfter = await removedCuratedIds(send);
   if (!storedAfter.includes(mesaId)) throw new Error(`reload dropped ${mesaId} from ${JSON.stringify(storedAfter)}`);
   await shot(send, evidenceDir, 'upcoming-reloaded');
-  const server = await waitServerRemoved(baseUrl, [mesaId], []);
-  await expectFreshHide(baseUrl, home, {
+  const server = await waitServerRemoved(send, baseUrl, [mesaId], []);
+  await expectFreshHide(baseUrl, home, fixtureToken, {
     id: mesaId,
     name: mesa,
     updatedAt: server.removedCuratedUpdatedAt,
     visible: false,
   });
   return `upcoming: ${ascent} and Verify Likely above ${mesa}, Verify Horizon omitted, score sort, hide persisted ${mesaId}, fresh profile hid it`;
-}
-
-function rgbaChannels(color) {
-  const match = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)$/.exec(String(color || ''));
-  if (!match) return null;
-  return {
-    r: Number(match[1]),
-    g: Number(match[2]),
-    b: Number(match[3]),
-    a: match[4] === undefined ? 1 : Number(match[4]),
-  };
-}
-
-function chipBacking(color) {
-  const parsed = rgbaChannels(color);
-  if (!parsed) return false;
-  return parsed.a >= 0.7 && parsed.r <= 20 && parsed.g <= 24 && parsed.b <= 30;
-}
-
-function paintIsClear(color) {
-  if (color === 'transparent') return true;
-  const parsed = rgbaChannels(color);
-  return !!parsed && parsed.a === 0;
 }
 
 async function proveMapLaidOnPane(send) {
@@ -1890,6 +2017,7 @@ async function proveMapLaidOnPane(send) {
     const fitting = innerWidth >= 800 && innerHeight >= 600;
     const shortRow = innerHeight <= 520 && innerWidth >= 720;
     const narrow = innerWidth <= 800 && !shortRow && !fitting;
+    const stacked = innerWidth <= 719;
     let reserved = null;
     if (narrow) {
       const probe = document.createElement('div');
@@ -1906,7 +2034,7 @@ async function proveMapLaidOnPane(send) {
       document.body.appendChild(insetProbe);
       const inset = Number.parseFloat(getComputedStyle(insetProbe).paddingBottom) || 0;
       insetProbe.remove();
-      reserved = { height, inset, expect: 140 + inset };
+      reserved = { height, inset, expect: (stacked ? 208 : 140) + inset };
     }
     const pipNode = document.querySelector('[data-pip="horizon"]');
     const pipShown = pipNode && !pipNode.hidden && getComputedStyle(pipNode).display !== 'none';
@@ -1928,9 +2056,15 @@ async function proveMapLaidOnPane(send) {
       paneBottom: paneBox.bottom,
       stripTop: stripBox.top,
       stripBottom: stripBox.bottom,
+      stripLeft: stripBox.left,
+      stripRight: stripBox.right,
       stripWidth: stripBox.width,
       stripHeight: stripBox.height,
       rightGap: paneBox.right - stripBox.right,
+      paneLeft: paneBox.left,
+      paneRight: paneBox.right,
+      innerWidth,
+      innerHeight,
       slider: sliderBox ? sliderBox.height : null,
       fitting,
       narrow,
@@ -1944,23 +2078,9 @@ async function proveMapLaidOnPane(send) {
       events: stripStyle.pointerEvents,
     };
   })()`);
-  const paddingClear = laid
-    && laid.paddingTop === '0px'
-    && laid.paddingRight === '0px'
-    && laid.paddingBottom === '0px'
-    && laid.paddingLeft === '0px';
-  const gapClear = laid && laid.rowGap === '0px' && laid.columnGap === '0px';
-  const geometry = laid && (!laid.fitting || (
-    Math.abs(laid.stripHeight - 96) <= 2
-    && Math.abs(laid.rightGap - 204) <= 2
-    && Math.abs(laid.slider - 32) <= 1
-  ));
-  const narrowOk = laid && (!laid.narrow || (
-    laid.reserved
-    && Math.abs(laid.reserved.height - laid.reserved.expect) <= 2
-  ));
-  if (!laid || Math.abs(laid.gap) > 1 || laid.bottom !== '0px' || !gapClear || !paddingClear || !laid.covers || !paintIsClear(laid.color) || !chipBacking(laid.controls) || laid.fullBleed || laid.hide || laid.legend || laid.zoom || laid.pip || laid.events !== 'none' || !geometry || !narrowOk) {
-    throw new Error(`time strip not laid on the map ${JSON.stringify(laid)}`);
+  const failures = timeStripLaidFailures(laid);
+  if (failures.length) {
+    throw new Error(`time strip not laid on the map ${failures.join(' ')} ${JSON.stringify(laid)}`);
   }
   return laid;
 }
@@ -2362,12 +2482,17 @@ async function provePipSurface(send, evidenceDir, viewport, which) {
   if (!insetViewportFits(viewport.width, viewport.height)) {
     await waitFor(send, pipAbsentExpression(name), `${name} inset absent`, 10000);
     await shot(send, evidenceDir, `${shotBase}-absent`);
-    const held = [`${viewport.width}x${viewport.height}`];
+    const held = [`${viewport.width}x${viewport.height} gone`];
     for (const pane of phoneInsetPanes(viewport)) {
-      await setViewport(send, pane.width, pane.height, true);
-      await waitFor(send, pipAbsentExpression(name), `${name} inset absent ${pane.width}x${pane.height}`, 10000);
-      await shot(send, evidenceDir, `${shotBase}-absent-${pane.width}x${pane.height}`);
-      held.push(`${pane.width}x${pane.height}`);
+      if (insetViewportFits(pane.width, pane.height)) {
+        await holdFittingInset(send, evidenceDir, name, obstacles, shotBase, { ...pane, mobile: true });
+        held.push(`${pane.width}x${pane.height} present`);
+      } else {
+        await setViewport(send, pane.width, pane.height, true);
+        await waitFor(send, pipAbsentExpression(name), `${name} inset absent ${pane.width}x${pane.height}`, 10000);
+        await shot(send, evidenceDir, `${shotBase}-absent-${pane.width}x${pane.height}`);
+        held.push(`${pane.width}x${pane.height} gone`);
+      }
     }
     await setViewport(send, viewport.width, viewport.height, viewport.mobile);
     return `absent ${held.join(' ')}`;
@@ -2380,13 +2505,21 @@ async function provePipSurface(send, evidenceDir, viewport, which) {
   await shot(send, evidenceDir, shotBase);
   const extra = [`${viewport.width}x${viewport.height}`];
   if (viewport.mobile) {
-    await setViewport(send, viewport.height, viewport.width, true);
-    await waitForPip(send, name, `${name} inset landscape`);
-    await waitFor(send, pipClearExpression(name, obstacles), `${name} inset landscape clear`, 10000);
-    if (name === 'horizon') await waitFor(send, legendCentersMissInset(), `${name} legend centers landscape`, 10000);
-    await sleep(800);
-    await shot(send, evidenceDir, `${shotBase}-land`);
-    extra.push(`${viewport.height}x${viewport.width}`);
+    const landW = viewport.height;
+    const landH = viewport.width;
+    await setViewport(send, landW, landH, true);
+    if (insetViewportFits(landW, landH)) {
+      await waitForPip(send, name, `${name} inset landscape`);
+      await waitFor(send, pipClearExpression(name, obstacles), `${name} inset landscape clear`, 10000);
+      if (name === 'horizon') await waitFor(send, legendCentersMissInset(), `${name} legend centers landscape`, 10000);
+      await sleep(800);
+      await shot(send, evidenceDir, `${shotBase}-land`);
+      extra.push(`${landW}x${landH} present`);
+    } else {
+      await waitFor(send, pipAbsentExpression(name), `${name} inset absent ${landW}x${landH}`, 10000);
+      await shot(send, evidenceDir, `${shotBase}-absent-${landW}x${landH}`);
+      extra.push(`${landW}x${landH} gone`);
+    }
     for (const pane of toolbarInsetPanes(true)) {
       await holdFittingInset(send, evidenceDir, name, obstacles, shotBase, pane);
       extra.push(`${pane.width}x${pane.height}`);
@@ -2930,7 +3063,7 @@ async function proveLegendWarning(send, evidenceDir) {
 }
 
 async function proveStaleReadoutClearsSkip(send, viewport) {
-  const sizes = [
+  const sizes = FIXED_SURFACE ? [[viewport.width, viewport.height]] : [
     [834, 1194],
     [800, 600],
   ];
@@ -2966,7 +3099,7 @@ async function proveStaleReadoutClearsSkip(send, viewport) {
     const short = buttons.filter((button) => button.width < 44 || button.height < 44);
     const overflow = el.scrollWidth - el.clientWidth;
     const inkRight = readout.left + el.scrollWidth;
-    if (el.textContent !== text || overflow > 1 || inkRight > skip.left + 1 || short.length) {
+    if (el.textContent !== text || overflow > 1 || (readout.bottom > skip.top + 0.5 && readout.top < skip.bottom - 0.5 && inkRight > skip.left + 1) || short.length) {
       return {
         pending: true,
         text: el.textContent,
@@ -2982,11 +3115,11 @@ async function proveStaleReadoutClearsSkip(send, viewport) {
   })()`;
   try {
     for (const [width, height] of sizes) {
-      await setViewport(send, width, height, width < 900);
+      if (!FIXED_SURFACE) await setViewport(send, width, height, width < 900);
       await waitFor(send, expression, `stale readout clear of T-90 at ${width}x${height}`, 8000);
     }
   } finally {
-    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+    if (!FIXED_SURFACE) await setViewport(send, viewport.width, viewport.height, viewport.mobile);
   }
   await evaluate(send, `(() => {
     const el = document.getElementById('time-slider-readout');
@@ -3003,17 +3136,210 @@ async function proveStaleReadoutClearsSkip(send, viewport) {
   );
 }
 
-async function proveShortTimeRow(send, viewport) {
+const VIEWPORT_LAYOUT_MS = 8000;
+const VIEWPORT_DEADLINE_MS = 12000;
+const VIEWPORT_RESTORE_MS = 500;
+
+async function abortViewportLayout(send) {
+  try {
+    await evaluate(send, 'window.__opdAbortViewportLayout?.()');
+  } catch {
+    return;
+  }
+}
+
+function voidViewportAbort(send) {
+  const aborting = abortViewportLayout(send);
+  aborting.catch(() => {});
+}
+
+async function withViewportCleanup(send, step, signal) {
+  try {
+    return await step();
+  } catch (error) {
+    if (!signal?.aborted) voidViewportAbort(send);
+    throw error;
+  }
+}
+
+function viewportLayoutScript(width, height) {
+  return `(() => {
+    const width = ${width};
+    const height = ${height};
+    window.__opdViewportSettled = new Promise((resolve) => {
+      let frame = 0;
+      let nested = 0;
+      let defer = 0;
+      let settled = false;
+      let accepting = false;
+      let expectedDpr = null;
+      const sizeMatchedBefore = window.innerWidth === width && window.innerHeight === height;
+      let sawResize = false;
+      function cleanup() {
+        clearTimeout(timer);
+        if (defer) clearTimeout(defer);
+        defer = 0;
+        cancelFrames();
+        window.removeEventListener('resize', onResize);
+      }
+      function done(value) {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(value);
+      }
+      function sample() {
+        return { w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio };
+      }
+      function matches(value) {
+        return expectedDpr !== null && value.w === width && value.h === height && value.dpr === expectedDpr;
+      }
+      function cancelFrames() {
+        if (frame) cancelAnimationFrame(frame);
+        if (nested) cancelAnimationFrame(nested);
+        frame = 0;
+        nested = 0;
+      }
+      function startFrames() {
+        if (settled) return;
+        cancelFrames();
+        if (!matches(sample())) return;
+        frame = requestAnimationFrame(() => {
+          frame = 0;
+          if (!matches(sample())) {
+            startFrames();
+            return;
+          }
+          nested = requestAnimationFrame(() => {
+            nested = 0;
+            const end = sample();
+            if (!matches(end)) {
+              startFrames();
+              return;
+            }
+            done({ w: end.w, h: end.h, dpr: end.dpr, timedOut: false });
+          });
+        });
+      }
+      function onResize() {
+        sawResize = true;
+        if (settled || !accepting) return;
+        startFrames();
+      }
+      function schedulePump() {
+        defer = setTimeout(() => {
+          const id = defer;
+          defer = 0;
+          clearTimeout(id);
+          if (settled) return;
+          if (!sawResize) {
+            schedulePump();
+            return;
+          }
+          accepting = true;
+          startFrames();
+        }, 0);
+      }
+      const timer = setTimeout(() => {
+        const value = sample();
+        done({ w: value.w, h: value.h, dpr: value.dpr, timedOut: true });
+      }, ${VIEWPORT_LAYOUT_MS});
+      window.__opdAbortViewportLayout = () => {
+        const value = sample();
+        done({ w: value.w, h: value.h, dpr: value.dpr, aborted: true });
+      };
+      window.addEventListener('resize', onResize);
+      window.__opdArmViewportLayout = (nextDpr) => {
+        if (accepting || settled) return true;
+        const parsed = Number(nextDpr);
+        if (!Number.isFinite(parsed)) return false;
+        expectedDpr = parsed;
+        if (sizeMatchedBefore || sawResize) {
+          accepting = true;
+          startFrames();
+          return true;
+        }
+        schedulePump();
+        return true;
+      };
+    });
+    return true;
+  })()`;
+}
+
+async function readViewportSettled(send) {
+  return evaluate(send, 'window.__opdViewportSettled');
+}
+
+async function layOutViewport(send, width, height, signal) {
+  await evaluate(send, viewportLayoutScript(width, height));
+  const expectedDpr = await withViewportCleanup(send, async () => {
+    const changed = await setViewport(send, width, height, true, signal);
+    signal.throwIfAborted();
+    if (changed?.contextReplaced) await evaluate(send, viewportLayoutScript(width, height));
+    const read = await evaluate(send, 'window.devicePixelRatio');
+    const dpr = Number(read);
+    if (!Number.isFinite(dpr)) throw new Error(`viewport dpr unread ${JSON.stringify(read)}`);
+    await evaluate(send, `window.__opdArmViewportLayout?.(${dpr})`);
+    return dpr;
+  }, signal);
+  const settled = await withViewportCleanup(send, () => readViewportSettled(send), signal);
+  if (settled && typeof settled === 'object') settled.expectedDpr = expectedDpr;
+  return settled;
+}
+
+export async function whenViewportLaidOut(send, width, height) {
+  let timer;
+  const controller = new AbortController();
+  const pending = layOutViewport(send, width, height, controller.signal);
+  pending.catch(() => {});
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort(new Error('viewport deadline exceeded'));
+      voidViewportAbort(send);
+      resolve({ deadline: true });
+    }, VIEWPORT_DEADLINE_MS);
+  });
+  try {
+    const settled = await Promise.race([pending, deadline]);
+    if (!settled || settled.timedOut || settled.aborted || settled.deadline || settled.w !== width || settled.h !== height || settled.dpr !== settled.expectedDpr) {
+      throw new Error(`viewport ${width}x${height} resize unsettled ${JSON.stringify(settled)}`);
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function restoreViewport(send, viewport) {
+  let timer;
+  const controller = new AbortController();
+  const pending = setViewport(send, viewport.width, viewport.height, viewport.mobile, controller.signal);
+  pending.catch(() => {});
+  const limited = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error('viewport restore unsettled');
+      controller.abort(error);
+      reject(error);
+    }, send.replacesContext ? VIEWPORT_DEADLINE_MS : VIEWPORT_RESTORE_MS);
+  });
+  try {
+    return await Promise.race([pending, limited]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function proveShortTimeRow(send, viewport) {
   const sizes = [
     { width: 390, height: 520 },
     { width: 430, height: 400 },
     { width: 664, height: 390 },
     { width: 874, height: 402 },
   ];
+  let failure;
   try {
     for (const size of sizes) {
-      await setViewport(send, size.width, size.height, true);
-      await sleep(200);
+      await whenViewportLaidOut(send, size.width, size.height);
       const laid = await evaluate(send, `(() => {
         const button = document.getElementById('time-fwd-90');
         const chip = document.querySelector('.map-command .map-controls-time');
@@ -3031,9 +3357,780 @@ async function proveShortTimeRow(send, viewport) {
       })()`);
       if (!laid?.ok) throw new Error(`time skip ${size.width}x${size.height} ${JSON.stringify(laid)}`);
     }
+  } catch (error) {
+    failure = error;
   } finally {
+    try {
+      await restoreViewport(send, viewport);
+    } catch (restoreError) {
+      if (!failure) failure = restoreError;
+    }
+  }
+  if (failure) throw failure;
+}
+
+async function proveNarrowTimeSlider(send, evidenceDir, viewport) {
+  try {
+    await setViewport(send, 390, 520, true);
+    await sleep(250);
+    const slider = await evaluate(send, `(() => {
+      const input = document.getElementById('time-slider');
+      const strip = document.querySelector('.map-command');
+      const pane = document.getElementById('map-pane');
+      if (!input || !strip || !pane) return { ok: false, reason: 'missing' };
+      const box = input.getBoundingClientRect();
+      const stripBox = strip.getBoundingClientRect();
+      const paneBox = pane.getBoundingClientRect();
+      return {
+        ok: box.width >= 100,
+        width: Math.round(box.width),
+        rightGap: Math.round(paneBox.right - stripBox.right),
+        above: stripBox.bottom <= (document.getElementById('map-chrome-toggle')?.getBoundingClientRect().top || 0) + 1,
+      };
+    })()`);
+    if (!slider?.ok || !slider.above || slider.rightGap > NARROW_SLIDER_RIGHT_GAP) {
+      throw new Error(`narrow time slider ${JSON.stringify(slider)}`);
+    }
+    await shot(send, evidenceDir, 'map-time-390x520');
+    await setViewport(send, 430, 400, true);
+    await evaluate(send, `document.body.classList.add('shotlist-bar-visible')`);
+    await sleep(250);
+    const compass = await evaluate(send, `(() => {
+      const el = document.querySelector('.maplibregl-ctrl-compass');
+      if (!el) return { ok: false, reason: 'missing' };
+      const box = el.getBoundingClientRect();
+      const x = box.left + box.width / 2;
+      const y = box.top + box.height / 2;
+      const hit = document.elementFromPoint(x, y);
+      const own = !!(hit && (hit === el || el.contains(hit)));
+      return {
+        ok: own,
+        hit: hit ? (hit.id || hit.getAttribute('aria-label') || hit.className || hit.tagName) : null,
+        top: Math.round(box.top),
+        bottom: Math.round(box.bottom),
+      };
+    })()`);
+    if (!compass?.ok) throw new Error(`compass under the time strip ${JSON.stringify(compass)}`);
+    await shot(send, evidenceDir, 'map-compass-430x400');
+  } finally {
+    await evaluate(send, `document.body.classList.remove('shotlist-bar-visible')`);
     await setViewport(send, viewport.width, viewport.height, viewport.mobile);
   }
+}
+
+const BANNER_ACTIONS_MARKUP = '<p class="banner-copy">SIGN IN AGAIN</p><div class="banner-actions"><a class="banner-action" href="/api/app">Sign in</a><button class="banner-action" type="button">Reload</button></div>';
+
+function bannerInjectExpression() {
+  return `(() => {
+    const banner = document.getElementById('status-banner');
+    if (!banner) return false;
+    banner.className = 'banner banner-red';
+    banner.innerHTML = ${JSON.stringify(BANNER_ACTIONS_MARKUP)};
+    return !!banner.querySelector('.banner-actions');
+  })()`;
+}
+
+function bannerClearExpression() {
+  return `(() => {
+    const banner = document.getElementById('status-banner');
+    if (banner) banner.querySelectorAll('.banner-actions').forEach((node) => node.remove());
+    return !document.querySelector('#status-banner .banner-actions');
+  })()`;
+}
+
+async function withBannerActions(send, run) {
+  const saved = await evaluate(send, `(() => {
+    const banner = document.getElementById('status-banner');
+    if (!banner) return null;
+    return { className: banner.className, html: banner.innerHTML };
+  })()`);
+  if (!saved) throw new Error('status banner missing');
+  await evaluate(send, bannerInjectExpression());
+  await evaluate(send, `(() => {
+    setTimeout(() => {
+      document.querySelectorAll('#status-banner .banner-actions').forEach((node) => node.remove());
+    }, 20);
+    return true;
+  })()`);
+  try {
+    return await run();
+  } finally {
+    await evaluate(send, `(() => {
+      const banner = document.getElementById('status-banner');
+      if (!banner) return false;
+      banner.className = ${JSON.stringify(saved.className)};
+      banner.innerHTML = ${JSON.stringify(saved.html)};
+      return true;
+    })()`);
+  }
+}
+
+async function proveRaisedHideDock(send, evidenceDir, viewport) {
+  await setViewport(send, 1280, 700, false);
+  await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
+  try {
+    await withBannerActions(send, async () => {
+      await sleep(250);
+      const laid = await evaluate(send, `(() => {
+        const actions = ${bannerInjectExpression()};
+        const dock = document.querySelector('.map-control-dock');
+        const picker = document.getElementById('toggle-satellite-picker');
+        const hide = document.getElementById('map-chrome-toggle');
+        if (!dock || !picker || !hide) return { ok: false, reason: 'missing', actions };
+        dock.scrollTop = dock.scrollHeight;
+        const hits = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+        const dockBox = dock.getBoundingClientRect();
+        const pickerBox = picker.getBoundingClientRect();
+        const hideBox = hide.getBoundingClientRect();
+        const overlap = hits(pickerBox, hideBox) || hits(dockBox, hideBox);
+        return {
+          ok: actions && !overlap && dockBox.bottom <= hideBox.top + 1,
+          actions,
+          dockBottom: Math.round(dockBox.bottom),
+          hideTop: Math.round(hideBox.top),
+          hideBottom: Math.round(hideBox.bottom),
+          pickerTop: Math.round(pickerBox.top),
+          pickerBottom: Math.round(pickerBox.bottom),
+        };
+      })()`);
+      if (!laid?.ok) throw new Error(`raised hide covers the dock ${JSON.stringify(laid)}`);
+      await shot(send, evidenceDir, 'map-dock-1280x700');
+    });
+  } finally {
+    await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  }
+}
+
+function legendPanelFixtureExpression() {
+  return `(() => {
+    const button = document.getElementById('map-legend-toggle');
+    const date = document.querySelector('.map-imagery-date');
+    if (!button || !date) return false;
+    button.setAttribute('aria-expanded', 'true');
+    const line = 'LIVE now (not the scrubbed time)';
+    date.textContent = Array.from({ length: 40 }, () => line).join(' ');
+    return true;
+  })()`;
+}
+
+export async function proveLegendPanelBounds(send, evidenceDir, viewport) {
+  const saved = await evaluate(send, `(() => {
+    const button = document.getElementById('map-legend-toggle');
+    const date = document.querySelector('.map-imagery-date');
+    if (!button || !date) return null;
+    return { expanded: button.getAttribute('aria-expanded'), text: date.textContent };
+  })()`);
+  if (!saved) throw new Error('legend panel missing');
+  const cases = [
+    { width: 844, height: 390, insets: { top: 0, left: 0, bottom: 21, right: 0 }, name: '844x390' },
+    { width: 800, height: 600, insets: { top: 24, left: 0, bottom: 20, right: 0 }, name: '800x600' },
+  ];
+  try {
+    await withBannerActions(send, async () => {
+      for (const pane of cases) {
+        await setViewport(send, pane.width, pane.height, true);
+        const applied = await safeAreaOverride(send, pane.insets);
+        if (!applied && !viewport.mobile) throw new Error(`safe area override failed at ${pane.name}`);
+        if (!applied) await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
+        await sleep(250);
+        const armed = await evaluate(send, legendPanelFixtureExpression());
+        if (!armed) throw new Error(`legend fixture missing after ${pane.name}`);
+        const laid = await evaluate(send, `(() => {
+          const actions = ${bannerInjectExpression()};
+          const panel = document.getElementById('map-legend-panel');
+          const header = document.querySelector('.topbar');
+          const strip = document.querySelector('.map-command');
+          if (!actions || !panel || !header || !strip) return { ok: false, reason: actions ? 'missing' : 'banner', actions };
+          const box = panel.getBoundingClientRect();
+          const head = header.getBoundingClientRect();
+          const stripBox = strip.getBoundingClientRect();
+          const style = getComputedStyle(panel);
+          const hits = (a, b) => a.width > 0 && b.width > 0 && a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+          const pipNode = document.querySelector('[data-pip="horizon"]');
+          const pipShown = pipNode && !pipNode.hidden && getComputedStyle(pipNode).display !== 'none';
+          const pip = pipShown ? pipNode.getBoundingClientRect() : null;
+          const onScreen = box.top >= -1 && box.left >= -1 && box.right <= innerWidth + 1 && box.bottom <= innerHeight + 1;
+          const belowHeader = box.top >= head.bottom - 1;
+          const pipClear = !pip || !hits(box, pip);
+          const stripClear = !hits(box, stripBox);
+          const scrollable = (style.overflowY === 'auto' || style.overflowY === 'scroll') && panel.scrollHeight > panel.clientHeight + 1;
+          return {
+            ok: actions && onScreen && belowHeader && pipClear && stripClear && scrollable && style.pointerEvents === 'auto' && box.width > 88,
+            actions,
+            onScreen,
+            belowHeader,
+            pipClear,
+            stripClear,
+            scrollable,
+            events: style.pointerEvents,
+            overflow: style.overflowY,
+            width: Math.round(box.width),
+            top: Math.round(box.top),
+            bottom: Math.round(box.bottom),
+            header: Math.round(head.bottom),
+            scrollHeight: panel.scrollHeight,
+            clientHeight: panel.clientHeight,
+          };
+        })()`);
+        if (!laid?.ok) throw new Error(`legend panel ${pane.name} ${JSON.stringify(laid)}`);
+        await shot(send, evidenceDir, `map-legend-panel-${pane.name}`);
+      }
+    });
+  } finally {
+    await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
+    await evaluate(send, `(() => {
+      const button = document.getElementById('map-legend-toggle');
+      const date = document.querySelector('.map-imagery-date');
+      if (button) button.setAttribute('aria-expanded', ${JSON.stringify(saved.expanded)});
+      if (date) date.textContent = ${JSON.stringify(saved.text)};
+      return true;
+    })()`);
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  }
+}
+
+async function restoreNarrowChrome(send, viewport, legendExpanded) {
+  await evaluate(send, `(() => {
+    document.body.classList.remove('shotlist-bar-visible');
+    const toggle = document.getElementById('map-legend-toggle');
+    if (toggle) toggle.setAttribute('aria-expanded', ${JSON.stringify(legendExpanded || 'false')});
+    ${bannerClearExpression()};
+    return true;
+  })()`);
+  await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
+  await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+}
+
+async function proveNarrowDockScrollport(send, viewport) {
+  await setViewport(send, 430, 400, true);
+  const applied = await safeAreaOverride(send, { top: 24, left: 47, bottom: 34, right: 0 });
+  if (!applied) {
+    if (!viewport.mobile) throw new Error('safe area override failed for the narrow dock');
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+    return;
+  }
+  const legendExpanded = await evaluate(send, `document.getElementById('map-legend-toggle')?.getAttribute('aria-expanded') || 'false'`);
+  try {
+    for (const shotlist of [true, false]) {
+      const laid = await evaluate(send, `(() => {
+        ${bannerClearExpression()};
+        document.body.classList.toggle('shotlist-bar-visible', ${shotlist});
+        const toggle = document.getElementById('map-legend-toggle');
+        if (toggle) toggle.setAttribute('aria-expanded', 'false');
+        window.__opdSyncMapChrome?.();
+        const dock = document.querySelector('.map-control-dock');
+        const first = document.getElementById('bearing-north');
+        const last = document.getElementById('toggle-satellite-picker');
+        if (!dock || !first || !last) return { ok: false, reason: 'missing' };
+        const owns = (el) => {
+          const box = el.getBoundingClientRect();
+          const dockBox = dock.getBoundingClientRect();
+          const x = box.left + box.width / 2;
+          const y = box.top + box.height / 2;
+          const hit = document.elementFromPoint(x, y);
+          return {
+            inside: x >= dockBox.left - 0.5 && x <= dockBox.right + 0.5 && y >= dockBox.top - 0.5 && y <= dockBox.bottom + 0.5,
+            own: !!(hit && (hit === el || el.contains(hit))),
+            hit: hit ? (hit.id || String(hit.className || hit.tagName)) : null,
+          };
+        };
+        dock.scrollTop = 0;
+        const start = owns(first);
+        dock.scrollTop = dock.scrollHeight;
+        const end = owns(last);
+        const box = dock.getBoundingClientRect();
+        return {
+          ok: box.height >= 44 && start.inside && start.own && end.inside && end.own,
+          height: Math.round(box.height),
+          client: dock.clientHeight,
+          start,
+          end,
+        };
+      })()`);
+      if (!laid?.ok) throw new Error(`narrow dock shotlist ${shotlist} ${JSON.stringify(laid)}`);
+    }
+  } finally {
+    await restoreNarrowChrome(send, viewport, legendExpanded);
+  }
+}
+
+async function proveLegendClearsNarrowControls(send, viewport) {
+  const legendExpanded = await evaluate(send, `document.getElementById('map-legend-toggle')?.getAttribute('aria-expanded') || 'false'`);
+  const sizes = [
+    { width: 390, height: 520 },
+    { width: 430, height: 400 },
+  ];
+  const toggles = [
+    { shotlist: false, banner: false },
+    { shotlist: true, banner: false },
+    { shotlist: false, banner: true },
+    { shotlist: true, banner: true },
+  ];
+  try {
+    for (const size of sizes) {
+      await setViewport(send, size.width, size.height, true);
+      await safeAreaOverride(send, { top: 0, left: 0, bottom: 0, right: 0 });
+      for (const toggle of toggles) {
+        const laid = await evaluate(send, `(() => {
+          const actions = ${toggle.banner ? bannerInjectExpression() : bannerClearExpression()};
+          document.body.classList.toggle('shotlist-bar-visible', ${toggle.shotlist});
+          const legend = document.getElementById('map-legend-toggle');
+          if (legend) legend.setAttribute('aria-expanded', 'true');
+          window.__opdSyncMapChrome?.();
+          const panel = document.getElementById('map-legend-panel');
+          const strip = document.querySelector('.map-command');
+          const toolbar = document.querySelector('.map-toolbar');
+          if (!actions || !panel || !strip || !toolbar) return { ok: false, reason: 'missing', actions };
+          const meets = (a, b) => !!(a && b && a.width > 0 && b.width > 0 && a.height > 0 && b.height > 0 && a.left < b.right - 0.5 && a.right > b.left + 0.5 && a.top < b.bottom - 0.5 && a.bottom > b.top + 0.5);
+          const panelBox = panel.getBoundingClientRect();
+          const stripBox = strip.getBoundingClientRect();
+          const toolBox = toolbar.getBoundingClientRect();
+          const selectors = ['#time-slider', '#time-back-90', '#time-back-45', '#time-now', '#time-fwd-45', '#time-fwd-90', '#filter-all-map', '#filter-mine-map', '#filter-launches-map'];
+          const misses = [];
+          for (const selector of selectors) {
+            const el = document.querySelector(selector);
+            if (!el) {
+              misses.push({ selector, reason: 'missing' });
+              continue;
+            }
+            const box = el.getBoundingClientRect();
+            if (meets(panelBox, box)) misses.push({ selector, reason: 'covered' });
+            const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+            if (!hit || (hit !== el && !el.contains(hit))) misses.push({ selector, reason: 'hit', hit: hit ? (hit.id || String(hit.className || hit.tagName)) : null });
+            if (box.width < 44 || box.height < 44) misses.push({ selector, reason: 'size', w: Math.round(box.width), h: Math.round(box.height) });
+          }
+          const aboveStrip = panelBox.bottom <= stripBox.top - 8;
+          const belowToolbar = panelBox.top >= toolBox.bottom - 1;
+          return {
+            ok: misses.length === 0 && aboveStrip && belowToolbar && panelBox.height >= 24 && panelBox.width > 88,
+            misses,
+            aboveStrip,
+            belowToolbar,
+            panel: { top: Math.round(panelBox.top), bottom: Math.round(panelBox.bottom), height: Math.round(panelBox.height), width: Math.round(panelBox.width) },
+            stripTop: Math.round(stripBox.top),
+            toolbarBottom: Math.round(toolBox.bottom),
+            actions: !!document.querySelector('#status-banner .banner-actions'),
+          };
+        })()`);
+        if (!laid?.ok || (toggle.banner && !laid.actions)) {
+          throw new Error(`legend clearance ${size.width}x${size.height} shotlist ${toggle.shotlist} banner ${toggle.banner} ${JSON.stringify(laid)}`);
+        }
+      }
+    }
+  } finally {
+    await restoreNarrowChrome(send, viewport, legendExpanded);
+  }
+}
+
+async function proveRaisedStripClearsToolbar(send, viewport) {
+  await setViewport(send, 430, 400, true);
+  const applied = await safeAreaOverride(send, { top: 24, left: 47, bottom: 34, right: 0 });
+  if (!applied) {
+    if (!viewport.mobile) throw new Error('safe area override failed for the raised strip');
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+    return;
+  }
+  const legendExpanded = await evaluate(send, `document.getElementById('map-legend-toggle')?.getAttribute('aria-expanded') || 'false'`);
+  try {
+    const laid = await evaluate(send, `(() => {
+      const actions = ${bannerInjectExpression()};
+      document.body.classList.remove('shotlist-bar-visible');
+      const legend = document.getElementById('map-legend-toggle');
+      if (legend) legend.setAttribute('aria-expanded', 'false');
+      window.__opdSyncMapChrome?.();
+      const mine = document.getElementById('filter-mine-map');
+      const launches = document.getElementById('filter-launches-map');
+      const toolbar = document.querySelector('.map-toolbar');
+      const strip = document.querySelector('.map-command');
+      if (!actions || !mine || !launches || !toolbar || !strip) return { ok: false, reason: actions ? 'missing' : 'banner', actions };
+      const owns = (el) => {
+        const box = el.getBoundingClientRect();
+        const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        return {
+          own: !!(hit && (hit === el || el.contains(hit))),
+          hit: hit ? (hit.id || String(hit.className || hit.tagName)) : null,
+          h: Math.round(box.height),
+          w: Math.round(box.width),
+        };
+      };
+      const stripBox = strip.getBoundingClientRect();
+      const toolBox = toolbar.getBoundingClientRect();
+      const steps = [...document.querySelectorAll('.map-command .time-step-btn')].map((el) => {
+        const port = strip.getBoundingClientRect();
+        let box = el.getBoundingClientRect();
+        if (box.left < port.left) strip.scrollLeft -= port.left - box.left;
+        if (box.right > port.right) strip.scrollLeft += box.right - port.right;
+        box = el.getBoundingClientRect();
+        const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        return {
+          id: el.id,
+          w: Math.round(box.width),
+          h: Math.round(box.height),
+          own: !!(hit && (hit === el || el.contains(hit))),
+        };
+      });
+      const mineHit = owns(mine);
+      const launchHit = owns(launches);
+      const targets = steps.every((step) => step.w >= 44 && step.h >= 44 && step.own);
+      const gap = stripBox.top - toolBox.bottom;
+      return {
+        ok: mineHit.own && launchHit.own && mineHit.h >= 44 && launchHit.h >= 44 && targets && gap >= 4,
+        actions,
+        gap: Math.round(gap),
+        stripTop: Math.round(stripBox.top),
+        toolbarBottom: Math.round(toolBox.bottom),
+        mineHit,
+        launchHit,
+        steps,
+      };
+    })()`);
+    if (!laid?.ok) throw new Error(`raised strip upper bound ${JSON.stringify(laid)}`);
+  } finally {
+    await restoreNarrowChrome(send, viewport, legendExpanded);
+  }
+}
+
+async function proveLegendMissesRaisedPip(send, viewport) {
+  const applied = await safeAreaOverride(send, { top: 24, left: 0, bottom: 20, right: 0 });
+  if (!applied) {
+    if (!viewport.mobile) throw new Error('safe area override failed for the legend and horizon inset');
+    return;
+  }
+  const legendExpanded = await evaluate(send, `document.getElementById('map-legend-toggle')?.getAttribute('aria-expanded') || 'false'`);
+  try {
+    await setViewport(send, 800, 600, false);
+    await waitFor(send, pipReadyExpression('horizon'), 'horizon inset under the legend', 15000);
+    const laid = await evaluate(send, `(() => {
+      const actions = ${bannerInjectExpression()};
+      document.body.classList.add('shotlist-bar-visible');
+      const legend = document.getElementById('map-legend-toggle');
+      if (legend) legend.setAttribute('aria-expanded', 'true');
+      window.__opdSyncMapChrome?.();
+      const panel = document.getElementById('map-legend-panel');
+      const date = document.querySelector('.map-imagery-date');
+      const pip = document.querySelector('[data-pip="horizon"]');
+      if (!actions || !panel || !date || !pip) return { ok: false, reason: 'missing', actions };
+      const saved = date.textContent;
+      date.textContent = Array.from({ length: 40 }, () => 'LIVE now (not the scrubbed time)').join(' ');
+      const panelBox = panel.getBoundingClientRect();
+      const pipBox = pip.getBoundingClientRect();
+      const filled = panel.scrollHeight > panel.clientHeight + 1;
+      const meets = panelBox.width > 0 && pipBox.width > 0 && panelBox.left < pipBox.right - 0.5 && panelBox.right > pipBox.left + 0.5 && panelBox.top < pipBox.bottom - 0.5 && panelBox.bottom > pipBox.top + 0.5;
+      const hit = document.elementFromPoint(600, 216);
+      const legendHit = !!(hit && hit.closest('#map-legend-panel, .map-legend-item'));
+      const pipHit = !!(hit && hit.closest('[data-pip="horizon"]'));
+      date.textContent = saved;
+      return {
+        ok: filled && !meets && pipHit && !legendHit && pipBox.height >= 44,
+        filled,
+        meets,
+        pipHit,
+        legendHit,
+        hit: hit ? (hit.id || String(hit.className || hit.tagName)) : null,
+        panel: { left: Math.round(panelBox.left), top: Math.round(panelBox.top), width: Math.round(panelBox.width), height: Math.round(panelBox.height), bottom: Math.round(panelBox.bottom) },
+        pip: { left: Math.round(pipBox.left), top: Math.round(pipBox.top), width: Math.round(pipBox.width), height: Math.round(pipBox.height), bottom: Math.round(pipBox.bottom) },
+        actions,
+      };
+    })()`);
+    if (!laid?.ok) throw new Error(`legend meets horizon inset ${JSON.stringify(laid)}`);
+  } finally {
+    await restoreNarrowChrome(send, viewport, legendExpanded);
+  }
+}
+
+export function tightChromeAuditExpression() {
+  return `(() => {
+    document.body.classList.add('shotlist-bar-visible');
+    const legendToggle = document.getElementById('map-legend-toggle');
+    if (legendToggle) legendToggle.setAttribute('aria-expanded', 'true');
+    const actions = ${bannerInjectExpression()};
+    window.__opdSyncMapChrome?.();
+    const meets = (a, b) => !!(a && b && a.width > 0 && a.height > 0 && b.width > 0 && b.height > 0 && a.left < b.right - 0.5 && a.right > b.left + 0.5 && a.top < b.bottom - 0.5 && a.bottom > b.top + 0.5);
+    const name = (el) => {
+      if (!el) return null;
+      if (el.id) return el.id;
+      return typeof el.className === 'string' && el.className ? el.className : el.tagName;
+    };
+    const own = (el, x, y) => {
+      const hit = document.elementFromPoint(x, y);
+      return { own: !!(hit && (hit === el || el.contains(hit))), hit: name(hit) };
+    };
+    const toolbar = document.querySelector('.map-toolbar');
+    const strip = document.querySelector('.map-command');
+    const dock = document.querySelector('.map-control-dock');
+    const panel = document.getElementById('map-legend-panel');
+    const mine = document.getElementById('filter-mine-map');
+    const launches = document.getElementById('filter-launches-map');
+    const hide = document.getElementById('map-chrome-toggle');
+    const legendButton = document.getElementById('map-legend-toggle');
+    const first = document.getElementById('bearing-north');
+    const last = document.getElementById('toggle-satellite-picker');
+    if (!actions || !toolbar || !strip || !dock || !panel || !mine || !launches || !hide || !legendButton || !first || !last) {
+      return { ok: false, reason: 'missing', actions: !!actions };
+    }
+    const problems = [];
+    const boxes = {
+      toolbar: toolbar.getBoundingClientRect(),
+      strip: strip.getBoundingClientRect(),
+      dock: dock.getBoundingClientRect(),
+      panel: panel.getBoundingClientRect(),
+      mine: mine.getBoundingClientRect(),
+      launches: launches.getBoundingClientRect(),
+      hide: hide.getBoundingClientRect(),
+      legend: legendButton.getBoundingClientRect(),
+    };
+    const narrow = window.innerWidth <= 719;
+    if (narrow) {
+      for (const [a, b] of [['toolbar', 'strip'], ['toolbar', 'panel'], ['toolbar', 'dock'], ['strip', 'panel'], ['strip', 'dock'], ['panel', 'mine'], ['panel', 'launches'], ['panel', 'hide'], ['panel', 'legend'], ['strip', 'mine'], ['strip', 'launches'], ['strip', 'legend'], ['dock', 'hide'], ['dock', 'legend'], ['toolbar', 'legend']]) {
+        if (meets(boxes[a], boxes[b])) problems.push(a + ' meets ' + b);
+      }
+      for (const el of [mine, launches]) {
+        const box = el.getBoundingClientRect();
+        if (box.width < 44 || box.height < 44) problems.push(el.id + ' size');
+        for (const [x, y] of [[box.left + box.width / 2, box.top + box.height / 2], [box.left + box.width / 2, box.bottom - 1], [box.left + 1, box.top + box.height / 2], [box.right - 1, box.top + box.height / 2]]) {
+          const hit = own(el, x, y);
+          if (!hit.own) problems.push(el.id + ' edge ' + hit.hit);
+        }
+      }
+      const bring = (el) => {
+        const port = strip.getBoundingClientRect();
+        const box = el.getBoundingClientRect();
+        if (box.left < port.left) strip.scrollLeft -= port.left - box.left;
+        if (box.right > port.right) strip.scrollLeft += box.right - port.right;
+      };
+      for (const el of document.querySelectorAll('.map-command .time-step-btn')) {
+        bring(el);
+        const box = el.getBoundingClientRect();
+        if (box.width < 44 || box.height < 44) problems.push(el.id + ' size ' + Math.round(box.width) + 'x' + Math.round(box.height));
+        const hit = own(el, box.left + box.width / 2, box.top + box.height / 2);
+        if (!hit.own) problems.push(el.id + ' center ' + hit.hit);
+      }
+      const endpoint = (el, atEnd) => {
+        dock.scrollTop = atEnd ? dock.scrollHeight : 0;
+        dock.scrollLeft = atEnd ? dock.scrollWidth : 0;
+        const box = el.getBoundingClientRect();
+        const dockBox = dock.getBoundingClientRect();
+        const x = box.left + box.width / 2;
+        const y = box.top + box.height / 2;
+        const inside = x >= dockBox.left - 0.5 && x <= dockBox.right + 0.5 && y >= dockBox.top - 0.5 && y <= dockBox.bottom + 0.5;
+        const hit = own(el, x, y);
+        if (box.width < 44 || box.height < 44) problems.push(el.id + ' dock size ' + Math.round(box.width) + 'x' + Math.round(box.height));
+        if (!inside || !hit.own) problems.push(el.id + ' dock ' + inside + ' ' + hit.hit);
+      };
+      endpoint(first, false);
+      endpoint(last, true);
+      if (panel.clientHeight < 32) problems.push('legend client ' + panel.clientHeight);
+      const rows = [...panel.querySelectorAll('.map-legend-item, .map-imagery-date')].filter((el) => (el.textContent || '').trim());
+      for (const row of rows) {
+        const port = () => panel.getBoundingClientRect();
+        let box = row.getBoundingClientRect();
+        if (box.top < port().top) panel.scrollTop -= port().top - box.top;
+        box = row.getBoundingClientRect();
+        if (box.bottom > port().bottom) panel.scrollTop += box.bottom - port().bottom;
+        box = row.getBoundingClientRect();
+        const frame = port();
+        if (box.top < frame.top - 1 || box.bottom > frame.bottom + 1) problems.push('legend row ' + (row.className || row.id));
+      }
+    } else if (document.body.classList.contains('map-chrome-reflow')) {
+      problems.push('reflow above 719');
+    }
+    if (hide.getBoundingClientRect().width < 80 || hide.getBoundingClientRect().height < 44) problems.push('hide size');
+    const dockType = getComputedStyle(dock).containerType;
+    const commandType = getComputedStyle(strip).containerType;
+    if (dockType === 'size' || commandType === 'size') problems.push('containment');
+    return {
+      ok: problems.length === 0,
+      problems,
+      reflow: document.body.classList.contains('map-chrome-reflow'),
+      dockRow: document.body.classList.contains('map-dock-row'),
+      panel: Math.round(panel.getBoundingClientRect().height),
+      dock: Math.round(dock.getBoundingClientRect().height),
+    };
+  })()`;
+}
+
+async function proveTightChromeReflow(send, viewport) {
+  const probe = await safeAreaOverride(send, { top: 24, left: 0, bottom: 34, right: 0 });
+  if (!probe) {
+    if (!viewport.mobile) throw new Error('safe area override failed for the tight chrome sweep');
+    return;
+  }
+  const legendExpanded = await evaluate(send, `document.getElementById('map-legend-toggle')?.getAttribute('aria-expanded') || 'false'`);
+  const cases = [];
+  for (const width of [360, 390, 430]) {
+    for (let height = 500; height <= 560; height += 1) cases.push([width, height]);
+  }
+  cases.push([600, 400], [719, 400], [720, 400]);
+  try {
+    for (const left of [0, 47]) {
+      const applied = await safeAreaOverride(send, { top: 24, left, bottom: 34, right: 0 });
+      if (!applied) throw new Error(`safe area override failed for left ${left}`);
+      for (const [width, height] of cases) {
+        await setViewport(send, width, height, true);
+        const laid = await evaluate(send, tightChromeAuditExpression());
+        if (!laid?.ok) throw new Error(`tight chrome ${width}x${height} left ${left} ${JSON.stringify(laid)}`);
+      }
+    }
+    await setViewport(send, 390, 521, true);
+    await safeAreaOverride(send, { top: 24, left: 0, bottom: 34, right: 0 });
+    await waitFor(
+      send,
+      `document.getElementById('live-readout')?.hidden === true ? { ok: true } : null`,
+      'narrow status collapsed before activation',
+      3000,
+    );
+    const activated = await evaluate(send, `(() => {
+      document.body.classList.add('shotlist-bar-visible');
+      const legend = document.getElementById('map-legend-toggle');
+      if (legend) legend.setAttribute('aria-expanded', 'true');
+      ${bannerInjectExpression()};
+      window.__opdSyncMapChrome?.();
+      const mine = document.getElementById('filter-mine-map');
+      const all = document.getElementById('filter-all-map');
+      const north = document.getElementById('bearing-north');
+      const iss = document.getElementById('bearing-iss');
+      const readout = document.getElementById('time-slider-readout');
+      if (!mine || !all || !north || !iss || !readout) return { ok: false, reason: 'missing' };
+      const before = readout.textContent;
+      const box = mine.getBoundingClientRect();
+      const hit = document.elementFromPoint(box.left + box.width / 2, box.bottom - 1);
+      if (!hit || (hit !== mine && !mine.contains(hit))) return { ok: false, reason: 'mine edge', hit: hit ? hit.id : null };
+      mine.click();
+      const afterMine = readout.textContent;
+      const mineOn = mine.classList.contains('active');
+      all.click();
+      north.click();
+      const northOn = north.classList.contains('active');
+      iss.click();
+      return { ok: afterMine === before && mineOn && northOn, before, afterMine, mineOn, northOn };
+    })()`);
+    if (!activated?.ok) throw new Error(`tight chrome activation ${JSON.stringify(activated)}`);
+  } finally {
+    await restoreNarrowChrome(send, viewport, legendExpanded);
+  }
+}
+
+async function readPipAfterResize(send) {
+  return evaluate(send, `(async () => {
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const inset = document.querySelector('[data-pip="horizon"]');
+    if (!inset) return { ok: false, reason: 'missing' };
+    const style = getComputedStyle(inset);
+    const box = inset.getBoundingClientRect();
+    const canvas = inset.querySelector('canvas');
+    const hit = box.width > 0 ? document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2) : null;
+    const dock = document.querySelector('.map-control-dock')?.getBoundingClientRect();
+    const gap = dock && box.height > 0 ? dock.top - box.bottom : null;
+    const owns = !!(hit && (hit === inset || inset.contains(hit)));
+    return {
+      ok: !inset.hidden && style.display !== 'none' && Math.abs(box.width - 222) <= 1 && Math.abs(box.height - 144) <= 1 && !!canvas && canvas.clientWidth > 0 && canvas.clientHeight > 0 && owns && gap != null && gap >= 8,
+      hidden: inset.hidden,
+      display: style.display,
+      width: Math.round(box.width),
+      height: Math.round(box.height),
+      canvas: canvas ? [canvas.clientWidth, canvas.clientHeight] : null,
+      owns,
+      gap: gap == null ? null : Math.round(gap),
+    };
+  })()`);
+}
+
+async function provePipSurvivesNarrowResize(send, viewport) {
+  if (viewport.width !== 834 || viewport.height !== 1194) return;
+  const cycle = [[834, 1194], [390, 664], [834, 1194], [430, 400], [834, 1194]];
+  for (const [width, height] of cycle) {
+    await setViewport(send, width, height, true);
+    await sleep(50);
+  }
+  const restored = await readPipAfterResize(send);
+  if (!restored?.ok) throw new Error(`horizon inset after narrow return ${JSON.stringify(restored)}`);
+  const rounds = [[390, 664], [834, 1194], [430, 400], [834, 1194], [360, 520], [834, 1194]];
+  for (let round = 0; round < 12; round += 1) {
+    for (const [width, height] of rounds) await setViewport(send, width, height, true);
+    const sample = await readPipAfterResize(send);
+    if (!sample?.ok) throw new Error(`horizon inset round ${round} ${JSON.stringify(sample)}`);
+  }
+  await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+}
+
+async function proveFixedMapPip(send, evidenceDir, viewport) {
+  if (!insetViewportFits(viewport.width, viewport.height)) {
+    await waitFor(send, pipAbsentExpression('horizon'), 'fixed horizon inset absent', 10000);
+    await shot(send, evidenceDir, 'pip-map-absent');
+    return `absent ${viewport.width}x${viewport.height}`;
+  }
+  const ready = await waitForPip(send, 'horizon', 'fixed horizon inset');
+  await openMapLegend(send);
+  await waitFor(send, pipClearExpression('horizon', PIP_MAP_OBSTACLES), 'fixed horizon inset clear', 10000);
+  await waitFor(send, legendCentersMissInset(), 'fixed horizon legend centers', 10000);
+  await shot(send, evidenceDir, 'pip-map');
+  await closeMapLegend(send);
+  return `present ${ready.width}x${ready.height} clear ${viewport.width}x${viewport.height}`;
+}
+
+async function proveFixedMapChrome(send, evidenceDir, viewport) {
+  const expression = `(() => {
+    const visible = (el) => el && !el.hidden && getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0;
+    const box = (el) => { const r = el.getBoundingClientRect(); return { left:r.left, top:r.top, right:r.right, bottom:r.bottom, width:r.width, height:r.height }; };
+    const overlap = (a,b) => Math.min(a.right,b.right)-Math.max(a.left,b.left)>0.5 && Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top)>0.5;
+    const groups = ['.maplibregl-ctrl-top-left','.map-toolbar','.map-controls-time','.map-control-dock','#map-chrome-toggle','#map-legend-toggle','#map-legend-panel','[data-pip="horizon"]','#status-banner','#shotlist-bar'];
+    const nodes=groups.map(sel=>({sel,el:document.querySelector(sel)})).filter(({el})=>visible(el)).map(({sel,el})=>({sel,el,rect:box(el)}));
+    const intersections=[];
+    for(let a=0;a<nodes.length;a++)for(let b=a+1;b<nodes.length;b++)if(!nodes[a].el.contains(nodes[b].el)&&!nodes[b].el.contains(nodes[a].el)&&overlap(nodes[a].rect,nodes[b].rect))intersections.push([nodes[a].sel,nodes[b].sel]);
+    const outside=nodes.filter(({rect:r})=>r.left<-.5||r.top<-.5||r.right>innerWidth+.5||r.bottom>innerHeight+.5).map(({sel,rect})=>({sel,rect}));
+    const selectors=['.maplibregl-ctrl-zoom-in','.maplibregl-ctrl-zoom-out','.maplibregl-ctrl-compass','#filter-all-map','#filter-mine-map','#filter-launches-map','#map-chrome-toggle','#map-legend-toggle','#time-slider','#time-back-90','#time-back-45','#time-now','#time-fwd-45','#time-fwd-90','.shotlist-add','.shotlist-clear'];
+    const misses=[];
+    for(const sel of selectors){
+      if(sel.startsWith('.shotlist-')&&!document.body.classList.contains('shotlist-bar-visible'))continue;
+      const el=document.querySelector(sel);
+      if(!visible(el)){misses.push({sel,reason:'missing'});continue;}
+      const r=box(el),hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);
+      if(r.width<44||r.height<44)misses.push({sel,reason:'target below 44px',rect:r});
+      if(!(hit===el||el.contains(hit)))misses.push({sel,hit:hit?.id||hit?.className||null,rect:r});
+    }
+    const t90=document.getElementById('time-fwd-90');const t=visible(t90)?box(t90):null;
+    const panel=document.getElementById('map-legend-panel');
+    const legend=visible(panel)?{rect:box(panel),clientHeight:panel.clientHeight,scrollHeight:panel.scrollHeight,overflow:getComputedStyle(panel).overflowY}:null;
+    const legendBad=legend&&(legend.clientHeight<44||(legend.scrollHeight>legend.clientHeight+1&&!['auto','scroll'].includes(legend.overflow)));
+    const ok=!intersections.length&&!outside.length&&!misses.length&&!legendBad&&t&&t.left>=0&&t.top>=0&&t.right<=innerWidth+.5&&t.bottom<=innerHeight+.5;
+    return {ok,intersections,outside,misses,legend,t90:t,groups:nodes.map(({sel,rect})=>({sel,rect}))};
+  })()`;
+  const snapshots=[];
+  for (const shotlist of [false,true]) {
+    if(shotlist){
+      await click(send,'#tab-queue');
+      await waitFor(send,`document.querySelector('.btn-remind') ? {ok:true} : null`,'fixed shot list reminder');
+      await click(send,'.btn-remind');
+      await waitFor(send,`document.body.classList.contains('shotlist-bar-visible') ? {ok:true} : null`,'fixed shot list open');
+      await click(send,'#tab-map');
+      await ensureMapChromeShown(send);
+    }
+    for(const legend of [false,true]){
+      if(legend)await openMapLegend(send);else await closeMapLegend(send);
+      await sleep(250);
+      const sample=await waitFor(send,expression,`fixed chrome ${viewport.width}x${viewport.height} shotlist=${shotlist} legend=${legend}`,5000);
+      snapshots.push({shotlist,legend,...sample});
+      await proveMapControlHits(send,`fixed shotlist=${shotlist} legend=${legend}`);
+      const dockIds=await evaluate(send,`[...document.querySelectorAll('.map-control-dock button')].filter(el=>!el.hidden&&getComputedStyle(el).display!=='none').map(el=>el.id).filter(Boolean)`);
+      for(const id of dockIds){
+        await evaluate(send,`(() => {const el=document.getElementById(${JSON.stringify(id)});el.scrollIntoView({block:'nearest',inline:'nearest'});return true;})()`);
+        await sleep(40);
+        await assertControlCenters(send,`fixed dock ${id}`,['#'+id]);
+        const size=await evaluate(send,`(() => {const r=document.getElementById(${JSON.stringify(id)}).getBoundingClientRect();return {width:r.width,height:r.height};})()`);
+        if(size.width<44||size.height<44)throw new Error(`fixed dock ${id} below 44px ${JSON.stringify(size)}`);
+      }
+      await evaluate(send,`(() => {const dock=document.querySelector('.map-control-dock');dock.scrollTop=0;dock.scrollLeft=0;return true;})()`);
+      await shot(send,evidenceDir,`map-fixed-${shotlist?'shotlist':'closed'}-${legend?'legend':'tab'}`);
+    }
+    await closeMapLegend(send);
+    await hideMapChrome(send);
+    await assertControlCenters(send,'fixed hidden',shotlist?['#map-chrome-toggle','.shotlist-add','.shotlist-clear']:['#map-chrome-toggle']);
+    await showMapChrome(send);
+  }
+  await click(send,'.shotlist-clear');
+  await waitFor(send,`!document.body.classList.contains('shotlist-bar-visible') ? {ok:true} : null`,'fixed shot list cleared');
+  writeFileSync(resolve(evidenceDir,'map-fixed-chrome.json'),JSON.stringify(snapshots,null,2));
 }
 
 async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
@@ -3086,7 +4183,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   await proveMapChromeMemory(send);
   const laid = await proveMapLaidOnPane(send);
   let narrowLaid = laid.narrow ? laid : null;
-  if (!laid.narrow) {
+  if (!FIXED_SURFACE && !laid.narrow) {
     await setViewport(send, 390, 664, true);
     await sleep(200);
     try {
@@ -3096,6 +4193,11 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
       await sleep(200);
     }
   }
+  let pip;
+  if (FIXED_SURFACE) {
+    await proveFixedMapChrome(send, evidenceDir, viewport);
+    pip = await proveFixedMapPip(send, evidenceDir, viewport);
+  } else {
   await proveMapControlHits(send, 'shot list closed');
   await proveShortTimeRow(send, viewport);
   await evaluate(send, `document.body.classList.add('shotlist-bar-visible')`);
@@ -3108,7 +4210,17 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
       return true;
     })()`);
   }
-  const pip = await provePipSurface(send, evidenceDir, viewport, 'map');
+  await proveNarrowTimeSlider(send, evidenceDir, viewport);
+  await proveRaisedHideDock(send, evidenceDir, viewport);
+  await proveLegendPanelBounds(send, evidenceDir, viewport);
+  await proveNarrowDockScrollport(send, viewport);
+  await proveLegendClearsNarrowControls(send, viewport);
+  await proveRaisedStripClearsToolbar(send, viewport);
+  await proveTightChromeReflow(send, viewport);
+  await provePipSurvivesNarrowResize(send, viewport);
+  pip = await provePipSurface(send, evidenceDir, viewport, 'map');
+  await proveLegendMissesRaisedPip(send, viewport);
+  }
   let chrome = '';
   if (insetViewportFits(viewport.width, viewport.height)) {
     await click(send, '#map-chrome-toggle');
@@ -3155,7 +4267,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
   }
   await sleep(1200);
   await shot(send, evidenceDir, 'map-globe');
-  await proveLegendDisclosure(send, evidenceDir, viewport);
+  await proveLegendDisclosure(send, evidenceDir, viewport, FIXED_SURFACE ? 'fixed' : '');
   await dismissShotlist(send);
   await assertMapInfoControlsGone(send);
   await assertChromeToggleStationary(send);
@@ -3272,6 +4384,7 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
     'pin drop',
     10000,
   );
+  const pinNote = await provePinInspector(send);
   await shot(send, evidenceDir, 'map-pin-drop');
   await evaluate(send, `[...document.querySelectorAll('.maplibregl-popup-close-button')].forEach((button) => button.click())`);
   await waitFor(send, `document.querySelector('.maplibregl-popup') ? null : { ok: true }`, 'popups closed before launch', 5000);
@@ -3282,7 +4395,25 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
     send,
     `(() => {
       const text = document.querySelector('.map-launch-brief')?.textContent || '';
-      if (!text.includes(${JSON.stringify(meta.names.launch)}) || !text.includes('Verify Likely') || text.includes('Verify Horizon')) return null;
+      if (!text.includes(${JSON.stringify(meta.names.launch)}) || !text.includes('Verify Likely') || !text.includes('Verify Horizon')) return null;
+      const primaryDetails = document.querySelector('.map-launch-primary');
+      const more = document.querySelector('.map-launch-more');
+      if (primaryDetails) primaryDetails.open = true;
+      if (more) more.open = true;
+      const fact = (card, label) => {
+        const row = [...card.querySelectorAll('.launch-fact')].find((line) => line.querySelector('.launch-fact-label')?.textContent === label);
+        return row?.lastElementChild?.textContent || '';
+      };
+      const columnsOf = (card) => getComputedStyle(card).gridTemplateColumns.trim().split(/\\s+/).filter(Boolean);
+      for (const id of ['verify-ascent', 'verify-likely']) {
+        const card = document.querySelector('.map-launch-brief [data-event-id="' + id + '"]');
+        if (!card || !card.classList.contains('launch-tier')) return null;
+        if (columnsOf(card).length !== 1) return null;
+        if (fact(card, 'Vehicle') !== 'Verify Rocket' || !fact(card, 'Status') || !fact(card, 'Time precision')) return null;
+      }
+      const starship = document.querySelector('.map-launch-brief [data-event-id="0f867f0c-5422-4d44-93b8-d7faaae7019b"]');
+      if (!starship || fact(starship, 'Status') !== 'TBC · Tentative' || fact(starship, 'Vehicle') !== 'Starship V3' || fact(starship, 'Pad') !== 'Orbital Launch Pad 2') return null;
+      if (columnsOf(starship).length !== 1) return null;
       return { ok: true };
     })()`,
     'map tier launch brief',
@@ -3299,8 +4430,11 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
       const lineData = await lines.getData();
       const padIds = (padData.features || []).map((feature) => feature.properties && feature.properties.event_id);
       const lineIds = (lineData.features || []).map((feature) => feature.properties && feature.properties.event_id);
-      if (!padIds.includes('verify-ascent') || !padIds.includes('verify-likely') || padIds.includes('verify-horizon')) return null;
-      if (!lineIds.includes('verify-ascent') || lineIds.includes('verify-likely') || lineIds.includes('verify-horizon')) return null;
+      const starship = '0f867f0c-5422-4d44-93b8-d7faaae7019b';
+      const starshipPad = (padData.features || []).find((feature) => feature.properties && feature.properties.event_id === starship);
+      if (!padIds.includes('verify-ascent') || !padIds.includes('verify-likely') || !padIds.includes('verify-horizon') || !starshipPad) return null;
+      if (starshipPad.properties.label !== 'LAUNCH / WATCH') return null;
+      if (!lineIds.includes('verify-ascent') || lineIds.includes('verify-likely') || lineIds.includes('verify-horizon') || lineIds.includes(starship)) return null;
       return { ok: true, pads: padIds, lines: lineIds.length };
     })()`,
     'tier launch pads and corridor',
@@ -3357,11 +4491,11 @@ async function driveMap(send, evidenceDir, meta, baseUrl, viewport) {
     'reef pin hidden',
     10000,
   );
-  await waitServerRemoved(baseUrl, ['verify-reef'], []);
+  await waitServerRemoved(send, baseUrl, ['verify-reef'], []);
   await shot(send, evidenceDir, 'map-pin-hidden');
   await proveProfileMenuRoundTrip(send, evidenceDir, viewport);
   const narrowNote = narrowLaid && narrowLaid.reserved ? ` narrow command ${Math.round(narrowLaid.reserved.height)}px` : '';
-  return `map: globe, legend, imagery, hide control 88x44 at 12px, Esri dark maxzoom ${ready.maxzoom}, time chip ${laid.controls} on clear strip ${Math.round(laid.stripHeight)}px right ${Math.round(laid.rightGap)}px slider ${Math.round(laid.slider)}px gap ${laid.gap}px${narrowNote}, stale readout clear 834x1194 800x600, control hits, time skip on screen, tool rail, picker, target popup, pin drop, launch dialog, hidden pin, chrome persisted, profile menu round trip, horizon inset ${pip}${chrome}`;
+  return `map: globe, legend, imagery, hide control 88x44 at 12px, Esri dark maxzoom ${ready.maxzoom}, time chip ${laid.controls} on clear strip ${Math.round(laid.stripHeight)}px right ${Math.round(laid.rightGap)}px slider ${Math.round(laid.slider)}px gap ${laid.gap}px${narrowNote}, stale readout clear ${FIXED_SURFACE ? `${viewport.width}x${viewport.height}` : '834x1194 800x600'}, control hits, time skip on screen, tool rail, picker, target popup, pin drop ${pinNote}, launch dialog, hidden pin, chrome persisted, profile menu round trip, horizon inset ${pip}${chrome}`;
 }
 
 function myTargetNamesExpr() {
@@ -3557,7 +4691,7 @@ async function proveProfileMenuRoundTrip(send, evidenceDir, viewport, shotSuffix
   );
   await ensureMapChromeShown(send);
   await shot(send, evidenceDir, name('profile-legend-anil'));
-  if (!shotSuffix && viewport && viewport.width === 402 && viewport.height === 874) {
+  if (!FIXED_SURFACE && !shotSuffix && viewport && viewport.width === 402 && viewport.height === 874) {
     await setViewport(send, 874, 402, true);
     await proveProfileMenuRoundTrip(send, evidenceDir, { width: 874, height: 402, mobile: true }, 'land');
     await setViewport(send, viewport.width, viewport.height, viewport.mobile);
@@ -3719,6 +4853,764 @@ async function driveTracked(send, evidenceDir, meta, home) {
   return 'tracked: Starship no public orbit yet, ISS marker and track still up';
 }
 
+async function planCamera(send) {
+  return evaluate(send, `(() => {
+    const canvas = document.querySelector('[data-pip="plan"] canvas');
+    const orbit = document.querySelector('[data-pip="plan"] [data-pip-frame]')?.__opdTrackInset;
+    if (!canvas || !orbit?.getCenter || !orbit.getZoom) return null;
+    const box = canvas.getBoundingClientRect();
+    const center = orbit.getCenter();
+    return {
+      x: box.left + box.width / 2,
+      y: box.top + box.height / 2,
+      canvasWidth: box.width,
+      zoom: orbit.getZoom(),
+      lng: center.lng,
+      lat: center.lat,
+      view: document.getElementById('view')?.className || '',
+      width: window.innerWidth,
+      height: window.innerHeight,
+    };
+  })()`);
+}
+
+function cameraMoved(before, after) {
+  if (!before || !after) return false;
+  return Math.abs(before.lng - after.lng) + Math.abs(before.lat - after.lat) > 0.02;
+}
+
+async function provePlanWheelSurvivesRebuild(send) {
+  const before = await planCamera(send);
+  if (!before) throw new Error('plan camera missing before the first wheel');
+  await send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: before.x, y: before.y, deltaX: 0, deltaY: -240 });
+  await waitFor(
+    send,
+    `(() => {
+      const orbit = document.querySelector('[data-pip="plan"] [data-pip-frame]')?.__opdTrackInset;
+      if (!orbit?.getZoom) return null;
+      const zoom = orbit.getZoom();
+      if (!(Math.abs(zoom - ${before.zoom}) > 0.05)) return null;
+      return { ok: true, zoom };
+    })()`,
+    'plan first wheel zoom',
+    8000,
+  );
+  await sleep(500);
+  const settled = await planCamera(send);
+  if (!settled || !(Math.abs(settled.zoom - before.zoom) > 0.05)) {
+    throw new Error(`plan wheel did not settle ${JSON.stringify({ before, settled })}`);
+  }
+  await sleep(5600);
+  const after = await planCamera(send);
+  if (!after || Math.abs(after.zoom - settled.zoom) > 0.03 || !(Math.abs(after.zoom - before.zoom) > 0.05)) {
+    throw new Error(`plan wheel reset by the track rebuild ${JSON.stringify({ before, settled, after })}`);
+  }
+  return after.zoom;
+}
+
+export function planRasterSymbolActive(layer, zoom) {
+  const min = layer.minzoom == null ? 0 : layer.minzoom;
+  const max = layer.maxzoom == null ? 24 : layer.maxzoom;
+  if (!(zoom >= min && zoom < max)) return false;
+  if (layer.layout && layer.layout.visibility === 'none') return false;
+  const opacity = layer.paint && layer.paint['text-opacity'];
+  if (opacity === 0) return false;
+  if (Array.isArray(opacity) && opacity[0] === 'step') {
+    let value = opacity[2];
+    for (let index = 3; index + 1 < opacity.length; index += 2) {
+      if (zoom >= opacity[index]) value = opacity[index + 1];
+    }
+    if (value === 0) return false;
+  }
+  const filter = layer.filter;
+  const names = filter && filter[2] && filter[2][1];
+  if (Array.isArray(names) && names.length === 0) return false;
+  return true;
+}
+
+export async function planRasterNameSamples(orbit) {
+  const samples = [];
+  for (const zoom of [3.1, 8]) {
+    if (orbit.stop) orbit.stop();
+    orbit.jumpTo({ center: [-73, 41], zoom, bearing: 0, pitch: 0 });
+    const settled = await new Promise((resolve) => {
+      let done = false;
+      const onIdle = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(true);
+      };
+      const timer = setTimeout(() => {
+        if (done) return;
+        done = true;
+        if (typeof orbit.off === 'function') orbit.off('idle', onIdle);
+        resolve(false);
+      }, 4000);
+      orbit.once('idle', onIdle);
+    });
+    if (!settled) return { ok: false, reason: 'timeout', zoom, samples };
+    const style = orbit.getStyle() || {};
+    const symbolLayers = (style.layers || []).filter((layer) => layer.type === 'symbol');
+    const symbolIds = symbolLayers.map((layer) => layer.id);
+    const active = symbolLayers.filter((layer) => planRasterSymbolActive(layer, zoom)).map((layer) => layer.id);
+    let features = [];
+    try {
+      features = symbolIds.length ? orbit.queryRenderedFeatures(undefined, { layers: symbolIds }) : [];
+    } catch (error) {
+      return { ok: false, reason: 'query', zoom, error: String(error), samples };
+    }
+    const names = [];
+    for (const feature of features) {
+      const name = feature && feature.properties && feature.properties.name;
+      if (typeof name === 'string' && !names.includes(name)) names.push(name);
+    }
+    const stacked = names.filter((name) => name === 'Washington D.C.' || name === 'New York' || name === 'Washington');
+    samples.push({ zoom: orbit.getZoom(), stacked, names, active });
+    if (stacked.length || active.length || Math.abs(orbit.getZoom() - zoom) > 0.05) {
+      return { ok: false, reason: stacked.length ? 'stacked' : active.length ? 'vector' : 'zoom', samples };
+    }
+  }
+  return { ok: true, samples };
+}
+
+async function provePlanRasterNames(send) {
+  const laid = await evaluate(send, `(async () => {
+    const planRasterSymbolActive = ${planRasterSymbolActive.toString()};
+    const planRasterNameSamples = ${planRasterNameSamples.toString()};
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    const canvas = frame?.querySelector('canvas');
+    const orbit = frame?.__opdTrackInset;
+    if (!canvas || !orbit?.jumpTo || !orbit.queryRenderedFeatures || !orbit.getStyle) return { ok: false, reason: 'map' };
+    canvas.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: -1 }));
+    if (orbit.stop) orbit.stop();
+    const raster = orbit.getLayer('inset-labels');
+    const opacity = orbit.getPaintProperty('inset-labels', 'raster-opacity');
+    if (!raster || !(opacity > 0)) return { ok: false, reason: 'raster', opacity: opacity == null ? null : opacity };
+    const sampled = await planRasterNameSamples(orbit);
+    if (!sampled.ok) return sampled;
+    return { ok: true, samples: sampled.samples, opacity };
+  })()`);
+  if (!laid?.ok) throw new Error(`plan raster names ${JSON.stringify(laid)}`);
+}
+
+async function dispatchPlanTouch(send, type, x, y) {
+  const sent = await evaluate(send, `(() => {
+    const canvas = document.querySelector('[data-pip="plan"] canvas');
+    if (!canvas) return { ok: false, reason: 'canvas' };
+    const kind = ${JSON.stringify(type)};
+    const x = ${x};
+    const y = ${y};
+    const pointer = kind === 'touchStart' ? 'pointerdown' : kind === 'touchEnd' ? 'pointerup' : 'pointermove';
+    canvas.dispatchEvent(new PointerEvent(pointer, {
+      bubbles: true,
+      cancelable: true,
+      clientX: x,
+      clientY: y,
+      pointerId: 7,
+      pointerType: 'touch',
+      isPrimary: true,
+    }));
+    let touch = null;
+    if (document.createTouch) {
+      try {
+        touch = document.createTouch(window, canvas, 7, x, y, x, y, x, y);
+      } catch (error) {
+        touch = null;
+      }
+    }
+    if (!touch && typeof Touch === 'function') {
+      try {
+        touch = new Touch({ identifier: 7, target: canvas, clientX: x, clientY: y, pageX: x, pageY: y, screenX: x, screenY: y });
+      } catch (error) {
+        touch = null;
+      }
+    }
+    if (!touch) return { ok: false, reason: 'touch-ctor' };
+    const list = document.createTouchList ? document.createTouchList(touch) : [touch];
+    const empty = document.createTouchList ? document.createTouchList() : [];
+    const active = kind === 'touchEnd' ? empty : list;
+    const eventName = kind === 'touchStart' ? 'touchstart' : kind === 'touchEnd' ? 'touchend' : 'touchmove';
+    try {
+      canvas.dispatchEvent(new TouchEvent(eventName, {
+        bubbles: true,
+        cancelable: true,
+        touches: active,
+        targetTouches: active,
+        changedTouches: list,
+      }));
+    } catch (error) {
+      return { ok: false, reason: 'event', error: String(error) };
+    }
+    return { ok: true };
+  })()`);
+  if (!sent?.ok) throw new Error(`plan touch ${type} ${JSON.stringify(sent)}`);
+}
+
+async function beginPlanLayout(send) {
+  const saved = await evaluate(send, `(() => {
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    const canvas = frame?.querySelector('canvas');
+    const orbit = frame?.__opdTrackInset;
+    if (!frame || !canvas || !orbit) return null;
+    const width = frame.clientWidth;
+    const height = frame.clientHeight;
+    window.__opdPlanLayout = { frame, canvas, orbit, style: frame.getAttribute('style'), dpr: Object.getOwnPropertyDescriptor(window, 'devicePixelRatio'), dprValue: window.devicePixelRatio };
+    return { width, height, dpr: window.devicePixelRatio };
+  })()`);
+  if (!saved) throw new Error('plan layout fixture missing');
+  return saved;
+}
+
+async function changePlanLayout(send, size) {
+  const changed = await evaluate(send, `(() => {
+    const saved = window.__opdPlanLayout;
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    if (!saved || frame !== saved.frame || frame.querySelector('canvas') !== saved.canvas || frame.__opdTrackInset !== saved.orbit) return false;
+    frame.style.width = ${JSON.stringify(size.width + 'px')};
+    frame.style.height = ${JSON.stringify(size.height + 'px')};
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, get: () => ${size.dpr} });
+    return frame.clientWidth === ${size.width} && frame.clientHeight === ${size.height} && window.devicePixelRatio === ${size.dpr};
+  })()`);
+  if (!changed) throw new Error('plan layout did not change on the same canvas');
+}
+
+async function assertPlanLayoutIdentity(send) {
+  const same = await evaluate(send, `(() => {
+    const saved = window.__opdPlanLayout;
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    return !!saved && frame === saved.frame && frame.querySelector('canvas') === saved.canvas && frame.__opdTrackInset === saved.orbit;
+  })()`);
+  if (!same) throw new Error('plan document, frame, canvas or renderer replaced during the gesture');
+}
+
+async function restorePlanLayout(send) {
+  await evaluate(send, `(() => {
+    const saved = window.__opdPlanLayout;
+    if (!saved) return;
+    if (saved.style === null) saved.frame.removeAttribute('style');
+    else saved.frame.setAttribute('style', saved.style);
+    if (saved.dpr) Object.defineProperty(window, 'devicePixelRatio', saved.dpr);
+    else if (Number.isFinite(saved.dprValue)) Object.defineProperty(window, 'devicePixelRatio', { configurable: true, get: () => saved.dprValue });
+    delete window.__opdPlanLayout;
+  })()`);
+}
+
+export async function provePlanGestureHolds(send) {
+  const layout = await beginPlanLayout(send);
+  try {
+    const start = await planCamera(send);
+    if (!start) throw new Error('plan camera missing before the gesture');
+    const step = Math.max(16, Math.min(36, Math.floor(start.canvasWidth / 10)));
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: start.x, y: start.y, button: 'left', buttons: 1, clickCount: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: start.x + step, y: start.y, button: 'left', buttons: 1 });
+    await sleep(200);
+    const panned = await planCamera(send);
+    if (!cameraMoved(start, panned)) throw new Error(`plan mouse drag did not move ${JSON.stringify({ start, panned })}`);
+    await changePlanLayout(send, { width: layout.width - 24, height: layout.height - 20, dpr: layout.dpr === 2 ? 1 : 2 });
+    let previous = panned;
+    for (let tick = 1; tick <= 3; tick += 1) {
+      await sleep(1100);
+      await send('Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x: start.x + step * (tick + 1),
+        y: start.y,
+        button: 'left',
+        buttons: 1,
+      });
+      await sleep(150);
+      await assertPlanLayoutIdentity(send);
+      const next = await planCamera(send);
+      if (!cameraMoved(previous, next)) {
+        throw new Error(`plan mouse froze on tick ${tick} ${JSON.stringify({ previous, next })}`);
+      }
+      previous = next;
+    }
+    await send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x: start.x + step * 4,
+      y: start.y,
+      button: 'left',
+      buttons: 0,
+      clickCount: 1,
+    });
+    await sleep(450);
+    const released = await planCamera(send);
+    if (!released || released.view !== 'view-iss') {
+      throw new Error(`plan mouse release opened Map ${JSON.stringify(released)}`);
+    }
+    const touchStart = await planCamera(send);
+    await dispatchPlanTouch(send, 'touchStart', touchStart.x, touchStart.y + 30);
+    await dispatchPlanTouch(send, 'touchMove', touchStart.x, touchStart.y + 30 + step);
+    await sleep(200);
+    const touched = await planCamera(send);
+    if (!cameraMoved(touchStart, touched)) {
+      throw new Error(`plan touch drag did not move ${JSON.stringify({ touchStart, touched })}`);
+    }
+    await changePlanLayout(send, layout);
+    let touchPrevious = touched;
+    for (let tick = 1; tick <= 3; tick += 1) {
+      await sleep(1100);
+      await dispatchPlanTouch(send, 'touchMove', touchStart.x, touchStart.y + 30 + step * (tick + 1));
+      await sleep(150);
+      await assertPlanLayoutIdentity(send);
+      const next = await planCamera(send);
+      if (!cameraMoved(touchPrevious, next)) {
+        throw new Error(`plan touch froze on tick ${tick} ${JSON.stringify({ touchPrevious, next })}`);
+      }
+      touchPrevious = next;
+    }
+    await dispatchPlanTouch(send, 'touchEnd', touchStart.x, touchStart.y + 30 + step * 4);
+    await sleep(450);
+    const ended = await planCamera(send);
+    if (!ended || ended.view !== 'view-iss') {
+      throw new Error(`plan touch release opened Map ${JSON.stringify(ended)}`);
+    }
+  } finally {
+    await restorePlanLayout(send);
+  }
+}
+
+async function planFrameMetrics(send) {
+  return evaluate(send, `(() => {
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    const canvas = frame && frame.querySelector('canvas');
+    const orbit = frame && frame.__opdTrackInset;
+    if (!frame || !canvas || !orbit || !orbit.getZoom) return null;
+    const box = frame.getBoundingClientRect();
+    const canvasBox = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    let outsideX = box.right + 28;
+    let outsideY = box.top + Math.min(48, Math.max(8, box.height / 3));
+    if (outsideX > window.innerWidth - 6) outsideX = Math.max(6, box.left - 28);
+    if (outsideY < 6) outsideY = 6;
+    if (outsideY > window.innerHeight - 6) outsideY = window.innerHeight - 6;
+    const host = document.elementFromPoint(outsideX, outsideY);
+    const outsideFrame = !(host && (frame.contains(host) || host.closest('[data-pip="plan"]')));
+    return {
+      x: canvasBox.left + canvasBox.width / 2,
+      y: canvasBox.top + canvasBox.height / 2,
+      outsideX,
+      outsideY,
+      outsideFrame,
+      cssWidth: canvas.clientWidth,
+      cssHeight: canvas.clientHeight,
+      backingWidth: canvas.width,
+      backingHeight: canvas.height,
+      frameWidth: frame.clientWidth,
+      frameHeight: frame.clientHeight,
+      dpr,
+      view: (document.getElementById('view') && document.getElementById('view').className) || '',
+      zoom: orbit.getZoom(),
+      bearing: orbit.getBearing(),
+    };
+  })()`);
+}
+
+function planCanvasReady(metrics) {
+  if (!metrics || metrics.frameWidth < 2 || metrics.frameHeight < 2 || !(metrics.dpr > 0)) return null;
+  return {
+    cssWidth: metrics.frameWidth,
+    cssHeight: metrics.frameHeight,
+    backingWidth: Math.round(metrics.frameWidth * metrics.dpr),
+    backingHeight: Math.round(metrics.frameHeight * metrics.dpr),
+  };
+}
+
+async function provePlanSmallMotion(send) {
+  const start = await planCamera(send);
+  if (!start) throw new Error('plan camera missing before a small move');
+  for (const dx of [2, 5, 10]) {
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: start.x, y: start.y, button: 'left', buttons: 1, clickCount: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: start.x + dx, y: start.y, button: 'left', buttons: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: start.x + dx, y: start.y, button: 'left', buttons: 0, clickCount: 1 });
+    await sleep(450);
+    const now = await planCamera(send);
+    if (!now || now.view !== 'view-iss') throw new Error(`plan ${dx}px move opened Map ${JSON.stringify(now)}`);
+  }
+  const second = await evaluate(send, `(() => {
+    const canvas = document.querySelector('[data-pip="plan"] canvas');
+    if (!canvas) return { ok: false, reason: 'canvas' };
+    const box = canvas.getBoundingClientRect();
+    const x = box.left + box.width / 2;
+    const y = box.top + box.height / 2;
+    const point = (type, id, clientX) => canvas.dispatchEvent(new PointerEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      clientX,
+      clientY: y,
+      pointerId: id,
+      pointerType: 'touch',
+      isPrimary: id === 1,
+    }));
+    point('pointerdown', 1, x);
+    point('pointerdown', 2, x + 36);
+    point('pointerup', 1, x);
+    point('pointerup', 2, x + 36);
+    canvas.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, clientX: x, clientY: y }));
+    return { ok: true };
+  })()`);
+  if (!second?.ok) throw new Error(`plan second touch ${JSON.stringify(second)}`);
+  await sleep(450);
+  const after = await planCamera(send);
+  if (!after || after.view !== 'view-iss') throw new Error(`plan second touch opened Map ${JSON.stringify(after)}`);
+}
+
+async function dispatchPlanTouches(send, name, active, changed) {
+  const sent = await evaluate(send, `(() => {
+    const canvas = document.querySelector('[data-pip="plan"] canvas');
+    if (!canvas) return { ok: false, reason: 'canvas' };
+    const name = ${JSON.stringify(name)};
+    const activePoints = ${JSON.stringify(active)};
+    const changedPoints = ${JSON.stringify(changed)};
+    const pointer = name === 'touchstart' ? 'pointerdown' : name === 'touchend' ? 'pointerup' : 'pointermove';
+    for (const point of changedPoints) {
+      canvas.dispatchEvent(new PointerEvent(pointer, {
+        bubbles: true,
+        cancelable: true,
+        clientX: point.x,
+        clientY: point.y,
+        pointerId: point.id,
+        pointerType: 'touch',
+        isPrimary: point.id === 1,
+        buttons: name === 'touchend' ? 0 : 1,
+      }));
+    }
+    const make = (point) => {
+      let touch = null;
+      if (document.createTouch) {
+        try {
+          touch = document.createTouch(window, canvas, point.id, point.x, point.y, point.x, point.y, point.x, point.y);
+        } catch (error) {
+          touch = null;
+        }
+      }
+      if (!touch && typeof Touch === 'function') {
+        try {
+          touch = new Touch({ identifier: point.id, target: canvas, clientX: point.x, clientY: point.y, pageX: point.x, pageY: point.y, screenX: point.x, screenY: point.y });
+        } catch (error) {
+          touch = null;
+        }
+      }
+      return touch;
+    };
+    const changedTouches = [];
+    for (const point of changedPoints) {
+      const touch = make(point);
+      if (!touch) return { ok: false, reason: 'touch-ctor' };
+      changedTouches.push(touch);
+    }
+    const activeTouches = [];
+    for (const point of activePoints) {
+      const touch = make(point);
+      if (!touch) return { ok: false, reason: 'touch-ctor' };
+      activeTouches.push(touch);
+    }
+    const list = (points) => document.createTouchList ? document.createTouchList(...points) : points;
+    try {
+      canvas.dispatchEvent(new TouchEvent(name, {
+        bubbles: true,
+        cancelable: true,
+        touches: list(activeTouches),
+        targetTouches: list(activeTouches),
+        changedTouches: list(changedTouches),
+      }));
+    } catch (error) {
+      return { ok: false, reason: 'event', error: String(error) };
+    }
+    return { ok: true };
+  })()`);
+  if (!sent?.ok) throw new Error(`plan pinch ${name} ${JSON.stringify(sent)}`);
+}
+
+export async function provePlanRotatingPinch(send) {
+  const armed = await evaluate(send, `(() => {
+    const orbit = document.querySelector('[data-pip="plan"] [data-pip-frame]')?.__opdTrackInset;
+    if (!orbit?.jumpTo || !orbit.getZoom) return null;
+    orbit.jumpTo({ zoom: 1, bearing: 0, pitch: 0 });
+    return { zoom: orbit.getZoom(), bearing: orbit.getBearing() };
+  })()`);
+  const start = await planCamera(send);
+  if (!armed || !start) throw new Error('plan camera missing before a rotating pinch');
+  start.zoom = armed.zoom;
+  const cx = start.x;
+  const cy = start.y;
+  const finger = (t) => ([
+    { id: 1, x: cx - 36 * (1 - t), y: cy - 90 * t },
+    { id: 2, x: cx + 36 * (1 - t), y: cy + 90 * t },
+  ]);
+  const first = finger(0);
+  await dispatchPlanTouches(send, 'touchstart', [first[0]], [first[0]]);
+  await dispatchPlanTouches(send, 'touchstart', first, [first[1]]);
+  for (let step = 1; step <= 6; step += 1) {
+    const next = finger(step / 6);
+    await dispatchPlanTouches(send, 'touchmove', next, next);
+  }
+  const last = finger(1);
+  await dispatchPlanTouches(send, 'touchend', [], last);
+  await sleep(250);
+  const after = await planFrameMetrics(send);
+  if (!after || Math.abs(after.bearing) > 0.5 || !(after.zoom - start.zoom > 0.2)) {
+    throw new Error(`plan rotating pinch ${JSON.stringify({ startZoom: start.zoom, after })}`);
+  }
+  if (after.view !== 'view-iss') throw new Error(`plan rotating pinch opened Map ${JSON.stringify(after)}`);
+}
+
+async function armPlanPointer(send) {
+  const armed = await evaluate(send, `(() => {
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    if (!frame) return { ok: false };
+    window.__opdPlanPointer = null;
+    frame.addEventListener('pointerdown', (event) => { window.__opdPlanPointer = event.pointerId; }, { capture: true, once: true });
+    return { ok: true };
+  })()`);
+  if (!armed?.ok) throw new Error('plan pointer arm failed');
+}
+
+async function endPlanGesture(send, kind, outside) {
+  if (kind === 'up') {
+    await send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x: outside.outsideX,
+      y: outside.outsideY,
+      button: 'left',
+      buttons: 0,
+      clickCount: 1,
+    });
+  } else {
+    const ended = await evaluate(send, `(() => {
+      const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+      const id = window.__opdPlanPointer;
+      const kind = ${JSON.stringify(kind)};
+      if (!frame || id == null) return { ok: false, reason: 'pointer', id };
+      if (kind === 'cancel') {
+        window.dispatchEvent(new PointerEvent('pointercancel', {
+          bubbles: true,
+          cancelable: true,
+          pointerId: id,
+          pointerType: 'mouse',
+          clientX: ${outside.outsideX},
+          clientY: ${outside.outsideY},
+        }));
+      } else if (kind === 'lost') {
+        if (frame.hasPointerCapture && frame.hasPointerCapture(id)) frame.releasePointerCapture(id);
+        else {
+          window.dispatchEvent(new PointerEvent('lostpointercapture', {
+            bubbles: false,
+            pointerId: id,
+            pointerType: 'mouse',
+            clientX: ${outside.outsideX},
+            clientY: ${outside.outsideY},
+          }));
+        }
+      } else {
+        const iframe = document.createElement('iframe');
+        iframe.setAttribute('data-opd-blur', '');
+        iframe.src = 'about:blank';
+        document.body.append(iframe);
+        if (iframe.contentWindow) iframe.contentWindow.focus();
+      }
+      return { ok: true, id };
+    })()`);
+    if (!ended?.ok) throw new Error(`plan ${kind} ${JSON.stringify(ended)}`);
+  }
+}
+
+async function returnToPlan(send) {
+  await evaluate(send, `(() => { document.querySelector('[data-opd-blur]')?.remove(); window.focus(); return true; })()`);
+  if (await evaluate(send, `document.getElementById('view')?.className === 'view-iss'`)) {
+    await waitForPip(send, 'plan', 'plan inset still open', 20000);
+    return;
+  }
+  await click(send, '#tab-iss');
+  await waitFor(
+    send,
+    `(() => {
+      const view = document.getElementById('view');
+      const canvas = document.querySelector('[data-pip="plan"] canvas');
+      if (!view || view.className !== 'view-iss' || !canvas) return null;
+      return { ok: true };
+    })()`,
+    'iss after an outside plan gesture',
+    45000,
+  );
+  await waitForPip(send, 'plan', 'plan framed after an outside gesture', 20000);
+}
+
+export async function provePlanOutsideEnding(send, viewport, kind, from, to) {
+  await send('Emulation.setDeviceMetricsOverride', {
+    width: from.width,
+    height: from.height,
+    deviceScaleFactor: from.dpr,
+    mobile: viewport.mobile,
+  });
+  await sleep(400);
+  await waitForPip(send, 'plan', `plan before ${kind}`, 20000);
+  const layout = await beginPlanLayout(send);
+  try {
+    const before = await planFrameMetrics(send);
+    if (!before?.outsideFrame) throw new Error(`plan ${kind} has no outside point ${JSON.stringify(before)}`);
+    await armPlanPointer(send);
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: before.x, y: before.y, button: 'left', buttons: 1, clickCount: 1 });
+    await send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: before.outsideX,
+      y: before.outsideY,
+      button: 'left',
+      buttons: 1,
+    });
+    await endPlanGesture(send, kind, before);
+    await changePlanLayout(send, {
+      width: Math.round(layout.width * to.width / from.width),
+      height: Math.round(layout.height * to.height / from.height),
+      dpr: to.dpr,
+    });
+    for (let tick = 0; tick < 4; tick += 1) await sleep(1000);
+    await assertPlanLayoutIdentity(send);
+    const after = await planFrameMetrics(send);
+    const expected = planCanvasReady(after);
+    const changed = after && (after.frameWidth !== before.frameWidth || after.frameHeight !== before.frameHeight || after.dpr !== before.dpr);
+    if (!after || !expected || !changed || after.view !== 'view-iss'
+      || after.cssWidth !== expected.cssWidth || after.cssHeight !== expected.cssHeight
+      || after.backingWidth !== expected.backingWidth || after.backingHeight !== expected.backingHeight) {
+      throw new Error(`plan ${kind} canvas ${JSON.stringify({ before, after, expected })}`);
+    }
+    await evaluate(send, `(() => {
+      const orbit = document.querySelector('[data-pip="plan"] [data-pip-frame]')?.__opdTrackInset;
+      if (orbit?.stop) orbit.stop();
+      return true;
+    })()`);
+    if (kind !== 'up') {
+      await send('Input.dispatchMouseEvent', {
+        type: 'mouseReleased',
+        x: before.outsideX,
+        y: before.outsideY,
+        button: 'left',
+        buttons: 0,
+        clickCount: 1,
+      });
+    }
+    await evaluate(send, `(() => { document.querySelector('[data-opd-blur]')?.remove(); window.focus(); return true; })()`);
+    const clickAt = await planFrameMetrics(send);
+    await mouseClick(send, clickAt.x, clickAt.y);
+    await waitFor(
+      send,
+      `document.getElementById('view')?.className === 'view-map' ? { ok: true } : null`,
+      `plan ${kind} click opens map`,
+      8000,
+    );
+    await returnToPlan(send);
+    return { css: `${after.cssWidth}x${after.cssHeight}`, backing: `${after.backingWidth}x${after.backingHeight}`, dpr: after.dpr };
+  } finally {
+    await restorePlanLayout(send);
+  }
+}
+
+async function provePlanOutsideRelease(send, viewport) {
+  const panes = viewport.mobile
+    ? [
+      { from: { width: 834, height: 1194, dpr: 2 }, to: { width: 860, height: 1080, dpr: 2 } },
+      { from: { width: 1194, height: 834, dpr: 2 }, to: { width: 1100, height: 760, dpr: 2 } },
+    ]
+    : [
+      { from: { width: 1400, height: 900, dpr: 1 }, to: { width: 1320, height: 830, dpr: 2 } },
+    ];
+  const notes = [];
+  try {
+    for (const pane of panes) {
+      for (const kind of ['up', 'cancel', 'lost', 'blur']) {
+        const sized = await provePlanOutsideEnding(send, viewport, kind, pane.from, pane.to);
+        notes.push(`${pane.from.width}x${pane.from.height} ${kind} ${sized.css} -> ${sized.backing}@${sized.dpr}`);
+      }
+    }
+  } finally {
+    await evaluate(send, `(() => { document.querySelector('[data-opd-blur]')?.remove(); window.focus(); return true; })()`);
+  }
+  return notes.join('; ');
+}
+
+async function provePlanMapLive(send, viewport) {
+  try {
+    const zoom = await provePlanWheelSurvivesRebuild(send);
+    await provePlanSmallMotion(send);
+    await evaluate(send, `(() => {
+      const canvas = document.querySelector('[data-pip="plan"] canvas');
+      if (!canvas) return false;
+      canvas.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+      return true;
+    })()`);
+    await waitForPip(send, 'plan', 'plan framed before an outside release', 20000);
+    const outside = await provePlanOutsideRelease(send, viewport);
+    await provePlanRasterNames(send);
+    await provePlanGestureHolds(send);
+    await provePlanRotatingPinch(send);
+    return `wheel ${zoom.toFixed(2)}; ${outside}`;
+  } finally {
+    await evaluate(send, `(() => { document.querySelector('[data-opd-blur]')?.remove(); return true; })()`);
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  }
+}
+
+async function proveSnapHelpDuringShortcuts(send, viewport) {
+  const panes = [
+    { width: viewport.width, height: viewport.height },
+    { width: viewport.height, height: viewport.width },
+  ];
+  try {
+    for (const pane of panes) {
+      await setViewport(send, pane.width, pane.height, true);
+      await sleep(400);
+      await click(send, '[data-iss-aim-help]');
+      await waitFor(
+        send,
+        `document.querySelector('[data-iss-scene]')?.hasAttribute('data-iss-aim-open') ? { ok: true } : null`,
+        `shortcuts open ${pane.width}x${pane.height}`,
+        10000,
+      );
+      const aim = await evaluate(send, `(() => {
+        const button = document.querySelector('[data-iss-snap-help]');
+        const scene = document.querySelector('[data-iss-scene]');
+        if (!button || !scene?.hasAttribute('data-iss-aim-open')) return { ok: false, reason: 'closed' };
+        const box = button.getBoundingClientRect();
+        if (box.width < 8 || box.height < 8) return { ok: false, reason: 'box', width: box.width, height: box.height };
+        const x = box.left + box.width / 2;
+        const y = box.top + box.height / 2;
+        const node = document.elementFromPoint(x, y);
+        const onButton = !!node && (node === button || button.contains(node));
+        return { ok: onButton, x, y, hit: node ? (node.getAttribute('aria-label') || node.id || node.tagName) : null };
+      })()`);
+      if (!aim?.ok) throw new Error(`SNAP help under shortcuts ${pane.width}x${pane.height} ${JSON.stringify(aim)}`);
+      await send('Input.tap', { x: aim.x, y: aim.y });
+      await waitFor(
+        send,
+        `(() => {
+          const dialog = document.querySelector('.help-modal');
+          if (!dialog) return null;
+          const label = dialog.getAttribute('aria-label') || '';
+          if (!label.includes('Help')) return null;
+          return { ok: true, label };
+        })()`,
+        `SNAP help dialog ${pane.width}x${pane.height}`,
+        10000,
+      );
+      await click(send, '.help-close');
+      await waitFor(send, `!document.querySelector('.help-modal') ? { ok: true } : null`, 'SNAP help closed', 10000);
+      if (await evaluate(send, `document.querySelector('[data-iss-scene]')?.hasAttribute('data-iss-aim-open') ? true : false`)) {
+        await click(send, '[data-iss-aim-scrim]');
+        await waitFor(
+          send,
+          `document.querySelector('[data-iss-scene]')?.hasAttribute('data-iss-aim-open') ? null : { ok: true }`,
+          'shortcuts closed after SNAP help',
+          10000,
+        );
+      }
+    }
+  } finally {
+    await evaluate(send, `document.querySelector('.help-close')?.click()`);
+    await setViewport(send, viewport.width, viewport.height, viewport.mobile);
+  }
+}
+
 async function armIssFovWatch(send) {
   await evaluate(send, `(() => {
     const watch = { bad: null, settled: false };
@@ -3878,7 +5770,14 @@ async function driveIss(send, evidenceDir, viewport, baseUrl) {
   );
   const shortStage = viewport.width === 390 && viewport.height === 664 ? await proveIssShortStages(send) : '';
   const fullscreen = await proveIssFullscreen(send, evidenceDir, viewport);
+  if (!insetViewportFits(viewport.width, viewport.height)) {
+    await proveSnapHelpDuringShortcuts(send, viewport);
+  }
   const pip = await provePipSurface(send, evidenceDir, viewport, 'iss');
+  let planLive = '';
+  if (insetViewportFits(viewport.width, viewport.height)) {
+    planLive = await provePlanMapLive(send, viewport);
+  }
   if (insetViewportFits(viewport.width, viewport.height)) {
     await pressInset(send, 'plan', viewport.mobile);
     await waitFor(
@@ -4022,7 +5921,7 @@ async function driveIss(send, evidenceDir, viewport, baseUrl) {
   await proveIssAimReload(send, evidenceDir);
   await proveIssClockCleared(send, evidenceDir);
   const towns = await proveIssTownRetry(send, evidenceDir, viewport);
-  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held (${landscape}), edition ${edition}, ${shortStage ? `short stage ${shortStage}, ` : ''}fullscreen ${fullscreen}, plan inset ${pip}, launch look (${launchLook}), ${placement ? `placement ${placement}, ` : ''}fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, profile menu escape, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)}), clock lines ${clock.houston} ${clock.gmt} ${clock.dayMonth} ${clock.weekday}, clock after tick, clock after aim, clock cleared, towns recovered (${towns})`;
+  return `iss: horizon then straight down, map and queue still open, session kept nadir, landscape telemetry held (${landscape}), edition ${edition}, ${shortStage ? `short stage ${shortStage}, ` : ''}fullscreen ${fullscreen}, plan inset ${pip}${planLive ? ` ${planLive}` : ''}, launch look (${launchLook}), ${placement ? `placement ${placement}, ` : ''}fov ${zoomed.toFixed(1)}°, fov live, pan held, pan kept, fov held, windows 1-6 aimed, window kept, window field, aim restored, storage cleared, keyboard aim, cupola keys, preset keys, profile menu escape, keys help, letter pan, fine pan, aim link (${String(horizon.text).slice(0, 80)}), clock lines ${clock.houston} ${clock.gmt} ${clock.dayMonth} ${clock.weekday}, clock after tick, clock after aim, clock cleared, towns recovered (${towns})`;
 }
 
 async function proveIssTownRetry(send, evidenceDir, viewport) {
@@ -4035,7 +5934,7 @@ async function proveIssTownRetry(send, evidenceDir, viewport) {
     return `${portrait}; ${landscape}`;
   } finally {
     await evaluate(send, `(() => {
-      if (window.__opdRealNow) Date.now = window.__opdRealNow;
+      (${restoreFixtureClock.toString()})();
       document.cookie = 'opd-verify-towns=; path=/; max-age=0';
       document.cookie = 'opd-verify-nadir=; path=/; max-age=0';
       return true;
@@ -4060,11 +5959,7 @@ async function proveIssTownsOnce(send, evidenceDir, shotSuffix) {
     return true;
   })()`);
   await reloadSettled(send);
-  await evaluate(send, `(() => {
-    window.__opdRealNow = Date.now;
-    Date.now = () => ${BOSTON_NADIR_EPOCH_MS};
-    return true;
-  })()`);
+  await evaluate(send, `(${freezeFixtureClock.toString()})(${BOSTON_NADIR_EPOCH_MS})`);
   await click(send, '#tab-iss');
   const blocked = await waitFor(
     send,
@@ -4250,6 +6145,7 @@ const ISS_FULLSCREEN_HIDDEN = [
   '[data-iss-hint]',
   '.maplibregl-ctrl-attrib',
   '[data-iss-aim-help]',
+  '[data-iss-snap-help]',
   '[data-iss-launch-picker]',
 ];
 
@@ -4281,8 +6177,14 @@ const ISS_FULLSCREEN_OFF = `(() => {
   if ((document.fullscreenElement ?? document.webkitFullscreenElement ?? null) !== null) return { step: 'browser-held' };
   if (button.getAttribute('aria-label') !== 'Full screen' || button.title !== 'Full screen') return { step: 'label' };
   if (document.querySelectorAll('[data-iss-fullscreen]').length !== 1) return { step: 'exit-count' };
-  if (button.previousElementSibling !== document.querySelector('[data-iss-telemetry]')) return { step: 'order' };
-  if (!button.parentElement?.hasAttribute('data-iss-controls')) return { step: 'parent' };
+  if (button.parentElement !== scene) return { step: 'parent' };
+  const help = document.querySelector('[data-iss-snap-help]');
+  const picker = document.querySelector('[data-iss-launch-picker-wrap]');
+  const launches = document.querySelector('[data-iss-launches]');
+  if (!(help instanceof HTMLElement) || !(picker instanceof HTMLElement) || !(launches instanceof HTMLElement)) return { step: 'help-missing' };
+  if (picker.nextElementSibling !== help || help.nextElementSibling !== launches) return { step: 'help-order' };
+  if (help.getAttribute('aria-label') !== 'Help — how to use SNAP' || help.textContent !== '?') return { step: 'help-label', label: help.getAttribute('aria-label') };
+  if (getComputedStyle(button).position !== 'absolute') return { step: 'corner-position' };
   if (getComputedStyle(scene).position !== 'absolute') return { step: 'position' };
   if (scene.querySelector('[data-iss-presets]')?.getClientRects().length !== 1) return { step: 'presets' };
   if (${SCENE_SCROLLS}) return { step: 'scroll' };
@@ -4291,13 +6193,19 @@ const ISS_FULLSCREEN_OFF = `(() => {
   if (!button.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2))) return { step: 'hit' };
   const telemetry = document.querySelector('[data-iss-telemetry]')?.getBoundingClientRect();
   if (!telemetry || telemetry.height < 40 || Math.abs(telemetry.height - box.height) > 1) return { step: 'height', telemetry: telemetry ? telemetry.height : null, control: box.height };
+  const sceneBox = scene.getBoundingClientRect();
+  if (sceneBox.right - box.right > 96 || sceneBox.bottom - box.bottom > 96 || box.right > sceneBox.right + 1 || box.bottom > sceneBox.bottom + 1) {
+    return { step: 'corner', scene: [sceneBox.right, sceneBox.bottom], button: [box.right, box.bottom] };
+  }
   const shownPlaces = [...document.querySelectorAll('.iss-place')].filter((node) => getComputedStyle(node).display !== 'none' && node.getClientRects().length > 0).length;
   if (shownPlaces < 1) return { step: 'places', shown: shownPlaces };
-  const covered = [...button.parentElement.children]
-    .filter((node) => node !== button)
-    .flatMap((node) => [...node.getClientRects()])
-    .find((other) => box.left < other.right - 0.5 && box.right > other.left + 0.5 && box.top < other.bottom - 0.5 && box.bottom > other.top + 0.5);
-  if (covered) return { step: 'overlap', button: [box.left, box.top, box.right, box.bottom], other: [covered.left, covered.top, covered.right, covered.bottom] };
+  const covered = ['[data-iss-telemetry]', '[data-iss-launch-picker]', '[data-iss-snap-help]', '[data-iss-launch]'].find((sel) => {
+    const node = document.querySelector(sel);
+    if (!node) return false;
+    const other = node.getBoundingClientRect();
+    return other.width > 1 && box.left < other.right - 0.5 && box.right > other.left + 0.5 && box.top < other.bottom - 0.5 && box.bottom > other.top + 0.5;
+  });
+  if (covered) return { step: 'overlap', covered, button: [box.left, box.top, box.right, box.bottom] };
   return { ok: true, width: frame.width, height: frame.height };
 })()`;
 
@@ -4497,7 +6405,7 @@ const ISS_SHORT_STAGE = `(() => {
     return { step: 'overlap', frame: [Math.round(frameBox.top), Math.round(frameBox.bottom)], controls: [Math.round(controlsBox.top), Math.round(controlsBox.bottom)] };
   }
   if (!scene.hasAttribute('data-iss-short')) return { step: 'short' };
-  const sels = ['[data-iss-telemetry]', '[data-iss-fullscreen]', '[data-iss-launch-picker]', '[data-iss-aim-help]', '[data-iss-preset="horizon"]', '[data-iss-preset="nadir"]', '[data-iss-cupola]'];
+  const sels = ['[data-iss-telemetry]', '[data-iss-fullscreen]', '[data-iss-launch-picker]', '[data-iss-snap-help]', '[data-iss-aim-help]', '[data-iss-preset="horizon"]', '[data-iss-preset="nadir"]', '[data-iss-cupola]'];
   for (const sel of sels) {
     const el = document.querySelector(sel);
     if (!el) return { step: 'control-missing', sel };
@@ -4551,9 +6459,10 @@ function issSplitFullscreenExpression() {
     if (t.width < 80 || t.height < 40 || t.height > 52) return { step: 'telemetry', w: Math.round(t.width), h: Math.round(t.height) };
     const tHit = document.elementFromPoint(t.left + t.width / 2, t.top + t.height / 2);
     if (!tHit || !telemetry.contains(tHit)) return { step: 'telemetry-hit', hit: tHit ? (tHit.getAttribute('aria-label') || tHit.tagName) : null };
-    if (button.previousElementSibling !== telemetry) return { step: 'order' };
+    if (button.parentElement !== scene) return { step: 'parent' };
     if (Math.abs(b.width - 44) > 1 || Math.abs(b.height - 44) > 1) return { step: 'exit', w: Math.round(b.width), h: Math.round(b.height) };
-    if (b.left + 1 < t.right || b.left > t.right + 24) return { step: 'beside', telemetryRight: Math.round(t.right), exitLeft: Math.round(b.left) };
+    const sceneBox = scene.getBoundingClientRect();
+    if (sceneBox.right - b.right > 96 || sceneBox.bottom - b.bottom > 96) return { step: 'corner', right: Math.round(sceneBox.right - b.right), bottom: Math.round(sceneBox.bottom - b.bottom) };
     const bHit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2);
     if (!bHit || !button.contains(bHit)) return { step: 'exit-hit', hit: bHit ? (bHit.getAttribute('aria-label') || bHit.id || bHit.tagName) : null };
     if (button.getAttribute('aria-label') !== 'Exit full screen') return { step: 'label', label: button.getAttribute('aria-label') };
@@ -4583,7 +6492,10 @@ function issSplitDockedExpression() {
     if (scene.hasAttribute('data-iss-fullscreen-active')) return { step: 'marker' };
     if (scene.getAttribute('data-iss-split') !== 'on') return { step: 'split' };
     if (!dock.contains(card)) return { step: 'dock' };
-    if (button.previousElementSibling !== telemetry) return { step: 'order' };
+    if (button.parentElement !== scene) return { step: 'parent' };
+    const help = document.querySelector('[data-iss-snap-help]');
+    const picker = document.querySelector('[data-iss-launch-picker-wrap]');
+    if (picker?.nextElementSibling !== help) return { step: 'help-order' };
     if (button.getAttribute('aria-label') !== 'Full screen') return { step: 'label', label: button.getAttribute('aria-label') };
     const t = telemetry.getBoundingClientRect();
     const b = button.getBoundingClientRect();
@@ -4672,6 +6584,1353 @@ async function proveFullscreenTelemetry(send) {
   return `${open.w}x${open.h}`;
 }
 
+export const PLAN_TILE_HELPERS = `
+function planSourceZoom(map, sourceId) {
+  const spec = map.getStyle() && map.getStyle().sources && map.getStyle().sources[sourceId];
+  const cap = spec && Number.isFinite(Number(spec.maxzoom)) ? Number(spec.maxzoom) : Infinity;
+  return Math.min(cap, Math.max(0, Math.round(map.getZoom() + 1)));
+}
+function planViewport(map) {
+  const canvas = map.getCanvas();
+  const rect = canvas.getBoundingClientRect();
+  const n = 2 ** planSourceZoom(map, 'inset-labels');
+  const origin = map.project([-180, 85.0511287798066]);
+  const scale = 512 * (2 ** map.getZoom()) / (256 * n);
+  const occlusions = [];
+  for (const node of document.querySelectorAll('[data-iss-clock], [data-iss-edition], [data-iss-split-chrome]')) {
+    const box = node.getBoundingClientRect();
+    if (box.width <= 0 || box.height <= 0 || (getComputedStyle(node).display === 'none' || getComputedStyle(node).visibility === 'hidden')) continue;
+    if (box.right <= rect.left || box.left >= rect.right || box.bottom <= rect.top || box.top >= rect.bottom) continue;
+    occlusions.push([box.left-rect.left, box.top-rect.top, box.right-rect.left, box.bottom-rect.top]);
+  }
+  return { width: rect.width, height: rect.height, worldCopies: map.getRenderWorldCopies(), scale, origin: { x: origin.x, y: origin.y }, occlusions };
+}
+function planHold(map) {
+  if (map.__opdLabelHold) return;
+  map.__opdLabelHold = {
+    fit: map.fitBounds.bind(map),
+    resize: map.resize.bind(map),
+    center: map.getCenter(),
+    zoom: map.getZoom(),
+  };
+  map.fitBounds = () => map;
+  map.resize = () => map;
+}
+function planCenterTile(map, z) {
+  const center = map.getCenter();
+  const n = 2 ** z;
+  const x = Math.max(0, Math.min(n - 1, Math.floor(((center.lng + 180) / 360) * n)));
+  const rad = center.lat * Math.PI / 180;
+  const yRaw = Math.floor((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2 * n);
+  const y = Math.max(0, Math.min(n - 1, yRaw));
+  return { x, y };
+}
+function planTileKey(coord, tile) {
+  const id = (tile && tile.tileID) || coord || {};
+  if (id.key) return String(id.key);
+  const canonical = id.canonical;
+  if (!canonical) return '';
+  return [canonical.z, canonical.x, canonical.y, id.wrap || 0].join('/');
+}
+function planVisibleTiles(map, sourceId) {
+  const manager = map.style && map.style.tileManagers && map.style.tileManagers[sourceId];
+  const z = planSourceZoom(map, sourceId);
+  const center = planCenterTile(map, z);
+  if (!manager || typeof manager.getVisibleCoordinates !== 'function') {
+    return { z, tiles: [], center, state: 'manager' };
+  }
+  const tiles = [];
+  const seen = new Set();
+  const add = (coord, tile) => {
+    const id = (tile && tile.tileID) || coord || {};
+    const canonical = id.canonical;
+    if (!canonical) return;
+    const key = planTileKey(coord, tile);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    tiles.push({
+      z: canonical.z,
+      x: canonical.x,
+      y: canonical.y,
+      state: tile ? tile.state : 'missing',
+    });
+  };
+  const view = manager._inViewTiles;
+  if (view && typeof view.getAllTiles === 'function') {
+    for (const tile of view.getAllTiles() || []) add(tile && tile.tileID, tile);
+  }
+  for (const coord of manager.getVisibleCoordinates() || []) {
+    const tile = typeof manager.getTile === 'function' ? manager.getTile(coord) : null;
+    add(coord, tile);
+  }
+  return { z, tiles, center };
+}
+function planFadeDone(map) {
+  const managers = map.style && map.style.tileManagers;
+  if (!managers) return false;
+  for (const id of ['inset-labels', 'inset-basemap']) {
+    const manager = managers[id];
+    if (!manager || typeof manager.hasTransition !== 'function' || manager.hasTransition()) return false;
+  }
+  return true;
+}
+function planRasterReady(map) {
+  const ready = (pack) => {
+    if (!pack || pack.state === 'manager' || pack.tiles.length === 0) return false;
+    const drawn = pack.tiles.filter((tile) => tile.z === pack.z);
+    if (drawn.length === 0) return false;
+    if (!drawn.every((tile) => tile.state === 'loaded')) return false;
+    if (!drawn.some((tile) => tile.x === pack.center.x && tile.y === pack.center.y)) return false;
+    return pack.tiles.every((tile) => tile.state === 'loaded' || tile.state === 'errored');
+  };
+  return ready(planVisibleTiles(map, 'inset-labels')) && ready(planVisibleTiles(map, 'inset-basemap')) && planFadeDone(map);
+}
+function planTileUrls(map, sourceId, tiles) {
+  const spec = map.getStyle() && map.getStyle().sources && map.getStyle().sources[sourceId];
+  const template = spec && spec.tiles && spec.tiles[0];
+  if (!template) return [];
+  return tiles.map((tile) => template.replace('{z}', String(tile.z)).replace('{y}', String(tile.y)).replace('{x}', String(tile.x)));
+}
+function planOpacityOn(layer, zoom) {
+  const opacity = layer.paint && layer.paint['text-opacity'];
+  if (!Array.isArray(opacity) || opacity[0] !== 'step') return opacity !== 0;
+  let value = opacity[2];
+  for (let index = 3; index + 1 < opacity.length; index += 2) {
+    if (zoom >= opacity[index]) value = opacity[index + 1];
+  }
+  return value !== 0;
+}
+function planShownText(field, properties) {
+  if (field && typeof field === 'object' && Array.isArray(field.sections)) {
+    return field.sections.map((section) => (section && typeof section.text === 'string' ? section.text : '')).join('');
+  }
+  if (typeof field === 'string') return field;
+  if (Array.isArray(field) && field[0] === 'get' && typeof field[1] === 'string') {
+    const value = properties ? properties[field[1]] : undefined;
+    return typeof value === 'string' ? value : '';
+  }
+  return '';
+}
+function planColorAlpha(color) {
+  if (color == null) return 1;
+  if (typeof color === 'object' && typeof color.a === 'number') return color.a;
+  if (typeof color !== 'string') return 0;
+  const text = color.trim().toLowerCase();
+  if (text === 'transparent') return 0;
+  const hex = /^#([0-9a-f]+)$/.exec(text);
+  if (hex && (hex[1].length === 3 || hex[1].length === 6)) return 1;
+  if (hex && hex[1].length === 8) return parseInt(hex[1].slice(6, 8), 16) / 255;
+  const rgba = /^rgba?\\(([^)]*)\\)$/.exec(text);
+  if (!rgba) return 0;
+  const parts = rgba[1].split(',').map((part) => part.trim());
+  if (parts.length < 4) return 1;
+  const alpha = Number(parts[3]);
+  return Number.isFinite(alpha) ? alpha : 0;
+}
+function planSymbolNames(map) {
+  const zoom = map.getZoom();
+  const canvas = map.getCanvas();
+  const layers = ((map.getStyle() && map.getStyle().layers) || [])
+    .filter((layer) => (layer.source === 'inset-countries' || layer.source === 'inset-country-fallbacks') && layer.type === 'symbol' && planOpacityOn(layer, zoom))
+    .map((layer) => layer.id);
+  const features = layers.length ? (map.queryRenderedFeatures({ layers }) || []) : [];
+  const names = [];
+  for (const feature of features) {
+    const coordinates = feature.geometry && feature.geometry.coordinates;
+    if (!coordinates || coordinates.length < 2) continue;
+    const point = map.project(coordinates);
+    if (!(point.x >= 0 && point.y >= 0 && point.x <= canvas.clientWidth && point.y <= canvas.clientHeight)) continue;
+    const name = feature.properties && feature.properties.name;
+    if (typeof name !== 'string' || !name) continue;
+    const layer = feature.layer || {};
+    if (layer.layout && layer.layout.visibility === 'none') continue;
+    if (!planOpacityOn(layer, zoom)) continue;
+    if (planColorAlpha(layer.paint && layer.paint['text-color']) <= 0) continue;
+    const shown = planShownText(layer.layout && layer.layout['text-field'], feature.properties);
+    if (shown !== name) {
+      if (typeof shown === 'string' && shown) names.push(shown);
+      continue;
+    }
+    names.push(name);
+  }
+  return names;
+}
+function planPaintOpacity(paint) {
+  const source = paint || {};
+  const hasOpacity = Object.prototype.hasOwnProperty.call(source, 'text-opacity');
+  const rawOpacity = source['text-opacity'];
+  const opacity = !hasOpacity ? 1 : (typeof rawOpacity === 'number' && Number.isFinite(rawOpacity) ? rawOpacity : null);
+  if (typeof opacity !== 'number') return opacity;
+  return opacity * planColorAlpha(source['text-color']);
+}
+function planCanadaInk() {
+  return [0.205078125, 0.313476562, 0.236816406, 0.317871094];
+}
+function planCanadaReady(zoom, hidden, opacity, showsSame, placed) {
+  if (!(Number(zoom) < 3)) return true;
+  const listed = Array.isArray(hidden) && hidden.includes('Canada');
+  if (showsSame === true) return listed && opacity === 0;
+  const visible = !listed && typeof opacity === 'number' && opacity > 0;
+  return visible && placed === true;
+}
+let canadaTrack = null;
+async function planCanadaShowsSame(map) {
+  const canvas = map.getCanvas();
+  const frame = canvas && typeof canvas.closest === 'function' ? (canvas.closest('[data-pip-frame]') || canvas) : canvas;
+  const viewport = { left: 0, top: 0, right: frame && frame.clientWidth || 0, bottom: frame && frame.clientHeight || 0 };
+  if (typeof rasterShowsSameCountry === 'function') {
+    return rasterShowsSameCountry(map.getZoom(), 0, null, (lngLat) => map.project(lngLat), viewport, []) === true;
+  }
+  if (!canadaTrack) {
+    try {
+      canadaTrack = await import('/src/map/adapters/maplibre/track-inset.ts');
+    } catch (error) {
+      canadaTrack = {};
+    }
+  }
+  if (typeof canadaTrack.rasterShowsSameCountry !== 'function' || typeof canadaTrack.canadaRasterView !== 'function' || !frame) return false;
+  const view = canadaTrack.canadaRasterView(map, frame);
+  if (!view) return false;
+  return canadaTrack.rasterShowsSameCountry(view.zoom, view.drawn, view.entry, view.project, view.viewport, view.occlusions) === true;
+}
+async function planCanadaSettled(map) {
+  const listed = () => {
+    const canvas = map.getCanvas();
+    const frame = canvas && typeof canvas.closest === 'function' ? canvas.closest('[data-pip-frame]') : null;
+    return ((frame && frame.dataset && frame.dataset.insetHiddenCountries) || '').split('|').includes('Canada');
+  };
+  let showsSame = await planCanadaShowsSame(map);
+  if (listed() === showsSame) return { showsSame, changed: false };
+  const deadline = performance.now() + 2000;
+  while (performance.now() < deadline) {
+    if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    showsSame = await planCanadaShowsSame(map);
+    if (listed() === showsSame) return { showsSame, changed: true };
+  }
+  return { showsSame, changed: true };
+}
+function planCanadaPlaced(placement) {
+  const labels = placement && placement.labels || [];
+  for (let index = 0; index < labels.length; index += 1) {
+    const label = labels[index];
+    if (label && label.name === 'Canada' && label.box && Number(label.opacity) > 0) return true;
+  }
+  return false;
+}
+async function planWaitCanada(map, zoom) {
+  const deadline = performance.now() + 8000;
+  let placement = planLabelPlacement(map);
+  while (performance.now() < deadline) {
+    const frame = map.getCanvas().closest('[data-pip-frame]');
+    const hidden = ((frame && frame.dataset.insetHiddenCountries) || '').split('|').filter(Boolean);
+    const opacity = placement.opacity ? placement.opacity.Canada : undefined;
+    const showsSame = await planCanadaShowsSame(map);
+    if (planCanadaReady(zoom, hidden, opacity, showsSame, planCanadaPlaced(placement))) return { ready: true, placement, showsSame };
+    if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    placement = planLabelPlacement(map);
+  }
+  const showsSame = await planCanadaShowsSame(map);
+  return { ready: false, placement, showsSame };
+}
+function planProjectRasterBox(map, ink) {
+  if (!ink || ink.length < 4 || typeof map.project !== 'function') return null;
+  const lngLat = (x, y) => [x * 360 - 180, Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180 / Math.PI];
+  const start = map.project(lngLat(ink[0], ink[1]));
+  const end = map.project(lngLat(ink[2], ink[3]));
+  const canvas = map.getCanvas();
+  const canvasBox = canvas.getBoundingClientRect();
+  if (!start || !end || !Number.isFinite(start.x) || !Number.isFinite(end.y)) return null;
+  const left = canvasBox.left + Math.min(start.x, end.x);
+  const top = canvasBox.top + Math.min(start.y, end.y);
+  const right = canvasBox.left + Math.max(start.x, end.x);
+  const bottom = canvasBox.top + Math.max(start.y, end.y);
+  if (!(right > left && bottom > top)) return null;
+  if (right < canvasBox.left || bottom < canvasBox.top || left > canvasBox.right || top > canvasBox.bottom) return null;
+  return { left, top, right, bottom };
+}
+function planLabelPlacement(map) {
+  const canvas = map.getCanvas();
+  const canvasBox = canvas.getBoundingClientRect();
+  const chrome = [];
+  for (const node of document.querySelectorAll('[data-iss-clock], [data-iss-edition], [data-iss-controls], [data-iss-split-chrome], .maplibregl-ctrl')) {
+    const box = node.getBoundingClientRect();
+    if (box.width < 2 || box.height < 2) continue;
+    chrome.push({ left: box.left, top: box.top, right: box.right, bottom: box.bottom });
+  }
+  const labels = [];
+  const opacity = {};
+  const seen = new Set();
+  const style = map.style;
+  const placement = style && style.placement;
+  const index = placement && placement.collisionIndex;
+  const width = canvas.clientWidth;
+  const height = canvas.clientHeight;
+  if (index && placement.retainedQueryData) {
+    const serialized = typeof style._serializedAllLayers === 'function' ? style._serializedAllLayers() : {};
+    const images = style.imageManager && typeof style.imageManager.listImages === 'function' ? style.imageManager.listImages() : [];
+    const grids = [index.grid, index.ignoredGrid];
+    for (let gridIndex = 0; gridIndex < grids.length; gridIndex += 1) {
+      const grid = grids[gridIndex];
+      if (!grid || typeof grid.query !== 'function') continue;
+      const hits = grid.query(0, 0, width + 200, height + 200) || [];
+      for (let hitIndex = 0; hitIndex < hits.length; hitIndex += 1) {
+        const hit = hits[hitIndex];
+        const key = hit && hit.key;
+        if (!key) continue;
+        const data = placement.retainedQueryData[key.bucketInstanceId];
+        if (!data || !data.featureIndex || typeof data.featureIndex.lookupSymbolFeatures !== 'function') continue;
+        let found = null;
+        try {
+          found = data.featureIndex.lookupSymbolFeatures([key.featureIndex], serialized, data.bucketIndex, data.sourceLayerIndex, { globalState: style._globalState }, null, images, style._layers);
+        } catch (error) {
+          continue;
+        }
+        let feature = null;
+        const layerIds = found ? Object.keys(found) : [];
+        for (let layerIndex = 0; layerIndex < layerIds.length; layerIndex += 1) {
+          const rows = found[layerIds[layerIndex]] || [];
+          if (rows[0] && rows[0].feature) {
+            feature = rows[0].feature;
+            break;
+          }
+        }
+        if (!feature || !feature.layer) continue;
+        const source = feature.layer.source;
+        if (source !== 'inset-countries' && source !== 'inset-country-fallbacks') continue;
+        const shown = planShownText(feature.layer.layout && feature.layer.layout['text-field'], feature.properties);
+        const propertyName = feature.properties && feature.properties.name;
+        if (typeof shown !== 'string' || !shown || typeof propertyName !== 'string' || shown !== propertyName) continue;
+        const paint = feature.layer.paint || {};
+        const opacityValue = planPaintOpacity(paint);
+        const dedupe = propertyName + ':' + key.bucketInstanceId + ':' + key.featureIndex;
+        if (seen.has(dedupe)) continue;
+        seen.add(dedupe);
+        if (typeof opacityValue === 'number') opacity[propertyName] = opacity[propertyName] == null ? opacityValue : Math.max(opacity[propertyName], opacityValue);
+        else if (!(propertyName in opacity)) opacity[propertyName] = null;
+        if (!(opacityValue > 0)) continue;
+        const left = canvasBox.left + hit.x1 - 100;
+        const top = canvasBox.top + hit.y1 - 100;
+        const right = canvasBox.left + hit.x2 - 100;
+        const bottom = canvasBox.top + hit.y2 - 100;
+        const box = right > left && bottom > top ? { left, top, right, bottom } : null;
+        if (!box) {
+          const anchorX = hit.x1 - 100;
+          const anchorY = hit.y1 - 100;
+          if (anchorX >= 0 && anchorY >= 0 && anchorX <= width && anchorY <= height) labels.push({ name: propertyName, opacity: opacityValue, box: null });
+          continue;
+        }
+        const onScreen = right > canvasBox.left && left < canvasBox.right && bottom > canvasBox.top && top < canvasBox.bottom;
+        if (!onScreen) continue;
+        labels.push({ name: propertyName, opacity: opacityValue, box: { left, top, right, bottom } });
+      }
+    }
+  }
+  const frame = typeof canvas.closest === 'function' ? canvas.closest('[data-pip-frame]') : canvas.parentElement;
+  const hidden = ((frame && frame.dataset && frame.dataset.insetHiddenCountries) || '').split('|').filter(Boolean);
+  for (let hiddenIndex = 0; hiddenIndex < hidden.length; hiddenIndex += 1) {
+    if (opacity[hidden[hiddenIndex]] == null) opacity[hidden[hiddenIndex]] = 0;
+  }
+  return {
+    labels,
+    canvas: {
+      left: canvasBox.left,
+      top: canvasBox.top,
+      right: canvasBox.right,
+      bottom: canvasBox.bottom,
+      clientWidth: canvas.clientWidth,
+      clientHeight: canvas.clientHeight,
+    },
+    chrome,
+    opacity,
+    rasterBox: planProjectRasterBox(map, planCanadaInk()),
+  };
+}
+function planLayerCovers(map, name, zoom) {
+  const layers = ((map.getStyle() && map.getStyle().layers) || [])
+    .filter((layer) => (layer.source === 'inset-countries' || layer.source === 'inset-country-fallbacks') && layer.type === 'symbol');
+  return layers.some((layer) => {
+    const min = layer.minzoom == null ? -Infinity : layer.minzoom;
+    const max = layer.maxzoom == null ? Infinity : layer.maxzoom;
+    if (zoom < min || zoom >= max) return false;
+    const filter = layer.filter;
+    const names = filter && filter[2] && filter[2][1];
+    return Array.isArray(names) && names.includes(name);
+  });
+}
+function planCameraMatches(map, camera) {
+  const zoom = map.getZoom();
+  const center = map.getCenter();
+  const zoomOk = Math.abs(zoom - camera.zoom) <= 0.02;
+  const centerOk = Math.abs(center.lng - camera.center[0]) <= 0.05 && Math.abs(center.lat - camera.center[1]) <= 0.05;
+  return {
+    ok: zoomOk && centerOk,
+    zoom,
+    center: [center.lng, center.lat],
+    requestedZoom: camera.zoom,
+    requestedCenter: camera.center,
+  };
+}
+function planLockRasterCamera(map, camera) {
+  if (!map.__opdJumpNative) {
+    map.__opdJumpNative = map.jumpTo.bind(map);
+    map.jumpTo = (next) => map.__opdJumpNative(map.__opdRasterCamera || next);
+  }
+  map.__opdRasterCamera = camera;
+  map.__opdJumpLocked = true;
+  map.jumpTo(camera);
+  return planCameraMatches(map, camera);
+}
+function planReleaseRasterCamera(map) {
+  if (map && map.__opdJumpNative) map.jumpTo = map.__opdJumpNative;
+  if (map) {
+    delete map.__opdJumpNative;
+    delete map.__opdRasterCamera;
+    delete map.__opdJumpLocked;
+  }
+}
+const PLAN_REPAINT_IDLE_MS = 2000;
+function planFrameNow(map) {
+  if (map && map.painter && Number.isFinite(map.painter.now)) return map.painter.now;
+  return performance.now();
+}
+function planMotionSettled(map) {
+  const now = planFrameNow(map);
+  const style = map.style || {};
+  if (typeof style.hasTransitions === 'function' && style.hasTransitions(now)) return false;
+  const placement = style.placement;
+  if (placement && typeof placement.hasTransitions === 'function' && placement.hasTransitions(now)) return false;
+  if (placement && placement.stale === true) return false;
+  const source = typeof map.getSource === 'function' ? map.getSource('inset-countries') : null;
+  if (source && typeof source.loaded === 'function' && source.loaded() === false) return false;
+  return true;
+}
+function planSourceGeneration(map) {
+  const source = typeof map.getSource === 'function' ? map.getSource('inset-countries') : null;
+  if (!source) return 'none';
+  if (source._opdGeneration != null) return String(source._opdGeneration);
+  try { return JSON.stringify(source._data || source.data || null); } catch (error) { return 'unreadable'; }
+}
+function planFullReady(map) {
+  return planRasterReady(map)
+    && planMotionSettled(map)
+    && typeof map.loaded === 'function' && map.loaded() === true
+    && typeof map.areTilesLoaded === 'function' && map.areTilesLoaded() === true;
+}
+async function planReadEvidence(map) {
+  const center = typeof map.getCenter === 'function' ? map.getCenter() : null;
+  const camera = map.__opdRasterCamera;
+  const matched = camera
+    ? planCameraMatches(map, camera)
+    : { ok: true, zoom: map.getZoom(), center: center ? [center.lng, center.lat] : null };
+  return {
+    settled: planFullReady(map),
+    generation: planSourceGeneration(map),
+    names: planSymbolNames(map),
+    placement: planLabelPlacement(map),
+    zoom: matched.zoom,
+    center: matched.center,
+    cameraOk: matched.ok,
+    showsSame: await planCanadaShowsSame(map),
+  };
+}
+function settleIdle(map, limitMs, kick, full) {
+  return new Promise((resolve) => {
+    let finished = false;
+    let timer = 0;
+    let holding = false;
+    const finish = (value) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      map.off('idle', onIdle);
+      map.off('render', onRender);
+      resolve(value);
+    };
+    let paints = 0;
+    const ready = (useFull) => (useFull ? planFullReady(map) : planRasterReady(map));
+    const holdFull = () => {
+      if (holding || finished) return;
+      holding = true;
+      const generation = planSourceGeneration(map);
+      requestAnimationFrame(() => {
+        holding = false;
+        if (finished) return;
+        if (planFullReady(map) && planSourceGeneration(map) === generation) finish(true);
+      });
+    };
+    const onIdle = () => {
+      if (!ready(full)) return;
+      if (full) holdFull();
+      else finish(true);
+    };
+    const onRender = () => {
+      if (finished || !planRasterReady(map)) return;
+      if (full) {
+        if (ready(true)) holdFull();
+        return;
+      }
+      paints += 1;
+      if (paints >= 2) finish(true);
+      else if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
+    };
+    timer = setTimeout(() => finish(false), limitMs);
+    map.on('idle', onIdle);
+    map.on('render', onRender);
+    if (typeof kick === 'function') kick();
+  });
+}
+async function planWaitTiles(map, full) {
+  const deadline = performance.now() + 8000;
+  let labels = null;
+  let base = null;
+  while (performance.now() < deadline) {
+    labels = planVisibleTiles(map, 'inset-labels');
+    base = planVisibleTiles(map, 'inset-basemap');
+    if (planRasterReady(map)) break;
+    await settleIdle(map, 100, () => {
+      if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
+    }, full);
+  }
+  labels = planVisibleTiles(map, 'inset-labels');
+  base = planVisibleTiles(map, 'inset-basemap');
+  let tilesOk = planRasterReady(map);
+  let repaintMs = null;
+  let painted = null;
+  if (tilesOk) {
+    const idleStarted = performance.now();
+    painted = await settleIdle(map, PLAN_REPAINT_IDLE_MS, () => {
+      if (typeof map.triggerRepaint === 'function') map.triggerRepaint();
+    }, full);
+    repaintMs = Math.round(performance.now() - idleStarted);
+    labels = planVisibleTiles(map, 'inset-labels');
+    base = planVisibleTiles(map, 'inset-basemap');
+    tilesOk = painted === true && (full ? planFullReady(map) : planRasterReady(map));
+  }
+  const drawn = (pack) => (pack && pack.tiles ? pack.tiles.filter((tile) => tile.z === pack.z) : []);
+  const urls = tilesOk
+    ? planTileUrls(map, 'inset-labels', drawn(labels)).concat(planTileUrls(map, 'inset-basemap', drawn(base)))
+    : [];
+  const blocking = [];
+  for (const pack of [labels, base]) {
+    for (const tile of (pack && pack.tiles) || []) {
+      if (tile.state !== 'loaded' && tile.state !== 'errored') blocking.push(tile);
+    }
+  }
+  return {
+    tilesOk,
+    tileZ: labels ? labels.z : null,
+    urls,
+    repaintMs,
+    detail: tilesOk ? null : {
+      labels,
+      base,
+      blocking,
+      idle: painted,
+      are: map.areTilesLoaded(),
+      loaded: typeof map.loaded === 'function' ? map.loaded() : null,
+      fading: !planFadeDone(map),
+    },
+  };
+}
+`;
+
+const PLAN_LABEL_READ = `(async (zoom, lng, lat) => {
+  ${PLAN_TILE_HELPERS}
+  const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+  const map = frame && frame.__opdTrackInset;
+  if (!map || typeof map.jumpTo !== 'function' || typeof map.queryRenderedFeatures !== 'function') {
+    return { ok: false, reason: 'map' };
+  }
+  planHold(map);
+  map.jumpTo({ center: [lng, lat], zoom });
+  const waited = await planWaitTiles(map);
+  const canvas = map.getCanvas();
+  const box = canvas.getBoundingClientRect();
+  return {
+    ok: true,
+    tilesOk: waited.tilesOk,
+    detail: waited.detail,
+    urls: waited.urls,
+    viewport: planViewport(map),
+    zoom: map.getZoom(),
+    tileZ: waited.tileZ,
+    names: planSymbolNames(map),
+    clip: { x: box.x, y: box.y, width: box.width, height: box.height },
+  };
+})`;
+
+export async function readPlanLabelZoom(send, zoom, lng, lat) {
+  const sample = await evaluate(send, `(${PLAN_LABEL_READ})(${zoom}, ${lng}, ${lat})`);
+  if (!sample || sample.ok !== true) throw new Error(`plan label zooms ${JSON.stringify(sample)}`);
+  return sample;
+}
+
+export async function coldPlanTileCaches(send) {
+  checkRasterOcr();
+  clearRasterOcrRun();
+  await send('Network.setCacheDisabled', { cacheDisabled: true });
+  const countries = JSON.stringify(PLAN_COUNTRIES);
+  const cleared = await evaluate(send, `(async () => {
+    ${PLAN_TILE_HELPERS}
+    const names = (typeof caches !== 'undefined' && caches.keys) ? await caches.keys() : [];
+    await Promise.all(names.map((name) => caches.delete(name)));
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    const map = frame && frame.__opdTrackInset;
+    if (!map || !map.style || !map.style.tileManagers || typeof map.jumpTo !== 'function') {
+      return { ok: false, reason: 'map', caches: names };
+    }
+    planHold(map);
+    if (typeof map.setTransformRequest === 'function') {
+      const bust = String(Date.now()) + '-' + Math.random().toString(36).slice(2);
+      map.setTransformRequest((url) => {
+        if (!url || url.indexOf('arcgisonline.com') < 0) return { url };
+        const next = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'nocache=' + bust;
+        return { url: next };
+      });
+    }
+    for (const id of ['inset-labels', 'inset-basemap']) {
+      const manager = map.style.tileManagers[id];
+      if (manager && typeof manager.clearTiles === 'function') manager.clearTiles();
+    }
+    const center = map.getCenter();
+    map.jumpTo({ center, zoom: map.getZoom() });
+    const waited = await planWaitTiles(map);
+    const canvas = map.getCanvas();
+    const box = canvas.getBoundingClientRect();
+    const inside = [];
+    for (const country of ${countries}) {
+      const point = map.project([country.lng, country.lat]);
+      if (point.x >= 8 && point.y >= 8 && point.x <= box.width - 8 && point.y <= box.height - 8) inside.push(country.name);
+    }
+    return {
+      ok: waited.tilesOk === true,
+      cold: true,
+      caches: names,
+      tilesOk: waited.tilesOk,
+      detail: waited.detail,
+      urls: waited.urls,
+      viewport: planViewport(map),
+      zoom: map.getZoom(),
+      tileZ: waited.tileZ,
+      names: planSymbolNames(map),
+      inside,
+    };
+  })()`);
+  if (!cleared || cleared.cold !== true || cleared.tilesOk !== true) {
+    throw new Error(`plan label caches ${JSON.stringify(cleared)}`);
+  }
+  return cleared;
+}
+
+async function restorePlanLabelCamera(send) {
+  await evaluate(send, `(() => {
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    const map = frame && frame.__opdTrackInset;
+    const hold = map && map.__opdLabelHold;
+    if (!map || !hold) return { ok: false };
+    map.jumpTo({ center: hold.center, zoom: hold.zoom });
+    map.fitBounds = hold.fit;
+    map.resize = hold.resize;
+    delete map.__opdLabelHold;
+    return { ok: true, zoom: map.getZoom() };
+  })()`);
+}
+
+const RELEASE_PLAN_CAMERA = `(() => {
+  const map = document.querySelector('[data-pip="plan"] [data-pip-frame]')?.__opdTrackInset;
+  if (!map) return { ok: false, reason: 'map' };
+  if (map.__opdJumpNative) map.jumpTo = map.__opdJumpNative;
+  delete map.__opdJumpNative;
+  delete map.__opdRasterCamera;
+  delete map.__opdJumpLocked;
+  return { ok: true, zoom: map.getZoom(), locked: map.__opdJumpLocked === true };
+})()`;
+
+async function focusMapPage(send) {
+  const page = send && ((send.session && send.session.page) || send.page);
+  if (page && typeof page.bringToFront === 'function') {
+    await page.bringToFront();
+    return;
+  }
+  if (!send) return;
+  await send('Page.bringToFront', {}).catch(() => {});
+}
+
+async function releasePlanCamera(send) {
+  if (!send) return { ok: false };
+  return evaluate(send, RELEASE_PLAN_CAMERA);
+}
+
+async function withLockedPlan(send, lng, lat, zoom, country, body, canadaWait) {
+  await focusMapPage(send);
+  try {
+    const row = await evaluate(send, `(async () => {
+      ${PLAN_TILE_HELPERS}
+      const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+      const map = frame && frame.__opdTrackInset;
+      if (!map || typeof map.jumpTo !== 'function') return { ok: false, reason: 'map' };
+      planHold(map);
+      const camera = { center: [${lng}, ${lat}], zoom: ${zoom} };
+      const seen = planLockRasterCamera(map, camera);
+      const waited = await planWaitTiles(map);
+      const after = planCameraMatches(map, camera);
+      const marker = frame.querySelector('.maplibregl-marker');
+      return {
+        ok: true,
+        cameraOk: seen.ok === true && after.ok === true,
+        requestedZoom: ${zoom},
+        requestedCenter: [${lng}, ${lat}],
+        center: after.center,
+        tilesOk: waited.tilesOk,
+        detail: waited.detail,
+        repaintMs: waited.repaintMs,
+        viewport: planViewport(map),
+        zoom: after.zoom,
+        tileZ: waited.tileZ,
+        names: planSymbolNames(map),
+        hidden: (frame.dataset.insetHiddenCountries || '').split('|').filter(Boolean),
+        country: ${JSON.stringify(country)},
+        markerVisible: !!(marker && marker.getClientRects().length > 0),
+        showsSame: await planCanadaShowsSame(map),
+        placement: await (async () => {
+          if (!${canadaWait ? 'true' : 'false'} || ${JSON.stringify(country)} !== 'Canada' || !(${zoom} < 3)) return planLabelPlacement(map);
+          const canada = await planWaitCanada(map, ${zoom});
+          if (!canada.ready) throw new Error('plan label canada');
+          return canada.placement;
+        })(),
+      };
+    })()`);
+    if (!row || row.ok !== true || row.cameraOk !== true) {
+      throw new Error(`plan label camera ${country} ${zoom} ${JSON.stringify(row)}`);
+    }
+    return await body(row);
+  } finally {
+    await releasePlanCamera(send);
+  }
+}
+
+function planPairDir() {
+  const surface = process.env.OPD_VERIFY_SURFACE || 'desktop';
+  const size = process.env.OPD_VERIFY_VIEWPORT || 'default';
+  return resolve(process.env.OPD_VERIFY_PLAN_PAIRS || resolve(tmpdir(), 'opd-plan-pairs'), `${surface}-${size}`);
+}
+
+function recordMainCheckout() {
+  const checkout = process.env.OPD_VERIFY_MAIN_CHECKOUT;
+  if (!checkout) throw new Error('plan label main capture needs OPD_VERIFY_MAIN_CHECKOUT');
+  const sha = execFileSync('git', ['-C', checkout, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error('plan label main checkout has no commit');
+  const dir = planPairDir();
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(resolve(dir, 'main-sha.txt'), `${sha}\n`);
+  console.log(`plan labels main ${sha} ${dir}`);
+  return sha;
+}
+
+function writePlanPng(file, bytes) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      writeFileSync(file, bytes);
+      return;
+    } catch (error) {
+      if (!error || error.code !== 'EAGAIN' || attempt === 4) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50 * (attempt + 1));
+    }
+  }
+}
+
+function savePlanPair(name, head, main) {
+  const dir = planPairDir();
+  mkdirSync(dir, { recursive: true });
+  if (head && head.png) writePlanPng(resolve(dir, `${name}-head.png`), head.png);
+  if (main && main.png) writePlanPng(resolve(dir, `${name}-main.png`), main.png);
+}
+
+async function leaseMainFixture(url, home) {
+  const state = JSON.parse(readFileSync(resolve(home, 'state.json'), 'utf8'));
+  const token = randomBytes(8).toString('hex');
+  const dir = resolve(home, 'fixtures');
+  const registered = await fetch(`${url}/api/verify/fixtures`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-opd-verify-registry': state.registrySecret },
+    body: JSON.stringify({ token, dir, pid: process.pid }),
+  });
+  if (!registered.ok) throw new Error(`plan label main register ${registered.status}`);
+  const secret = (await registered.json()).secret;
+  return { token, secret, url };
+}
+
+async function releaseMainLease(lease) {
+  if (!lease) return;
+  const home = process.env.OPD_VERIFY_MAIN_HOME;
+  const state = JSON.parse(readFileSync(resolve(home, 'state.json'), 'utf8'));
+  await fetch(`${lease.url}/api/verify/fixtures`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-opd-verify-registry': state.registrySecret },
+    body: JSON.stringify({ token: lease.token, secret: lease.secret, forget: true }),
+  }).catch(() => {});
+}
+
+async function openPlanMain(send) {
+  const url = process.env.OPD_VERIFY_MAIN_URL;
+  const home = process.env.OPD_VERIFY_MAIN_HOME;
+  if (!url || !home) throw new Error('plan label main capture needs OPD_VERIFY_MAIN_URL and OPD_VERIFY_MAIN_HOME');
+  const lease = await leaseMainFixture(url, home);
+  let close = async () => {};
+  let handed = false;
+  try {
+  const metrics = await evaluate(send, '({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio })');
+  let twin;
+  const cartoDark = [];
+  if (send.session) {
+    const measured = {
+      ...send.session.descriptor,
+      viewport: { width: metrics.w, height: metrics.h },
+      screen: { ...(send.session.descriptor.screen || {}), width: metrics.w, height: metrics.h },
+      deviceScaleFactor: metrics.dpr,
+    };
+    const opened = await openDeviceContext(send.session.browser, {
+      ...send.session.spec,
+      viewport: { width: metrics.w, height: metrics.h },
+      deviceScaleFactor: metrics.dpr,
+    }, {
+      baseUrl: url,
+      fixtureToken: lease.token,
+      initScripts: [...(send.session.initScripts || [])],
+      baseDescriptor: measured,
+      requestHandlers: [(request) => noteRequest(cartoDark, request.url())],
+    });
+    twin = playwrightSend(opened);
+    twin.cartoDark = cartoDark;
+    close = async () => { await opened.context.close(); };
+  } else if (send.debugPort) {
+    const port = 20000 + Math.floor(Math.random() * 2000);
+    const pid = startChrome(resolve(tmpdir(), `opd-main-chrome-${port}`), port);
+    const conn = await connectCdp(port);
+    twin = conn.send;
+    twin.cartoDark = cartoDark;
+    conn.on('Network.requestWillBeSent', (params) => noteRequest(cartoDark, params.request && params.request.url));
+    await twin('Network.enable');
+    await twin('Emulation.setDeviceMetricsOverride', {
+      width: metrics.w,
+      height: metrics.h,
+      deviceScaleFactor: metrics.dpr,
+      mobile: false,
+    });
+    await pinFixtureCookie(twin, url, lease.token);
+    close = async () => {
+      conn.close();
+      try { process.kill(pid, 'SIGTERM'); } catch { /* the twin browser already exited */ }
+      untrackBrowser(pid);
+    };
+  } else {
+    throw new Error('plan label main capture has no browser session');
+  }
+  try {
+    await openApp(twin, url, 0);
+    await click(twin, '#tab-iss');
+    await waitForPip(twin, 'plan', 'main plan', 30000);
+    const twinMetrics = await evaluate(twin, '({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio })');
+    if (twinMetrics.w !== metrics.w || twinMetrics.h !== metrics.h || twinMetrics.dpr !== metrics.dpr) {
+      throw new Error(`plan label main size ${JSON.stringify({ head: metrics, main: twinMetrics })}`);
+    }
+    twin.closeMain = close;
+    twin.lease = lease;
+    handed = true;
+    return twin;
+  } catch (error) {
+    await close().catch(() => {});
+    throw error;
+  }
+  } finally {
+    if (!handed) await releaseMainLease(lease);
+  }
+}
+
+async function forgetMainLease(twin) {
+  if (!twin || !twin.lease) return;
+  const home = process.env.OPD_VERIFY_MAIN_HOME;
+  const state = JSON.parse(readFileSync(resolve(home, 'state.json'), 'utf8'));
+  await fetch(`${twin.lease.url}/api/verify/fixtures`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-opd-verify-registry': state.registrySecret },
+    body: JSON.stringify({ token: twin.lease.token, secret: twin.lease.secret, forget: true }),
+  }).catch(() => {});
+}
+
+async function capturePlanCanvas(send) {
+  const box = await evaluate(send, `(async () => {
+    ${PLAN_TILE_HELPERS}
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    const canvas = frame && frame.querySelector('canvas');
+    const map = frame && frame.__opdTrackInset;
+    if (!canvas || !map) return null;
+    if (map.__opdRasterCamera && !planCameraMatches(map, map.__opdRasterCamera).ok) map.jumpTo(map.__opdRasterCamera);
+    for (const id of ['inset-track', 'inset-night']) {
+      if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', 'none');
+    }
+    const marker = frame.querySelector('.maplibregl-marker');
+    if (marker) marker.style.visibility = 'hidden';
+    for (const node of document.querySelectorAll('[data-iss-clock], [data-iss-edition]')) node.style.visibility = 'hidden';
+    const waited = await planWaitTiles(map, true);
+    if (!waited.tilesOk) return { ok: false, detail: waited.detail };
+    const evidence = await planReadEvidence(map);
+    if (!evidence.settled) return { ok: false, detail: { reason: 'revalidate', generation: evidence.generation } };
+    const rect = canvas.getBoundingClientRect();
+    const ignore = [];
+    const chrome = [];
+    const take = (node, bucket) => {
+      const area = node.getBoundingClientRect();
+      if (area.width < 2 || area.height < 2) return;
+      if (area.right <= rect.left || area.left >= rect.right || area.bottom <= rect.top || area.top >= rect.bottom) return;
+      bucket.push({ left: area.left - rect.left, top: area.top - rect.top, right: area.right - rect.left, bottom: area.bottom - rect.top });
+    };
+    for (const node of document.querySelectorAll('[data-iss-clock], [data-iss-edition]')) take(node, ignore);
+    for (const node of document.querySelectorAll('[data-iss-controls], [data-iss-split-chrome], .maplibregl-ctrl')) take(node, chrome);
+    return { ok: true, x: rect.x, y: rect.y, width: rect.width, height: rect.height, ignore, chrome, evidence };
+  })()`);
+  if (box && box.ok === false) {
+    throw new Error(`plan label tiles ${JSON.stringify({ ok: false, check: 'tiles', reason: 'paint', detail: box.detail })}`);
+  }
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  if (!box || !(box.width > 2) || !(box.height > 2)) return null;
+  const again = await evaluate(send, `(async () => {
+    ${PLAN_TILE_HELPERS}
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    const map = frame && frame.__opdTrackInset;
+    if (!map) return null;
+    return planReadEvidence(map);
+  })()`);
+  if (!again || !again.settled) {
+    throw new Error(`plan label tiles ${JSON.stringify({ ok: false, check: 'tiles', reason: 'revalidate', detail: again })}`);
+  }
+  box.evidence = again;
+  const image = await send('Page.captureScreenshot', {
+    format: 'png',
+    clip: { x: box.x, y: box.y, width: box.width, height: box.height, scale: 1 },
+  });
+  const png = Buffer.from(image.data, 'base64');
+  const decoded = decodePng(png);
+  await evaluate(send, `(() => {
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    const map = frame && frame.__opdTrackInset;
+    if (!map) return null;
+    for (const id of ['inset-track', 'inset-night']) {
+      if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', 'visible');
+    }
+    const marker = frame.querySelector('.maplibregl-marker');
+    if (marker) marker.style.visibility = '';
+    for (const node of document.querySelectorAll('[data-iss-clock], [data-iss-edition]')) node.style.visibility = '';
+    return { ok: true };
+  })()`);
+  if (!decoded) return null;
+  const scaleX = decoded.width / box.width;
+  const scaleY = decoded.height / box.height;
+  const scaleRect = (rect) => ({
+    left: rect.left * scaleX,
+    top: rect.top * scaleY,
+    right: rect.right * scaleX,
+    bottom: rect.bottom * scaleY,
+  });
+  return {
+    ...decoded,
+    png,
+    ignore: (box.ignore || []).map(scaleRect),
+    chrome: (box.chrome || []).map(scaleRect),
+    evidence: box.evidence,
+  };
+}
+
+/** Names and placement from the capture snapshot, not the sample taken before the barrier. */
+export function labelsForCapture(early, shot) {
+  const evidence = shot && shot.evidence;
+  if (!evidence) return early;
+  return {
+    ...early,
+    names: evidence.names,
+    placement: evidence.placement,
+    zoom: evidence.zoom,
+    center: evidence.center,
+    showsSame: evidence.showsSame,
+    cameraOk: evidence.cameraOk !== false,
+  };
+}
+
+/** Head and the main reference both use the post-barrier snapshot. */
+export function assembleLockedPair(head, main) {
+  return {
+    headView: labelsForCapture(head.row, head.shot),
+    mainView: labelsForCapture(main.row, main.shot),
+  };
+}
+
+function visiblePlanNames(row) {
+  const hidden = new Set(row.hidden || []);
+  return (row.names || []).filter((name) => !hidden.has(name));
+}
+
+function shownLabelNames(row) {
+  if (row.headPlacement && Array.isArray(row.headPlacement.labels)) {
+    return row.headPlacement.labels
+      .filter((label) => label && Number(label.opacity) > 0 && typeof label.name === 'string' && label.name)
+      .map((label) => label.name);
+  }
+  return visiblePlanNames(row);
+}
+
+/** Tiles, country identity, occurrence count, and main parity. Each check throws on its own. */
+export function assertPlanLabelChecks(row) {
+  const tiles = tilesLoaded(row);
+  if (!tiles.ok) throw new Error(`plan label tiles ${JSON.stringify(tiles)}`);
+  const names = shownLabelNames(row);
+  const identity = countryIdentity(names, row.country);
+  if (!identity.ok) throw new Error(`plan label country ${JSON.stringify(identity)}`);
+  const zoom = Number(row.zoom);
+  const contract = row.contract || planCameraContract(row.country, zoom, row.center);
+  if (Array.isArray(contract.expectedNames) && contract.expectedNames.length > 0 && names.length === 0) {
+    throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, expected: contract.expectedNames })}`);
+  }
+  if (Array.isArray(contract.expectedNames) && contract.expectedNames.includes(row.country) && !names.includes(row.country)) {
+    throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, expected: contract.expectedNames })}`);
+  }
+  if (zoom >= 3) {
+    const count = occurrenceCount(names.length, 0);
+    if (!count.ok) throw new Error(`plan label count ${JSON.stringify({ ...count, zoom, country: row.country, names })}`);
+    const parity = matchesMain(names, []);
+    if (!parity.ok) throw new Error(`plan label parity ${JSON.stringify(parity)}`);
+    const pixels = pairedRasterNames(row.headShot, row.mainShot, { ignoreRects: row.ignoreRects || [] });
+    if (!pixels.ok) throw new Error(`plan label raster ${JSON.stringify({ country: row.country, zoom, reason: pixels.reason, ratio: pixels.ratio })}`);
+    const regions = imageryLabelRegions({ country: row.country, zoom, center: row.center, viewport: row.viewport, width: row.headShot && row.headShot.width, height: row.headShot && row.headShot.height, head: row.headShot, main: row.mainShot });
+    if (regions.length) {
+      const region = imageryRegionDiff(row.headShot, row.mainShot, regions);
+      if (!region.ok) throw new Error(`plan label region ${JSON.stringify({ country: row.country, zoom, reason: region.reason, box: region.box })}`);
+    }
+    const placed = placementVerdict(row, contract);
+    if (!placed.ok) throw new Error(`plan label place ${JSON.stringify({ country: row.country, zoom, ...placed })}`);
+    const raster = rasterNameVerdict(row, contract);
+    if (!raster.ok) throw new Error(`plan label raster-name ${JSON.stringify({ country: row.country, zoom, ...raster })}`);
+    return { tiles, identity, count, parity, raster: pixels, placed, rasterName: raster };
+  }
+  const lowContract = contract;
+  if (lowContract.raster || (row.headPlacement && row.mainPlacement)) {
+    const placed = placementVerdict(row, lowContract);
+    if (!placed.ok) throw new Error(`plan label place ${JSON.stringify({ country: row.country, zoom, ...placed })}`);
+    const raster = rasterNameVerdict(row, lowContract);
+    if (!raster.ok) throw new Error(`plan label raster-name ${JSON.stringify({ country: row.country, zoom, ...raster })}`);
+    return { tiles, identity, placed, rasterName: raster };
+  }
+  return { tiles, identity };
+}
+
+function placementVerdict(row, contract) {
+  if (!row.headPlacement || !row.mainPlacement) return { ok: true, skipped: true };
+  return labelScreenVerdict({
+    head: row.headPlacement,
+    main: row.mainPlacement,
+    expectedNames: contract.expectedNames,
+    hide: contract.hide,
+  });
+}
+
+function screenshotLabelBox(row, position) {
+  const canvas = row.headPlacement && row.headPlacement.canvas;
+  const shot = row.headShot;
+  if (!position || !canvas || !shot) return null;
+  const clientW = canvas.clientWidth || (canvas.right - canvas.left);
+  const clientH = canvas.clientHeight || (canvas.bottom - canvas.top);
+  const scaleX = clientW ? shot.width / clientW : 1;
+  const scaleY = clientH ? shot.height / clientH : 1;
+  return {
+    left: (position.left - canvas.left) * scaleX,
+    top: (position.top - canvas.top) * scaleY,
+    right: (position.right - canvas.left) * scaleX,
+    bottom: (position.bottom - canvas.top) * scaleY,
+  };
+}
+
+function canadaShotBox(row) {
+  const shot = row.headShot;
+  if (!shot || !Array.isArray(row.center) || !Number.isFinite(Number(row.zoom))) return null;
+  const view = imageryViewport(row.center, row.zoom, shot.width, shot.height);
+  const world = 512 * (2 ** Number(row.zoom));
+  const ink = [0.205078125, 0.313476562, 0.236816406, 0.317871094];
+  return {
+    left: view.origin.x + ink[0] * world,
+    top: view.origin.y + ink[1] * world,
+    right: view.origin.x + ink[2] * world,
+    bottom: view.origin.y + ink[3] * world,
+  };
+}
+
+function ocrLabelText(row, position) {
+  const local = canadaShotBox(row) || screenshotLabelBox(row, position);
+  if (!local || !(local.right > local.left) || !(local.bottom > local.top)) return ocrFrame(row.headShot.png).text;
+  return ocrFrameBox(row.headShot.png, local).text;
+}
+
+function rasterNameVerdict(row, contract) {
+  if (!contract.raster) return { ok: true, skipped: true };
+  const hasFrame = !!(row.headShot && row.headShot.png);
+  const hasText = row.rasterText != null;
+  if (!hasFrame && !hasText) return { ok: false, reason: 'raster', declared: contract.raster };
+  const position = row.rasterPosition !== undefined
+    ? row.rasterPosition
+    : (row.headPlacement && row.headPlacement.rasterBox) || null;
+  const text = hasText ? row.rasterText : ocrLabelText(row, position);
+  const opacity = row.labelOpacity != null
+    ? row.labelOpacity
+    : (row.headPlacement && row.headPlacement.opacity ? row.headPlacement.opacity[row.country] : null);
+  return rasterDuplicateVerdict({ declared: contract.raster, text, opacity, position });
+}
+
+function assertLowZoomNames(row) {
+  const tiles = tilesLoaded(row);
+  if (!tiles.ok) throw new Error(`plan label tiles ${JSON.stringify(tiles)}`);
+  if (row.mainTilesOk === false) throw new Error(`plan label tiles ${JSON.stringify({ ok: false, check: 'tiles', reason: 'main', country: row.country, zoom: row.zoom })}`);
+  if (row.mainCameraOk === false) throw new Error(`plan label camera ${JSON.stringify({ country: row.country, zoom: row.zoom, center: row.center, mainCenter: row.mainCenter, cameraOk: false })}`);
+  const names = shownLabelNames(row).map((name) => {
+    const found = PLAN_COUNTRIES.find((entry) => entry.name.toLowerCase() === String(name).toLowerCase());
+    return found ? found.name : name;
+  });
+  const identity = countryIdentity(names, row.country);
+  if (!identity.ok) throw new Error(`plan label country ${JSON.stringify(identity)}`);
+  const zoom = Number(row.zoom);
+  const contract = row.contract || planCameraContract(row.country, zoom, row.center);
+  if (Array.isArray(contract.expectedNames) && contract.expectedNames.length > 0 && names.length === 0) {
+    throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, expected: contract.expectedNames })}`);
+  }
+  if (Array.isArray(contract.expectedNames) && contract.expectedNames.includes(row.country) && !names.includes(row.country)) {
+    throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, expected: contract.expectedNames })}`);
+  }
+  if (Array.isArray(row.mainNames)) {
+    const fold = (list) => (list || [])
+      .filter((name) => typeof name === 'string' && name)
+      .filter((name) => !(row.showsSame === true && name.toLowerCase() === 'canada'))
+      .map((name) => name.toLowerCase())
+      .sort()
+      .join('|');
+    if (fold(names) !== fold(row.mainNames)) {
+      throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, main: row.mainNames, showsSame: row.showsSame, hidden: row.hidden, placed: (row.placement && row.placement.labels || []).map((label) => label && label.name) })}`);
+    }
+  } else if (names.length === 0 && row.country !== 'Canada') {
+    throw new Error(`plan label names ${JSON.stringify({ country: row.country, zoom, center: row.center, names, expected: contract.expectedNames })}`);
+  }
+  return { tiles, identity, names };
+}
+
+/** A sweep row that did not reach its camera is a failure, including a zoom that was never checked. */
+export function acceptPlanSweepRow(row) {
+  if (!row || row.cameraOk !== true || !Number.isFinite(Number(row.requestedZoom))) {
+    throw new Error(`plan label camera ${JSON.stringify({ zoom: row && row.zoom, requested: row && row.requestedZoom, center: row && row.center, cameraOk: row && row.cameraOk })}`);
+  }
+  if (Number(row.requestedZoom) < 3) {
+    assertLowZoomNames(row);
+    return { below: true };
+  }
+  return { below: false };
+}
+
+export async function compareLockedPair(headSend, mainSend, lng, lat, zoom, country) {
+  const hideWait = process.env.OPD_VERIFY_CANADA_WAIT !== '0';
+  const head = await withLockedPlan(headSend, lng, lat, zoom, country, async (row) => ({ row, shot: await capturePlanCanvas(headSend) }), hideWait);
+  const main = await withLockedPlan(mainSend, lng, lat, zoom, country, async (row) => ({ row, shot: await capturePlanCanvas(mainSend) }), false);
+  savePlanPair(`${country}-z${zoom}-${lng}-${lat}`, head.shot, main.shot);
+  const { headView, mainView } = assembleLockedPair(head, main);
+  const contract = planContractForDrive(country, zoom, [lng, lat], process.env.OPD_VERIFY_CANADA_WAIT !== '0', headView.showsSame === true);
+  const verdict = assertPlanLabelChecks({
+    ...headView,
+    headShot: head.shot,
+    mainShot: main.shot,
+    headPlacement: headView.placement,
+    mainPlacement: mainView.placement,
+    contract,
+    labelOpacity: headView.placement && headView.placement.opacity ? headView.placement.opacity[country] : null,
+    ignoreRects: head.shot ? head.shot.ignore : [],
+    chromeRects: head.shot ? head.shot.chrome : [],
+    mainIgnoreRects: main.shot ? main.shot.ignore : [],
+    mainChromeRects: main.shot ? main.shot.chrome : [],
+  });
+  return { row: head.row, verdict };
+}
+
+export async function proveFractionalPlanLabels(send, progress = () => {}) {
+  const zooms = countrySweepZooms();
+  const expectedBelow = zooms.filter((zoom) => zoom < 3).length * PLAN_COUNTRIES.length;
+  let mainSend = null;
+  let belowZ3 = 0;
+  try {
+    const fitted = await coldPlanTileCaches(send);
+    if (!fitted.inside || !fitted.inside.includes('Australia')) {
+      throw new Error(`plan label fitted ${JSON.stringify({ zoom: fitted.zoom, tileZ: fitted.tileZ, inside: fitted.inside, names: fitted.names })}`);
+    }
+    progress({ phase: 'cold', tilesOk: fitted.tilesOk, zoom: fitted.zoom, stats: { ...rasterOcrStats } });
+    console.log(`plan labels cold tilesOk:${fitted.tilesOk} fitted:${fitted.zoom}`);
+    const audited = auditRasterLevels(loadCountryRasterLevels());
+    if (!audited.ok) throw new Error(`plan label raster audit ${JSON.stringify(audited)}`);
+    for (const country of fitted.inside) {
+      const fittedRow = { ...fitted, country, names: fitted.names, hidden: fitted.hidden || [] };
+      if (Number(fitted.zoom) < 3) assertLowZoomNames(fittedRow);
+      else assertPlanLabelChecks(fittedRow);
+    }
+    recordMainCheckout();
+    mainSend = await openPlanMain(send);
+    const rows = [];
+    for (const zoom of [1.5, 2.99, 3, 3.01]) {
+      const paired = await compareLockedPair(send, mainSend, -100, 50, zoom, 'Canada');
+      rows.push(paired.row);
+    }
+    const fractional = { counts: rows.map(row => ({ zoom: row.zoom, count: row.names.length })) };
+    const sweepNotes = [];
+    for (const country of PLAN_COUNTRIES) {
+      await focusMapPage(send);
+      progress({ phase: 'sampling', country: country.name, samples: zooms.length, stats: { ...rasterOcrStats } });
+      console.log(`plan labels sampling ${country.name}:${zooms.length}`);
+      const swept = await evaluate(send, `(async () => {
+        ${PLAN_TILE_HELPERS}
+        const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+        const map = frame && frame.__opdTrackInset;
+        if (!map || typeof map.jumpTo !== 'function') return { ok: false, reason: 'map' };
+        planHold(map);
+        const rows = [];
+        for (const zoom of ${JSON.stringify(zooms)}) {
+          const camera = { center: [${country.lng}, ${country.lat}], zoom };
+          map.jumpTo(camera);
+          const waited = await planWaitTiles(map);
+          const seen = planCameraMatches(map, camera);
+          const settled = await planCanadaSettled(map);
+          if (settled.changed) await planWaitTiles(map);
+          const showsSame = settled.showsSame;
+          rows.push({
+            tilesOk: waited.tilesOk,
+            detail: waited.detail,
+            urls: waited.urls,
+            viewport: planViewport(map),
+            requestedZoom: zoom,
+            cameraOk: seen.ok,
+            center: seen.center,
+            zoom: seen.zoom,
+            tileZ: waited.tileZ,
+            placement: planLabelPlacement(map),
+            names: planSymbolNames(map),
+            showsSame,
+            hidden: (frame.dataset.insetHiddenCountries || '').split('|').filter(Boolean),
+            country: ${JSON.stringify(country.name)},
+            centered: true,
+            covers: planLayerCovers(map, ${JSON.stringify(country.name)}, map.getZoom()),
+          });
+        }
+        return { ok: true, rows };
+      })()`);
+      if (!swept || swept.ok !== true || !swept.rows || swept.rows.length !== zooms.length) {
+        throw new Error(`plan label skipped ${country.name} ${swept && swept.rows ? swept.rows.length : 0}/${zooms.length}`);
+      }
+      const mainSwept = await evaluate(mainSend, `(async () => {
+        ${PLAN_TILE_HELPERS}
+        const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+        const map = frame && frame.__opdTrackInset;
+        if (!map || typeof map.jumpTo !== 'function') return { ok: false, reason: 'map' };
+        planHold(map);
+        const rows = [];
+        for (const zoom of ${JSON.stringify(zooms)}) {
+          const camera = { center: [${country.lng}, ${country.lat}], zoom };
+          map.jumpTo(camera);
+          const waited = await planWaitTiles(map);
+          const seen = planCameraMatches(map, camera);
+          rows.push({ names: planSymbolNames(map), tilesOk: waited.tilesOk, cameraOk: seen.ok, center: seen.center, zoom: seen.zoom });
+        }
+        return { ok: true, rows };
+      })()`);
+      if (!mainSwept || mainSwept.ok !== true || !mainSwept.rows || mainSwept.rows.length !== zooms.length) {
+        throw new Error(`plan label main names ${country.name}`);
+      }
+      for (let index = 0; index < swept.rows.length; index += 1) {
+        swept.rows[index].mainNames = mainSwept.rows[index].names;
+        swept.rows[index].mainTilesOk = mainSwept.rows[index].tilesOk;
+        swept.rows[index].mainCameraOk = mainSwept.rows[index].cameraOk;
+        swept.rows[index].mainCenter = mainSwept.rows[index].center;
+        const accepted = acceptPlanSweepRow(swept.rows[index]);
+        if (accepted.below) belowZ3 += 1;
+        if (index % 10 === 0 || index === swept.rows.length - 1) progress({ phase: 'verdicts', country: country.name, completed: index + 1, samples: swept.rows.length, stats: { ...rasterOcrStats } });
+      }
+      for (const zoom of zooms.filter((zoom) => zoom >= 3)) {
+        const paired = await compareLockedPair(send, mainSend, country.lng, country.lat, zoom, country.name);
+        if (paired.row && paired.row.repaintMs != null) console.log(`plan labels repaint ${country.name} z${zoom} ${paired.row.repaintMs}ms`);
+      }
+      sweepNotes.push(`${country.name}:${swept.rows.length}`);
+      console.log(`plan labels sweep ${country.name}:${swept.rows.length} OCR:${rasterOcrStats.calls}`);
+    }
+    const offCentroid = [
+      { country: 'France', center: [-0.33, 46], zooms: [5.5, 6.5, 6.51], once: true },
+      { country: 'Australia', center: [134, -25], zooms: [6.5, 6.51], once: true },
+      { country: 'Australia', center: [131.772, -25], zooms: [5.5], once: true },
+      { country: 'Australia', center: [132.723, -25], zooms: [5.5], once: true },
+      { country: 'Argentina', center: [-63.36, -34], zooms: [6.5], once: true },
+      { country: 'India', center: [79, 22], zooms: [6.5, 6.51], once: true },
+      { country: 'Nigeria', center: [8, 10], zooms: [6.5], once: true },
+      { country: 'Nigeria', center: [9, 10], zooms: [6.5, 6.51], once: true },
+      { country: 'Nigeria', center: [8.5, 11], zooms: [6.5, 6.51], once: true },
+      { country: 'Nigeria', center: [8.6386, 10], zooms: [6.5, 6.51], once: true },
+      { country: 'Kenya', center: [37.5, 2], zooms: [6.5, 6.51], once: true },
+      { country: 'Kenya', center: [37, 1], zooms: [6.5, 6.51], once: true },
+      { country: 'Kenya', center: [38.3, 1], zooms: [6.5, 6.51], once: true },
+      { country: 'Kenya', center: [38.15, 1.15], zooms: [6.5, 6.51], once: true },
+      { country: 'Kenya', center: [37.99, 0.95], zooms: [6.5, 6.51], once: true },
+    ];
+    for (const camera of offCentroid) {
+      for (const zoom of camera.zooms) {
+        const contract = planCameraContract(camera.country, zoom, camera.center);
+        const paired = await withLockedPlan(send, camera.center[0], camera.center[1], zoom, camera.country, async (row) => {
+          if (!row.markerVisible) throw new Error(`plan label marker ${camera.country} ${zoom}`);
+          const shot = await capturePlanCanvas(send);
+          const main = await withLockedPlan(mainSend, camera.center[0], camera.center[1], zoom, camera.country, async (mainRow) => ({ row: mainRow, shot: await capturePlanCanvas(mainSend) }));
+          savePlanPair(`${camera.country}-z${zoom}-${camera.center[0]}-${camera.center[1]}`, shot, main.shot);
+          const { headView, mainView } = assembleLockedPair({ row, shot }, main);
+          assertPlanLabelChecks({
+            ...headView,
+            headShot: shot,
+            mainShot: main.shot,
+            headPlacement: headView.placement,
+            mainPlacement: mainView.placement,
+            contract,
+            labelOpacity: headView.placement && headView.placement.opacity ? headView.placement.opacity[camera.country] : null,
+            ignoreRects: shot ? shot.ignore : [],
+            chromeRects: shot ? shot.chrome : [],
+            mainIgnoreRects: main.shot ? main.shot.ignore : [],
+            mainChromeRects: main.shot ? main.shot.chrome : [],
+          });
+          return headView;
+        });
+        await releasePlanCamera(send);
+        await releasePlanCamera(mainSend);
+        if (paired.repaintMs != null) console.log(`plan labels repaint ${camera.country} z${zoom} ${paired.repaintMs}ms`);
+        sweepNotes.push(`${camera.country}@${zoom}`);
+        console.log(`plan labels off-centroid ${camera.country} ${zoom} tiles:${paired.tilesOk} symbols:${(paired.names || []).length}`);
+      }
+    }
+    await releasePlanCamera(send);
+    if (belowZ3 !== expectedBelow) throw new Error(`plan label skipped below z3 ${belowZ3}/${expectedBelow}`);
+    const france = await readPlanLabelZoom(send, 1.2, 2, 46);
+    if (!france.tilesOk || Math.abs(france.zoom - 1.2) > 0.02) throw new Error(`plan label camera ${JSON.stringify({ zoom: france.zoom, detail: france.detail })}`);
+    const franceKept = keptCountrySymbol(france.names, 'France');
+    if (!franceKept.ok) throw new Error(`plan label France ${JSON.stringify(franceKept)}`);
+    const japan = await readPlanLabelZoom(send, 1.2, 138, 36);
+    if (!japan.tilesOk || Math.abs(japan.zoom - 1.2) > 0.02) throw new Error(`plan label camera ${JSON.stringify({ zoom: japan.zoom, detail: japan.detail })}`);
+    const japanKept = keptCountrySymbol(japan.names, 'Japan');
+    if (!japanKept.ok) throw new Error(`plan label Japan ${JSON.stringify(japanKept)}`);
+    console.log(`plan labels belowZ3:${belowZ3}`);
+    return `tilesOk:true belowZ3:${belowZ3} OCR ${JSON.stringify(rasterOcrStats)} caches cold fitted ${fitted.zoom.toFixed(3)} z${fitted.tileZ} ${sweepNotes.join(' ')} ${fractional.counts.map((row) => `${row.zoom}:${row.count}`).join(' ')}`;
+  } finally {
+    try { await releasePlanCamera(send); } catch { /* the page may already be gone */ }
+    if (mainSend) {
+      try { await mainSend.closeMain(); } catch { /* the twin page may already be gone */ }
+      try { await forgetMainLease(mainSend); } catch { /* the main proxy may already be gone */ }
+    }
+    await restorePlanLabelCamera(send);
+  }
+}
+
 async function proveIssFullscreen(send, evidenceDir, viewport) {
   const phone = viewport.mobile && viewport.width < 600;
   if (phone && !await evaluate(send, ISS_FULLSCREEN_STRIP)) throw new Error('iss fullscreen request methods still present');
@@ -4697,8 +7956,10 @@ async function proveIssFullscreen(send, evidenceDir, viewport) {
     }
     await pressIssFullscreen(send);
     const back = await waitFor(send, ISS_FULLSCREEN_OFF, 'iss fullscreen exit by button', 10000);
+    let planSymbols = '';
     if (insetViewportFits(viewport.width, viewport.height)) {
       await waitForPip(send, 'plan', 'plan inset back after fullscreen', 20000);
+      planSymbols = await proveFractionalPlanLabels(send);
     }
     if (!sameFrame(idle, back)) throw new Error(`iss frame after fullscreen ${JSON.stringify(back)} is not ${JSON.stringify(idle)}`);
     await click(send, '[data-iss-preset="nadir"]');
@@ -4742,7 +8003,8 @@ async function proveIssFullscreen(send, evidenceDir, viewport) {
       10000,
     );
     const followed = viewport.mobile ? '' : ', 2x device drew at 1.5x';
-    return `sheet press, ${expected} ${held.width}x${held.height} at ${held.ratio}x${followed}, labels ${beforePlaces} then ${held.places}, boxes ${held.telemetry}x${held.control}, telemetry open ${telemetryOpen}, split ${split}, Escape kept aim`;
+    const symbolNote = planSymbols ? `, plan symbols ${planSymbols}` : '';
+    return `sheet press, ${expected} ${held.width}x${held.height} at ${held.ratio}x${followed}, labels ${beforePlaces} then ${held.places}, boxes ${held.telemetry}x${held.control}, telemetry open ${telemetryOpen}, split ${split}${symbolNote}, Escape kept aim`;
   } finally {
     if (phone) await evaluate(send, ISS_FULLSCREEN_RESTORE);
   }
@@ -4789,21 +8051,9 @@ async function proveMapShowLaunches(send, evidenceDir) {
 }
 
 const EARTH_AFTER_RESIZE = `
-  const staleFrame = document.querySelector('[data-iss-frame]');
-  if (staleFrame instanceof HTMLElement) {
-    staleFrame.style.width = '109px';
-    staleFrame.style.height = '72px';
-  }
-  window.dispatchEvent(new Event('resize'));
-  const laidFrame = document.querySelector('[data-iss-frame]');
-  const laidBox = laidFrame instanceof HTMLElement ? laidFrame.getBoundingClientRect() : null;
-  if (!laidBox || laidBox.width < 80 || laidBox.height < 80) {
-    return {
-      step: 'earth',
-      width: laidBox ? Math.round(laidBox.width) : 0,
-      height: laidBox ? Math.round(laidBox.height) : 0,
-    };
-  }
+  ${earthAfterResizeReaders()}
+  const settled = await settleEarthAfterResize();
+  if (!settled || settled.ok !== true) return settled;
 `;
 
 const LAUNCH_EARTH_CHECK = `
@@ -4908,7 +8158,8 @@ export function launchEarthPanes(width, height) {
   if (freshLandscape) return [{ ...native, place: 'side', ...freshLandscape }];
   if (width >= 1200) {
     const splitPlace = splitLaunchPlace(width, height);
-    return [{ ...native, place: splitPlace || 'side', minShort: splitPlace ? 300 : 400 }];
+    const minShort = splitPlace ? (height >= 900 ? 300 : 200) : 400;
+    return [{ ...native, place: splitPlace || 'side', minShort }];
   }
   if (width >= 800) return [{ ...native, place: splitLaunchPlace(width, height) || 'side', minShort: 200 }];
   return [native];
@@ -4993,6 +8244,7 @@ async function proveLaunchCardHolds(send, label) {
 }
 
 export const SIDE_COLUMN_REACH = `(() => {
+  ${sideColumnReachReaders()}
   const column = document.querySelector('[data-iss-side]');
   const scene = document.querySelector('[data-iss-scene]');
   const frame = document.querySelector('[data-iss-frame]');
@@ -5013,31 +8265,42 @@ export const SIDE_COLUMN_REACH = `(() => {
   const sels = ['[data-iss-launch-name]', '[data-iss-launch-visibility]', '[data-iss-houston]', '[data-iss-day-month]', '[data-iss-weekday]', '[data-iss-edition]', '[data-iss-status]', '[data-iss-details] summary'];
   const sample = (el) => {
     const box = el.getBoundingClientRect();
-    const port = column.getBoundingClientRect();
-    const visible = Math.max(0, Math.min(box.bottom, port.bottom) - Math.max(box.top, port.top));
-    return { visible, height: box.height, top: box.top, portTop: port.top, portHeight: port.height };
+    const scrollPort = column.getBoundingClientRect();
+    const port = clipPortFor(el, column);
+    const visible = elementVisibleHeight(el, column);
+    const textRects = textRectsOf(el);
+    return {
+      visible,
+      height: box.height,
+      top: box.top,
+      scrollPortTop: scrollPort.top,
+      scrollPortHeight: scrollPort.height,
+      textOk: textVisibleInPort(textRects, port),
+      textRects,
+      port,
+    };
   };
   const fits = (el) => {
     const reading = sample(el);
-    return reading.height > 1 && reading.visible >= reading.height - 1;
+    return reading.height > 1 && reading.visible >= reading.height - 1 && reading.textOk;
   };
   const reveal = (el) => {
     if (fits(el)) return { ok: true, ...sample(el) };
     if (overflowY !== 'auto' && overflowY !== 'scroll') return { ok: false, ...sample(el), overflowY };
     const before = sample(el);
     const max = Math.max(0, column.scrollHeight - column.clientHeight);
-    const alignTop = Math.max(0, Math.min(max, column.scrollTop + (before.top - before.portTop)));
+    const alignTop = Math.max(0, Math.min(max, column.scrollTop + (before.top - before.scrollPortTop)));
     column.scrollTop = alignTop;
     if (fits(el)) return { ok: true, ...sample(el) };
-    if (before.height <= before.portHeight + 1) return { ok: false, ...sample(el), overflowY };
+    if (before.height <= before.scrollPortHeight + 1) return { ok: false, ...sample(el), overflowY };
     const mid = sample(el);
-    const alignBottom = Math.max(0, Math.min(max, column.scrollTop + (mid.top + mid.height - (mid.portTop + mid.portHeight))));
+    const alignBottom = Math.max(0, Math.min(max, column.scrollTop + (mid.top + mid.height - (mid.scrollPortTop + mid.scrollPortHeight))));
     column.scrollTop = alignBottom;
     const end = sample(el);
-    const bottomIn = end.visible > 1 && end.top + end.height <= end.portTop + end.portHeight + 1;
+    const bottomIn = end.textOk && end.visible > 1 && end.top + end.height <= end.scrollPortTop + end.scrollPortHeight + 1;
     column.scrollTop = alignTop;
     const start = sample(el);
-    const topIn = start.visible > 1 && start.top >= start.portTop - 1;
+    const topIn = start.textOk && start.visible > 1 && start.top >= start.scrollPortTop - 1;
     return { ok: topIn && bottomIn, ...start, overflowY };
   };
   for (const sel of sels) {
@@ -5048,6 +8311,7 @@ export const SIDE_COLUMN_REACH = `(() => {
       return {
         step: 'clipped',
         sel,
+        reason: reached.textOk === false ? 'text' : 'box',
         visible: Math.round(reached.visible * 100) / 100,
         height: Math.round(reached.height * 100) / 100,
         overflowY,
@@ -5207,7 +8471,6 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
             ? scene && scene.clientWidth === ${pane.width} && scene.clientHeight === ${pane.height}
             : document.documentElement.clientWidth === ${pane.width} && document.documentElement.clientHeight === ${pane.height};
           if (!laid) return { step: 'viewport', width: document.documentElement.clientWidth, height: document.documentElement.clientHeight, scene: scene ? [scene.clientWidth, scene.clientHeight] : null };
-          ${EARTH_AFTER_RESIZE}
           const earth = (() => { ${LAUNCH_EARTH_CHECK} })();
           if (!earth || earth.ok !== true) return earth;
           const allowed = ${JSON.stringify(pane.places || (pane.place ? [pane.place] : []))};
@@ -5233,6 +8496,22 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
         `iss launch earth ${pane.label}`,
         10000,
       );
+      const resizeProbe = `(() => (async () => {
+          ${EARTH_AFTER_RESIZE}
+          return { ok: true };
+        })())()`;
+      const resizeListener = await evaluate(send, resizeProbe);
+      if (!resizeListener || resizeListener.ok !== true) {
+        throw new Error(
+          `iss launch earth ${pane.label} resize listener ${JSON.stringify(resizeListener)}`,
+        );
+      }
+      const resizeConfirm = await evaluate(send, resizeProbe);
+      if (!resizeConfirm || resizeConfirm.ok !== true) {
+        throw new Error(
+          `iss launch earth ${pane.label} resize listener ${JSON.stringify(resizeConfirm)}`,
+        );
+      }
       const heldCard = await proveLaunchCardHolds(send, pane.label);
       if (pane.label === '844x390' || pane.label === '874x402' || pane.label === '721x390') await provePhoneLandscapeTelemetry(send, pane);
       if (pane.twoLine) {
@@ -5316,7 +8595,64 @@ async function proveLaunchEarthPanes(send, evidenceDir) {
   return `${held.join(', ')}; restored ${restored.stage}x${restored.frame} scroll ${restored.scrollHeight}/${restored.clientHeight} controls ${restored.controlsBottom} scene ${restored.sceneBottom}`;
 }
 
-function fixtureInstant(evidenceDir) {
+export async function settleCatalogFreeze(catalog, freeze) {
+  if (typeof catalog.settledPath !== 'function') return { ok: false, reason: 'catalog', path: '' };
+  const path = await catalog.settledPath() || '';
+  const frozen = catalogFreezeTime(null, path);
+  if (!(frozen > 0)) return { ok: false, reason: 'catalog', path };
+  freeze(frozen);
+  return { ok: true, path, frozen };
+}
+
+export function nextPinFreeze(lastPath, path) {
+  const frozen = catalogFreezeTime(null, path);
+  if (!(frozen > 0)) return { ok: false, reason: 'catalog', path: path || '' };
+  return { ok: true, path, frozen, refroze: path !== lastPath };
+}
+
+export async function pollPinnedCatalog({ readStep, sleep, now, deadlineMs }) {
+  const started = now();
+  let lastPath = '';
+  let last = null;
+  while (now() - started < deadlineMs) {
+    const remaining = deadlineMs - (now() - started);
+    if (remaining <= 0) break;
+    const step = await readStep(lastPath, remaining);
+    if (step?.expired || now() - started >= deadlineMs) break;
+    if (!step || step.ok === false || !(step.frozen > 0)) {
+      return { ok: false, reason: 'catalog', path: step && step.path || '' };
+    }
+    if (step.path !== lastPath) {
+      if (step.refroze !== true) return { ok: false, reason: 'stale', path: step.path };
+      lastPath = step.path;
+    }
+    last = step.pin;
+    if (now() - started >= deadlineMs) break;
+    if (last && last.ok === true) return last;
+    const left = deadlineMs - (now() - started);
+    if (left <= 0) break;
+    await sleep(Math.min(250, left));
+  }
+  throw new Error(`iss all launches pin in frame timed out. Last value: ${JSON.stringify(last)}`);
+}
+
+export function catalogFreezeTime(_entries, acceptedPath) {
+  const match = String(acceptedPath || '').match(/(?:^|\/)launch\/catalog\/v\/c(\d+)/);
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+export function fixtureInstant(evidenceDir, fixtureDir) {
+  if (fixtureDir) {
+    for (const [name, key] of [['catalog-clock.json', 'anchor'], ['meta.json', 'now']]) {
+      const path = resolve(fixtureDir, name);
+      if (!existsSync(path)) continue;
+      const value = JSON.parse(readFileSync(path, 'utf8'))[key];
+      if (typeof value === 'number' && Number.isFinite(value)) return value;
+    }
+    throw new Error('private verify fixture clock missing');
+  }
   let dir = evidenceDir;
   for (let step = 0; step < 4; step += 1) {
     const path = resolve(dir, 'fixtures/meta.json');
@@ -5334,8 +8670,12 @@ function fixtureInstant(evidenceDir) {
   throw new Error('verify fixture meta missing');
 }
 
-async function armCatalogHold(baseUrl) {
-  const armed = await fetch(`${baseUrl}/api/verify/catalog-hold`, { method: 'POST' });
+function fixtureHeaders(send) {
+  return send.fixtureToken ? { cookie: `opd-verify-fixtures=${send.fixtureToken}` } : {};
+}
+
+async function armCatalogHold(send, baseUrl) {
+  const armed = await fetch(`${baseUrl}/api/verify/catalog-hold`, { method: 'POST', headers: fixtureHeaders(send) });
   if (!armed.ok) throw new Error(`catalog hold ${armed.status}`);
   return armed.json();
 }
@@ -5344,15 +8684,15 @@ async function nudgeUntilCatalogPending(send, baseUrl) {
   const started = Date.now();
   while (Date.now() - started < 15000) {
     await nudgeCatalogRefresh(send);
-    const status = await fetch(`${baseUrl}/api/verify/catalog-hold`).then((response) => response.json());
+    const status = await fetch(`${baseUrl}/api/verify/catalog-hold`, { headers: fixtureHeaders(send) }).then((response) => response.json());
     if (status.pending) return;
     await sleep(250);
   }
   throw new Error('iss tier pick pending catalog body timed out');
 }
 
-async function releaseCatalogHold(baseUrl) {
-  const released = await fetch(`${baseUrl}/api/verify/catalog-release`, { method: 'POST' });
+async function releaseCatalogHold(send, baseUrl) {
+  const released = await fetch(`${baseUrl}/api/verify/catalog-release`, { method: 'POST', headers: fixtureHeaders(send) });
   if (!released.ok) throw new Error(`catalog release ${released.status}`);
 }
 
@@ -5365,13 +8705,13 @@ async function nudgeCatalogRefresh(send) {
   })()`);
 }
 
-async function withHeldCatalog(send, baseUrl, body) {
-  await armCatalogHold(baseUrl);
+export async function withHeldCatalog(send, baseUrl, body) {
+  await armCatalogHold(send, baseUrl);
   try {
     await nudgeUntilCatalogPending(send, baseUrl);
     await body();
   } finally {
-    await releaseCatalogHold(baseUrl);
+    await releaseCatalogHold(send, baseUrl);
   }
 }
 
@@ -5553,17 +8893,18 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
     send,
     `(() => {
       const picker = document.querySelector('[data-iss-launch-picker]');
-      if (!(picker instanceof HTMLSelectElement) || picker.value !== '') return null;
+      if (!(picker instanceof HTMLSelectElement)) return { ok: false, reason: 'picker' };
       const groups = [...picker.querySelectorAll('optgroup')].map((entry) => entry.label);
-      for (const name of ['Shot', 'Likely', 'Watch', 'All launches']) {
-        if (!groups.includes(name)) return null;
-      }
       const closed = picker.selectedOptions[0]?.textContent || '';
-      if (!/^Verify Ascent · Shot · [A-Z][a-z]{2} \\d{1,2}$/.test(closed)) return null;
+      if (picker.value !== '') return { ok: false, reason: 'value', value: picker.value, closed, groups };
+      for (const name of ['Shot', 'Likely', 'Watch', 'All launches']) {
+        if (!groups.includes(name)) return { ok: false, reason: 'groups', groups, closed };
+      }
+      if (!/^Verify Ascent · Shot · [A-Z][a-z]{2} \\d{1,2}$/.test(closed)) return { ok: false, reason: 'label', closed, groups };
       return { ok: true, closed };
     })()`,
     'iss tier groups',
-    20000,
+    75000,
   );
   const horizon = await waitFor(
     send,
@@ -5602,34 +8943,58 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
     15000,
   );
   await shot(send, evidenceDir, 'iss-all-launches');
-  const frozen = fixtureInstant(evidenceDir);
-  await evaluate(send, `(() => {
-    window.__opdRealNow = Date.now;
-    const frozen = ${frozen};
-    Date.now = () => frozen;
-    return true;
+  const freezeAccepted = async () => evaluate(send, `(async () => {
+    const { launchCatalog } = await import('/src/launch-catalog.ts');
+    if (typeof launchCatalog.acceptedPath !== 'function' && typeof launchCatalog.settledPath !== 'function') {
+      return { ok: false, reason: 'catalog', path: '' };
+    }
+    const catalogFreezeTime = ${catalogFreezeTime.toString()};
+    const settleCatalogFreeze = ${settleCatalogFreeze.toString()};
+    const freezeFixtureClock = ${freezeFixtureClock.toString()};
+    return settleCatalogFreeze(launchCatalog, freezeFixtureClock);
   })()`);
+  const firstFreeze = await freezeAccepted();
+  if (!firstFreeze?.ok) throw new Error(`iss catalog freeze ${JSON.stringify(firstFreeze)}`);
   try {
   await click(send, '[data-iss-preset="nadir"]');
-  await waitFor(
-    send,
-    `(() => {
-      const pressed = document.querySelector('[data-iss-preset="nadir"]')?.getAttribute('aria-pressed') === 'true';
-      const card = document.querySelector('[data-iss-launch-card]');
-      const name = card?.querySelector('[data-iss-launch-name]')?.textContent ?? null;
-      const visibility = card?.querySelector('[data-iss-launch-visibility]')?.textContent ?? null;
-      const pin = !!document.querySelector('.iss-launch-pin');
-      const edge = !!document.querySelector('[data-iss-launch-edge]');
-      const look = document.querySelector('[data-iss-launch-label]')?.textContent ?? null;
-      const status = document.querySelector('[data-iss-status]')?.textContent ?? null;
-      if (!pressed || name !== 'Verify Horizon' || !pin) {
-        return { pressed, name, visibility, pin, edge, look, status: status && status.slice(0, 180) };
-      }
-      return { ok: true };
-    })()`,
-    'iss all launches pin in frame',
-    15000,
-  );
+  const pinFreeze = await freezeAccepted();
+  if (!pinFreeze?.ok) throw new Error(`iss catalog freeze ${JSON.stringify(pinFreeze)}`);
+  const pinned = await pollPinnedCatalog({
+    now: () => Date.now(),
+    sleep,
+    deadlineMs: 15000,
+    readStep: (lastPath, remaining) => evaluate(send, `(async () => {
+      const { launchCatalog } = await import('/src/launch-catalog.ts');
+      const catalogFreezeTime = ${catalogFreezeTime.toString()};
+      const nextPinFreeze = ${nextPinFreeze.toString()};
+      const freezeFixtureClock = ${freezeFixtureClock.toString()};
+      const path = await Promise.race([
+        typeof launchCatalog.settledPath === 'function' ? launchCatalog.settledPath() : Promise.resolve(''),
+        new Promise((resolve) => setTimeout(() => resolve(null), ${Math.max(0, Number.isFinite(remaining) ? remaining : 0)})),
+      ]);
+      if (path == null) return { expired: true };
+      const decision = nextPinFreeze(${JSON.stringify(lastPath)}, path || '');
+      if (!decision.ok) return decision;
+      if (decision.refroze) freezeFixtureClock(decision.frozen);
+      const pin = (() => {
+        const pressed = document.querySelector('[data-iss-preset="nadir"]')?.getAttribute('aria-pressed') === 'true';
+        const card = document.querySelector('[data-iss-launch-card]');
+        const name = card?.querySelector('[data-iss-launch-name]')?.textContent ?? null;
+        const visibility = card?.querySelector('[data-iss-launch-visibility]')?.textContent ?? null;
+        const pin = !!document.querySelector('.iss-launch-pin');
+        const edge = !!document.querySelector('[data-iss-launch-edge]');
+        const look = document.querySelector('[data-iss-launch-label]')?.textContent ?? null;
+        const status = document.querySelector('[data-iss-status]')?.textContent ?? null;
+        if (!pressed || name !== 'Verify Horizon' || !pin) {
+          return { pressed, name, visibility, pin, edge, look, status: status && status.slice(0, 180) };
+        }
+        return { ok: true };
+      })();
+      return { path: decision.path, frozen: decision.frozen, refroze: decision.refroze, pin };
+    })()`),
+    label: 'iss all launches pin in frame',
+  });
+  if (!pinned?.ok) throw new Error(`iss catalog freeze ${JSON.stringify(pinned)}`);
   const aimBeforePin = await evaluate(send, `(() => {
     const center = window.__opdIss?.getCenter?.();
     return center ? { ok: true, lat: center.lat, lng: center.lng } : null;
@@ -5653,7 +9018,7 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
   );
   await shot(send, evidenceDir, 'iss-all-launches-pin');
   } finally {
-    await evaluate(send, `(() => { if (window.__opdRealNow) Date.now = window.__opdRealNow; return true; })()`);
+    await evaluate(send, `(${restoreFixtureClock.toString()})()`);
   }
   await evaluate(send, `(() => {
     const picker = document.querySelector('[data-iss-launch-picker]');
@@ -5718,6 +9083,15 @@ async function proveIssLaunchLook(send, evidenceDir, baseUrl) {
       const aim = arrow instanceof HTMLElement ? arrow.style.getPropertyValue('--iss-launch-aim') : '';
       if (!/^-?\\d+\\.\\d+deg$/.test(aim)) return null;
       if (frame.getAttribute('data-iss-launch-corridor') !== 'on') return null;
+      if (scene?.getAttribute('data-iss-split') === 'on' && window.innerWidth === 834 && window.innerHeight === 1194) {
+        const pickerBox = picker.getBoundingClientRect();
+        const helpBox = document.querySelector('[data-iss-snap-help]')?.getBoundingClientRect();
+        const siteBox = button.getBoundingClientRect();
+        const mid = (box) => (box.top + box.bottom) / 2;
+        if (!helpBox || Math.abs(mid(pickerBox) - mid(helpBox)) > 4 || Math.abs(mid(pickerBox) - mid(siteBox)) > 4) {
+          return { step: 'launch-row', width: window.innerWidth, height: window.innerHeight, picker: pickerBox.top, help: helpBox ? helpBox.top : null, site: siteBox.top };
+        }
+      }
       const earth = (() => { ${LAUNCH_EARTH_CHECK} })();
       if (!earth || earth.ok !== true) return earth;
       const visibility = earth.visibility;
@@ -7155,7 +10529,9 @@ async function driveHelp(send, evidenceDir) {
     'All launches',
     '14 days',
     'That list is not limited to chances.',
-    'Map and Upcoming list chances only',
+    'Upcoming lists chances only',
+    'The map also marks scheduled launches in the next seven days that are not chances',
+    'Watch, Unassessed, or No shot label',
     'None clears it.',
     'beside Telemetry',
     'about 18°',
@@ -7205,7 +10581,7 @@ const LAST_GOOD_TLE = {
   at: '2026-09-29T04:10:50.460Z',
 };
 
-async function driveProfile(send, evidenceDir, meta, baseUrl, home, viewport) {
+async function driveProfile(send, evidenceDir, meta, baseUrl, home, viewport, fixtureToken) {
   await click(send, '#tab-profile');
   await waitFor(
     send,
@@ -7256,8 +10632,8 @@ async function driveProfile(send, evidenceDir, meta, baseUrl, home, viewport) {
   await shot(send, evidenceDir, 'profile-hidden');
   await evaluate(send, `document.querySelector('[data-curated-id="verify-mesa"] button')?.click()`);
   await waitFor(send, `!document.querySelector('[data-curated-id="verify-mesa"]') ? { ok: true } : null`, 'mesa restored');
-  const restored = await waitServerRemoved(baseUrl, [], ['verify-mesa']);
-  await expectFreshHide(baseUrl, home, {
+  const restored = await waitServerRemoved(send, baseUrl, [], ['verify-mesa']);
+  await expectFreshHide(baseUrl, home, fixtureToken, {
     id: 'verify-mesa',
     name: meta.names.upcoming[0],
     updatedAt: restored.removedCuratedUpdatedAt,
@@ -7436,7 +10812,7 @@ async function driveLog(send, evidenceDir, baseUrl) {
     })()`,
     'log row',
   );
-  const listed = await fetch(`${baseUrl}/api/log`).then((response) => response.json());
+  const listed = await fetch(`${baseUrl}/api/log`, { headers: fixtureHeaders(send) }).then((response) => response.json());
   const shoot = Array.isArray(listed.entries)
     ? listed.entries.find((entry) => entry.action === 'shoot' && entry.target_id === 'verify-reef')
     : null;

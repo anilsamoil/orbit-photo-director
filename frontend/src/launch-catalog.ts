@@ -1,6 +1,6 @@
 import { parseLaunchCatalogPointer, type LaunchCatalog, type LaunchCatalogPointer } from './launch-schema';
 import { launchStore, validateLaunchBytes } from './launch-store';
-import { tiersAt, type TierCatalog } from './launch-tiers';
+import { shotForecastLabel, tiersAt, type TierCatalog } from './launch-tiers';
 
 const POINTER_PATH = '/launch/catalog/latest.json';
 const CATALOG_TIMEOUT_MS = 12_000;
@@ -12,13 +12,18 @@ function samePointer(a: LaunchCatalogPointer, b: LaunchCatalogPointer): boolean 
     && a.valid_until === b.valid_until && a.path === b.path;
 }
 
-function signature(tiers: TierCatalog | null): string {
+function signature(tiers: TierCatalog | null, now: number): string {
   if (!tiers) return '';
   const ids = (rows: readonly { eventId: string }[]) => rows.map((row) => row.eventId).join(',');
+  const forecast = tiers.pins.map((pin) => (
+    pin.tier === 'shot' ? shotForecastLabel(pin.schedule.netMs, pin.schedule.windowEndMs, now) ?? '' : ''
+  )).join(',');
   return [
     tiers.revision,
     tiers.closedLabel,
+    forecast,
     ids(tiers.pins),
+    ids(tiers.mapPins),
     ids(tiers.highlights),
     ids(tiers.upcoming),
     ids(tiers.groups.shot),
@@ -38,6 +43,21 @@ export class LaunchCatalogStore {
   private readKey = '';
 
   constructor(private fetcher: typeof fetch = (...args) => fetch(...args)) {}
+
+  acceptedPath(): string | null {
+    const path = this.held?.pointer.path;
+    return typeof path === 'string' && path.length > 0 ? path : null;
+  }
+
+  async settledPath(): Promise<string | null> {
+    let guard = 0;
+    while (this.inFlight && guard < 4) {
+      const flight = this.inFlight;
+      guard += 1;
+      await flight;
+    }
+    return this.acceptedPath();
+  }
 
   read(now: number): TierCatalog | null {
     if (!this.held) return null;
@@ -63,7 +83,7 @@ export class LaunchCatalogStore {
   }
 
   tick(now: number): void {
-    this.publish(this.read(now));
+    this.publish(this.read(now), now);
   }
 
   private emit(): void {
@@ -71,8 +91,8 @@ export class LaunchCatalogStore {
   }
 
   /** Record the projection listeners can see, and notify only when it changes. */
-  private publish(tiers: TierCatalog | null): void {
-    const key = signature(tiers);
+  private publish(tiers: TierCatalog | null, now: number): void {
+    const key = signature(tiers, now);
     if (key === this.readKey) return;
     this.readKey = key;
     this.emit();
@@ -89,7 +109,10 @@ export class LaunchCatalogStore {
       if (this.held && Date.parse(pointer.generated_at) < Date.parse(this.held.catalog.generated_at)) return;
       this.seen = pointer;
       if (this.held && samePointer(pointer, this.held.pointer)) return;
-      if (this.held) this.publish(this.read(Date.now()));
+      if (this.held) {
+        const now = Date.now();
+        this.publish(this.read(now), now);
+      }
       const bytes = await this.bytes(`/${pointer.path}`, 'force-cache', controller.signal);
       if (controller.signal.aborted) throw new Error('catalog aborted');
       const artifact = await validateLaunchBytes(pointer, bytes);
@@ -108,7 +131,10 @@ export class LaunchCatalogStore {
       const seenChanged = this.seen === null
         ? beforeSeen !== null
         : beforeSeen === null || !samePointer(this.seen, beforeSeen);
-      if (this.held !== beforeHeld || seenChanged) this.publish(this.read(Date.now()));
+      if (this.held !== beforeHeld || seenChanged) {
+        const now = Date.now();
+        this.publish(this.read(now), now);
+      }
     }
   }
 

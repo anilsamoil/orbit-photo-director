@@ -27,7 +27,11 @@ export function renderTierCard(launch: TierLaunch, onShowMap?: (eventId: string)
   const summary = document.createElement('div');
   summary.className = 'launch-summary';
   row(summary, 'Tier', tierWord(launch.tier));
+  row(summary, 'Vehicle', launch.rocket);
   row(summary, 'Site', launch.site.name);
+  if (launch.site.pad) row(summary, 'Pad', launch.site.pad);
+  row(summary, 'Status', launch.schedule.status.toUpperCase() === 'TBC' ? 'TBC · Tentative' : launch.schedule.status);
+  row(summary, 'Time precision', launch.schedule.precision ?? 'Unknown');
   for (const fact of tierScheduleFacts(launch)) row(summary, fact.label, fact.text);
   const why = document.createElement('p');
   why.textContent = launch.why;
@@ -80,7 +84,11 @@ export function openTierDetails(launch: TierLaunch): void {
       return;
     }
     row(content, 'Tier', tierWord(current.tier));
+    row(content, 'Vehicle', current.rocket);
     row(content, 'Site', current.site.name);
+    if (current.site.pad) row(content, 'Pad', current.site.pad);
+    row(content, 'Status', current.schedule.status.toUpperCase() === 'TBC' ? 'TBC · Tentative' : current.schedule.status);
+    row(content, 'Time precision', current.schedule.precision ?? 'Unknown');
     for (const fact of tierScheduleFacts(current)) row(content, fact.label, fact.text);
     const why = document.createElement('p');
     why.textContent = current.why;

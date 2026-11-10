@@ -161,7 +161,7 @@ describe('Feature C, live IR overlay', () => {
     expect(irTiles()).toEqual([[GOES_EAST_1140]]);
     panTo(140, 0);
     expect(irTiles()).toEqual([[GOES_EAST_1140], [HIMAWARI_1140]]);
-    expect(badge()).toBe('IR · Himawari · ~30m old · misses low cloud');
+    expect(badge()).toBe('IR · Himawari · frame 11:40 UTC · ~30m old · misses low cloud');
   });
 
   it('hides the raster in a no-coverage gap and says so in the badge, instead of blank or stale tiles (R7)', async () => {
@@ -182,29 +182,29 @@ describe('Feature C, live IR overlay', () => {
     await mapModule.renderMap(MANIFEST_FIXTURE);
     renderedMap().center = { lng: -75, lat: 0 };
     click('toggle-ir');
-    expect(badge()).toBe('IR · GOES-East · ~30m old · misses low cloud');
+    expect(badge()).toBe('IR · GOES-East · frame 11:40 UTC · ~30m old · misses low cloud');
   });
 
   it('serves Meteosat from RealEarth and badges it "latest", not a false age', async () => {
     await mapModule.renderMap(MANIFEST_FIXTURE);
     click('toggle-ir');
     expect(irTiles()).toEqual([[METEOSAT_LATEST_1140]]);
-    expect(badge()).toBe('IR · Meteosat-11 · latest · misses low cloud');
+    expect(badge()).toBe('IR · Meteosat-11 · latest · frame time unavailable · misses low cloud');
   });
 
   it('badges LIVE now under a scrubbed view, never as a forecast for the scrubbed time (Codex #2)', async () => {
     await mapModule.renderMap(MANIFEST_FIXTURE);
     click('toggle-ir');
     mapModule.setLookahead(360, false);
-    expect(badge()).toBe('IR · Meteosat-11 · LIVE now (not the scrubbed time) · misses low cloud');
+    expect(badge()).toBe('IR · Meteosat-11 · latest · frame time unavailable · LIVE now (not the scrubbed time) · misses low cloud');
     mapModule.setLookahead(0, false);
-    expect(badge()).toBe('IR · Meteosat-11 · latest · misses low cloud');
+    expect(badge()).toBe('IR · Meteosat-11 · latest · frame time unavailable · misses low cloud');
   });
 
   it('a persisted IR-on session badges the covering satellite on first paint, not a false no-coverage flash (Codex #3)', async () => {
     await importWithStoredPrefs({ 'opd-map-ir-visible': '1' });
     await mapModule.renderMap(MANIFEST_FIXTURE);
-    expect(badge()).toBe('IR · Meteosat-11 · latest · misses low cloud');
+    expect(badge()).toBe('IR · Meteosat-11 · latest · frame time unavailable · misses low cloud');
     expect(renderedMap().visibilityOf('geo-ir-layer')).toBe('visible');
     expect(irTiles()).toEqual([[METEOSAT_LATEST_1140]]);
   });
@@ -216,10 +216,10 @@ describe('Feature C, live IR overlay', () => {
     expect(irTiles()).toEqual([[GOES_EAST_1140]]);
     vi.advanceTimersByTime(8 * 60_000);
     expect(irTiles()).toEqual([[GOES_EAST_1140]]);
-    expect(badge()).toBe('IR · GOES-East · ~38m old · misses low cloud');
+    expect(badge()).toBe('IR · GOES-East · frame 11:40 UTC · ~38m old · misses low cloud');
     vi.advanceTimersByTime(2 * 60_000);
     expect(irTiles()).toEqual([[GOES_EAST_1140], [GOES_EAST_1150]]);
-    expect(badge()).toBe('IR · GOES-East · ~30m old · misses low cloud');
+    expect(badge()).toBe('IR · GOES-East · frame 11:50 UTC · ~30m old · misses low cloud');
   });
 
   it('reports "feed unavailable" when the map idles with IR on and nothing loaded, and clears it on the first loaded tile (Codex)', async () => {
@@ -230,9 +230,9 @@ describe('Feature C, live IR overlay', () => {
     renderedMap().fire('idle');
     expect(badge()).toBe('IR · Meteosat-11 · feed unavailable');
     renderedMap().fire('data', { sourceId: 'geo-ir', tile: { state: 'loaded' } });
-    expect(badge()).toBe('IR · Meteosat-11 · latest · misses low cloud');
+    expect(badge()).toBe('IR · Meteosat-11 · latest · frame time unavailable · misses low cloud');
     renderedMap().fire('idle');
-    expect(badge()).toBe('IR · Meteosat-11 · latest · misses low cloud');
+    expect(badge()).toBe('IR · Meteosat-11 · latest · frame time unavailable · misses low cloud');
   });
 
   it('the dock button is shipped inactive in index.html and reflects the IR state once bound', async () => {

@@ -52,7 +52,8 @@ export interface TierLaunch {
   readonly eventId: string;
   readonly revision: string;
   readonly name: string;
-  readonly site: { readonly name: string; readonly lat: number; readonly lon: number };
+  readonly rocket: string;
+  readonly site: { readonly name: string; readonly lat: number; readonly lon: number; readonly pad: string | null };
   readonly tier: Tier;
   readonly why: string;
   readonly reasons: readonly string[];
@@ -66,6 +67,7 @@ export interface TierLaunch {
 export interface TierCatalog {
   readonly revision: string;
   readonly pins: readonly Highlight[];
+  readonly mapPins: readonly TierLaunch[];
   readonly upcoming: readonly Highlight[];
   readonly highlights: readonly Highlight[];
   readonly groups: {
@@ -91,6 +93,15 @@ export function tierWord(tier: Tier): string {
   return 'No shot';
 }
 
+const SHOT_FORECAST_MS = 48 * 60 * 60 * 1000;
+
+export function shotForecastLabel(netMs: number, windowEndMs: number | null, now: number): string | null {
+  const liftoff = windowEndMs !== null && windowEndMs >= netMs ? windowEndMs : netMs;
+  const remaining = liftoff - now;
+  if (!Number.isFinite(remaining) || remaining <= 0 || remaining > SHOT_FORECAST_MS) return null;
+  return 'Shot (forecast)';
+}
+
 export function monthDay(ms: number): string {
   const date = new Date(ms);
   return `${MONTHS[date.getUTCMonth()]} ${date.getUTCDate()}`;
@@ -112,6 +123,17 @@ export function tierLabel(launch: TierLaunch): string {
 
 export function scheduleLabel(launch: TierLaunch): string {
   return `${launch.name} · ${launch.site.name} · ${monthDay(launch.schedule.netMs)}`;
+}
+
+/** Native select typeahead matches prefixes; aliases keep the same option value. */
+export function launchPickerLabels(name: string, label: string): string[] {
+  const code = missionCode(name);
+  const spx = /^SpX-(\d+)$/i.exec(code);
+  if (!spx || !/\bCRS(?:-\d+)?\b/i.test(name)) return [label];
+  const aliases = [code, `CRS-${spx[1]}`];
+  return [label, ...aliases
+    .filter((alias) => !label.toLowerCase().startsWith(alias.toLowerCase()))
+    .map((alias) => `${alias} · ${label}`)];
 }
 
 function instant(value: string | null): number | null {
@@ -187,7 +209,8 @@ function toTierLaunch(item: LaunchCatalogItem): TierLaunch {
     eventId: item.event_id,
     revision: item.revision,
     name: item.name,
-    site: { name: item.site.name, lat: item.site.lat, lon: item.site.lon },
+    rocket: item.rocket,
+    site: { name: item.site.name, lat: item.site.lat, lon: item.site.lon, pad: item.site.pad ?? null },
     tier: item.tier,
     why: item.why,
     reasons: item.reasons.slice(),
@@ -233,12 +256,21 @@ function byNet(a: TierLaunch, b: TierLaunch): number {
 }
 
 function passesAll(launch: TierLaunch, now: number): boolean {
-  if (launch.tier === 'none') return false;
+  if (launch.tier === 'none' || launch.schedule.netMs < now) return false;
+  return passesSchedule(launch, now, ALL_LAUNCHES_HORIZON_MS);
+}
+
+function passesMapSchedule(launch: TierLaunch, now: number): boolean {
+  return ['go', 'confirmed', 'tbc'].includes(launch.schedule.status.toLowerCase())
+    && passesSchedule(launch, now, LAUNCH_MAP_HORIZON_MS);
+}
+
+function passesSchedule(launch: TierLaunch, now: number, horizon: number): boolean {
   if (launch.reasons.includes('LAUNCH_UNCONFIRMED')) return false;
   const precision = launch.schedule.precision?.toLowerCase() ?? '';
   if (!SCHEDULE_PRECISION.has(precision)) return false;
   const net = launch.schedule.netMs;
-  if (!Number.isFinite(net) || net < now || net > now + ALL_LAUNCHES_HORIZON_MS) return false;
+  if (!Number.isFinite(net) || net > now + horizon) return false;
   const end = launch.schedule.windowEndMs ?? net;
   return end > now;
 }
@@ -336,12 +368,17 @@ export function tiersAt(catalog: LaunchCatalog, now: number): TierCatalog | null
     .filter((launch) => launch.tier === 'watch' && Number.isFinite(launch.schedule.netMs) && launch.schedule.netMs <= now + ALL_LAUNCHES_HORIZON_MS)
     .sort(byWhen);
   const all = live.filter((launch) => passesAll(launch, now)).sort(byNet);
+  const pinnedIds = new Set(pins.map((launch) => launch.eventId));
+  const mapPins = [...pins, ...live
+    .filter((launch) => !pinnedIds.has(launch.eventId) && passesMapSchedule(launch, now))
+    .sort(byNet)];
   const lookup = new Map<string, TierLaunch>();
-  for (const launch of [...pins, ...watch, ...all]) lookup.set(launch.eventId, launch);
+  for (const launch of [...mapPins, ...watch, ...all]) lookup.set(launch.eventId, launch);
   const top = highlights[0];
   return {
     revision: catalog.revision,
     pins,
+    mapPins,
     upcoming,
     highlights,
     groups: {

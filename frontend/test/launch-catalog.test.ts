@@ -2,10 +2,11 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { LaunchCatalogStore } from '../src/launch-catalog';
+import { launchCatalog, LaunchCatalogStore } from '../src/launch-catalog';
 import { parseLaunchArtifact, parseLaunchCatalogPointer, parseLaunchPointer } from '../src/launch-schema';
 import { LaunchStore, LAUNCH_STORAGE_KEY, validateLaunchBytes } from '../src/launch-store';
-import { catalog, envelope, iso, NOW } from './launch-fixtures';
+import { renderMapLaunchBrief } from '../src/launch-map-brief';
+import { catalog, catalogItem, envelope, iso, NOW, state } from './launch-fixtures';
 
 beforeEach(() => localStorage.clear());
 
@@ -99,9 +100,47 @@ describe('launch catalog store', () => {
     expect(tiers?.groups.watch.map((launch) => launch.eventId)).toEqual(['event-1']);
     expect(tiers?.pins).toEqual([]);
     expect(fetcher).toHaveBeenCalledWith(`/${packed.pointer.path}`, expect.objectContaining({ cache: 'force-cache' }));
+    expect(store.acceptedPath()).toBe(packed.pointer.path);
     expect(parseLaunchCatalogPointer(packed.pointer).path).toBe('launch/catalog/v/r1.json');
     expect(() => parseLaunchPointer(packed.pointer)).toThrow();
     expect(() => parseLaunchCatalogPointer({ ...packed.pointer, path: 'launch/v/r1.json' })).toThrow();
+  });
+
+  it('settledPath returns the catalog that lands after an in-flight refresh', async () => {
+    const held = await catalogEnvelope(catalog([], { revision: 'c1000-1', generated_at: iso(-1) }));
+    const next = await catalogEnvelope(catalog([], { revision: 'c2000-1', generated_at: iso(0) }));
+    const hold: { release: (() => void) | null } = { release: null };
+    let phase: 'held' | 'next' = 'held';
+    const store = new LaunchCatalogStore(vi.fn(async (input: RequestInfo | URL) => {
+      const path = requestPath(input);
+      const packed = phase === 'held' ? held : next;
+      if (path !== '/launch/catalog/latest.json' && phase === 'next') {
+        await new Promise<void>((resolve) => {
+          hold.release = resolve;
+        });
+      }
+      const body = path === '/launch/catalog/latest.json' ? JSON.stringify(packed.pointer) : packed.text;
+      return new Response(body, { status: 200, headers: jsonHeaders });
+    }));
+    await store.refresh(true);
+    expect(store.acceptedPath()).toBe('launch/catalog/v/c1000-1.json');
+    phase = 'next';
+    const refreshing = store.refresh(true);
+    let landed = false;
+    const pending = store.settledPath().then((value) => {
+      landed = true;
+      return value;
+    });
+    await vi.waitFor(() => {
+      if (hold.release === null) throw new Error('catalog body has not started');
+    });
+    expect(landed).toBe(false);
+    expect(store.acceptedPath()).toBe('launch/catalog/v/c1000-1.json');
+    const release = hold.release;
+    if (release === null) throw new Error('catalog body has not started');
+    release();
+    await refreshing;
+    await expect(pending).resolves.toBe('launch/catalog/v/c2000-1.json');
   });
 
   it('does not hold a schema 2 body or a hash mismatch', async () => {
@@ -124,6 +163,26 @@ describe('launch catalog store', () => {
     await mismatch.refresh(true);
     expect(mismatch.read(NOW)).toBeNull();
     await expect(validateLaunchBytes(packed.pointer, new TextEncoder().encode(`${packed.text} `).buffer)).rejects.toThrow(/hash/i);
+  });
+
+  it('publishes expiry of a map-only schedule even when no photography or ISS selection changes', async () => {
+    const item = catalogItem({
+      tier: 'none', shots: [],
+      schedule: { net: iso(1), window_start: iso(1), window_end: iso(2), precision: 'Minute', status: 'Go', destination: null },
+    });
+    const packed = await catalogEnvelope(catalog([item]));
+    const store = new LaunchCatalogStore(catalogFetcher(packed));
+    vi.spyOn(Date, 'now').mockReturnValue(NOW);
+    const changed = vi.fn();
+    store.subscribe(changed);
+    await store.refresh();
+    expect(store.read(NOW)?.mapPins).toHaveLength(1);
+    expect(store.read(NOW)?.all).toEqual([]);
+    changed.mockClear();
+    store.tick(NOW + 2 * 60_000);
+    expect(changed).toHaveBeenCalledOnce();
+    expect(store.read(NOW + 2 * 60_000)?.mapPins).toEqual([]);
+    vi.restoreAllMocks();
   });
 
   it('ignores an older pointer and drops the hold when the pointer changes during download', async () => {
@@ -195,6 +254,55 @@ describe('launch catalog store', () => {
     await bothStore.refresh(true);
     expect(bothStore.read(NOW)).toBeNull();
     expect(bothStore.read(Date.parse(iso(-2)))?.revision).toBe('r1');
+  });
+
+  it('notifies an open map when a Shot crosses the 48 hour forecast label', async () => {
+    const net = Date.parse('2026-10-13T10:33:44Z');
+    const early = net - 48 * 60 * 60 * 1000 - 1000;
+    const at = net - 48 * 60 * 60 * 1000;
+    const generated = early - 60_000;
+    const body = catalog([
+      catalogItem({
+        event_id: 'bf2c3027-a314-403e-a416-2bfd5d165ad1',
+        name: 'Falcon 9 Block 5 | Dragon CRS-2 SpX-35',
+        tier: 'shot',
+        schedule: {
+          net: '2026-10-13T10:33:44Z',
+          window_start: '2026-10-13T10:33:44Z',
+          window_end: '2026-10-13T10:33:44Z',
+          precision: 'Second',
+          status: 'Go',
+          destination: 'ISS',
+        },
+      }),
+    ], {
+      generated_at: new Date(generated).toISOString(),
+      schedule_valid_until: new Date(generated + 75 * 60_000).toISOString(),
+      geometry_valid_until: new Date(generated + 15 * 60_000).toISOString(),
+    });
+    const store = new LaunchCatalogStore(catalogFetcher(await catalogEnvelope(body)));
+    await store.refresh(true);
+    const summaries: string[] = [];
+    let view = early;
+    store.subscribe(() => {
+      const tiers = store.read(view);
+      const container = document.createElement('div');
+      const read = vi.spyOn(launchCatalog, 'read').mockReturnValue(tiers);
+      try {
+        renderMapLaunchBrief(container, state(), view, () => undefined);
+      } finally {
+        read.mockRestore();
+      }
+      const text = container.querySelector('.map-launch-primary > summary')?.textContent;
+      if (text) summaries.push(text);
+    });
+    store.tick(view);
+    view = at;
+    store.tick(view);
+    expect(summaries).toEqual([
+      'Next launch · Shot',
+      'Next launch · Shot (forecast)',
+    ]);
   });
 
   it('ticks only when the read signature changes', async () => {

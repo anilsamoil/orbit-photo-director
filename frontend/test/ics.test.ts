@@ -153,4 +153,13 @@ describe('buildIcs', () => {
     const ics = buildIcs([entry({ target_id: 'personal:anil:a b' })], NOW, 0);
     expect(ics).toContain('?target=personal%3Aanil%3Aa%20b');
   });
+
+  it('uses the page host in the deep link and keeps the stable uid domain', () => {
+    const ics = buildIcs([entry({ minutesOut: 30 })], NOW, 0, 'https://map.expedition75.com');
+    const unfolded = ics.replace(/\r\n /g, '');
+    expect(unfolded).toContain('URL:https://map.expedition75.com/?target=tokyo');
+    expect(unfolded).toContain('Open: https://map.expedition75.com/?target=tokyo');
+    expect(ics).toContain('@map.astroanil.dev');
+    expect(unfolded).not.toContain('https://map.astroanil.dev/');
+  });
 });

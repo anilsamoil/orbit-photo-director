@@ -158,6 +158,8 @@ describe('renderMap bring-up', () => {
   it('binds the interaction handlers the map needs to answer a tap', async () => {
     await mapModule.renderMap(MANIFEST_FIXTURE);
     expect(renderedMap().handlers.map((entry) => `${entry.event}:${entry.layerId ?? '*'}`)).toEqual([
+      'movestart:*',
+      'moveend:*',
       'error:*',
       'click:*',
       'mouseenter:targets-layer',
@@ -170,6 +172,8 @@ describe('renderMap bring-up', () => {
       'styledata:*',
       'dragstart:*',
       'zoomstart:*',
+      'rotatestart:*',
+      'moveend:*',
       'error:*',
       'moveend:*',
       'data:*',
@@ -182,6 +186,7 @@ describe('renderMap bring-up', () => {
       'mouseenter:dropped-pin-layer',
       'mouseleave:dropped-pin-layer',
       'error:*',
+      'moveend:*',
     ]);
   });
 

@@ -350,13 +350,36 @@ R2 user API tokens don't expire by default but Cloudflare may revoke them if the
 If the calibration token leaks (it lives in browser localStorage, plaintext), rotate:
 
 1. Generate a new token: `python3 -c "import secrets; print(secrets.token_hex(32))"` (copy output).
-2. Set on Worker:
+2. Set the Worker secret, then deploy with the human email list and the service-token client ids.
+   Copy `ACCESS_ALLOWED_EMAILS` from the map Access application's Allow policy at deploy time, comma-separated.
+   Keep that env var and the dashboard list the same.
+   A bare `wrangler deploy` clears `ACCESS_ALLOWED_EMAILS` and `ACCESS_SERVICE_TOKEN_CLIENT_IDS`.
+   An empty `ACCESS_ALLOWED_EMAILS` makes `deploy.sh` exit 2.
+   A value that is only spaces, including Unicode spaces, or commas is empty too.
+   `--dry-run` with an empty list exits 2 and does not call wrangler.
+   `deploy.sh` reads `ACCESS_ALLOWED_EMAILS` and `ACCESS_SERVICE_TOKEN_CLIENT_IDS` from the environment.
+   Node.js 16.17.0 or newer must be on PATH. That is the minimum Wrangler accepts. If `node` is missing, `deploy.sh` exits 127. `deploy.sh` parses the email list with `node`. After `email-allowlist.mjs` has loaded, that process stops the parse after 10 seconds if the read does not finish, and `deploy.sh` exits 2. Node startup and the static import of `email-allowlist.mjs` are not covered. A hang there stops when you press Ctrl-C. Ctrl-C signals the whole foreground process group, so `node` dies with the script and wrangler does not run. A HUP, INT, or TERM sent only to the `deploy.sh` pid waits until `node` finishes or that 10 second timer fires. The script then exits 129, 130, or 143, and wrangler does not run.
+   The email list is the `--var` immediately before the client ids.
+   The wrapper accepts only `--dry-run`, `--env <name>`, `--env=<name>`, `--config <path>`, and `--config=<path>`.
+   Any caller `--var`, any other flag, any positional argument, and `--` make it exit before wrangler runs.
+   Replace the values below with every allowed mailbox and every client id, comma-separated. Leave the client secret out.
+
    ```bash
    cd ~/orbit-photo-director/worker
    echo "NEW_TOKEN_HERE" | wrangler secret put CALIB_TOKEN
-   wrangler deploy
+   ACCESS_ALLOWED_EMAILS='person@example.com, other@example.com' \
+   ACCESS_SERVICE_TOKEN_CLIENT_IDS='CLIENT_ID_ONE,CLIENT_ID_TWO' ./deploy.sh
    ```
-3. Update credentials.json:
+3. Confirm the service token. `/api/health` returns 200. Any other path returns 401.
+   ```bash
+   curl -s -o /dev/null -w '%{http_code}\n' \
+     -H "Cf-Access-Jwt-Assertion: $SERVICE_JWT" \
+     https://map.astroanil.dev/api/health
+   curl -s -o /dev/null -w '%{http_code}\n' \
+     -H "Cf-Access-Jwt-Assertion: $SERVICE_JWT" \
+     https://map.astroanil.dev/
+   ```
+4. Update credentials.json:
    ```bash
    python3 -c "
    import json, os
@@ -368,7 +391,7 @@ If the calibration token leaks (it lives in browser localStorage, plaintext), ro
    os.chmod(p, 0o600)
    "
    ```
-4. **Important**: any browser that previously visited `map.astroanil.dev` has the OLD token in localStorage. The `/api/log` Worker will return 401 on those POSTs and the frontend (per its hardening) will clear the token + show the setup banner. The astronaut needs to paste the new token into localStorage on the ISS-side device:
+5. **Important**: any browser that previously visited `map.astroanil.dev` has the OLD token in localStorage. The `/api/log` Worker will return 401 on those POSTs and the frontend (per its hardening) will clear the token + show the setup banner. The astronaut needs to paste the new token into localStorage on the ISS-side device:
    ```js
    // In browser DevTools console on map.astroanil.dev:
    localStorage.setItem('opd-calib-token', 'NEW_TOKEN_HERE');

@@ -49,6 +49,7 @@ describe('construction', () => {
       zoom: 4,
       attributionControl: false,
       renderWorldCopies: true,
+      bearingSnap: 0,
       dragPan: true,
       dragRotate: true,
       scrollZoom: true,
@@ -239,6 +240,14 @@ describe('input', () => {
     map.fire('zoomstart', {});
     map.fire('zoomstart', undefined);
     expect(zooms).toEqual([{ byUser: true }, { byUser: false }, { byUser: false }]);
+  });
+
+  it('tells a user rotate from a programmatic one by the presence of an original event', () => {
+    const rotates: unknown[] = [];
+    vendor.on('rotatestart', (rotate) => rotates.push(rotate));
+    map.fire('rotatestart', { originalEvent: new Event('pointerdown') });
+    map.fire('rotatestart', {});
+    expect(rotates).toEqual([{ byUser: true }, { byUser: false }]);
   });
 
   it('reads the source id off error and data events, and whether a tile loaded', () => {

@@ -85,5 +85,7 @@ export function bindLegendDisclosure(root?: ParentNode | null): void {
     if (event.repeat) return;
     applyLegendDisclosure(button, readLegendDisclosure(button) === 'expanded' ? 'collapsed' : 'expanded');
   });
-  window.addEventListener('pageshow', collapse);
+  window.addEventListener('pageshow', event => {
+    if (event.persisted) collapse();
+  });
 }

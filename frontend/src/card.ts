@@ -146,8 +146,12 @@ export function renderCard(
   // v1.3.1 always returns 0; this short-circuits silently). Source text
   // differentiates observed vs forecast.
   if (typeof p.lightning_potential === 'number' && p.lightning_potential > 0.05) {
-    const obs = p.lightning_source === 'glm' || p.lightning_source === 'blitzortung';
-    const label = obs ? '⚡ lightning observed' : '⚡ lightning forecast';
+    const source = p.lightning_source ?? '';
+    const observedSource = p.lightning_observed_at !== undefined
+      || source === 'blitzortung' || /^glm(?:-\d+m)?$/.test(source);
+    const obs = observedSource
+      && p.flash_rate_per_min !== 0;
+    const label = obs ? '⚡ observed lightning flashes' : '⚡ lightning forecast';
     meta.appendChild(makeTag('weather-lightning', label));
   }
   // 🌀 hurricane tag: real-data even in v1.3.1 (NHC tracker is shipped).

@@ -25,7 +25,8 @@ import { formatTrackOffset } from './track-offset';
 import type { ShotlistEntry } from './shotlist';
 
 const PRODID = '-//orbit-photo-director//shot-list reminders//EN';
-const APP_URL = 'https://map.astroanil.dev/';
+const DEFAULT_APP_ORIGIN = 'https://map.astroanil.dev';
+const UID_DOMAIN = 'map.astroanil.dev';
 /** −5 min reminder, in ms. A pass closer than this exports with only the
  *  at-time alarm (a −5min trigger already in the past is dropped/ignored by
  *  calendars and would mislead the operator). */
@@ -99,21 +100,21 @@ function direction(e: ShotlistEntry): string {
   return formatTrackOffset(off, bearing);
 }
 
-function buildVevent(e: ShotlistEntry, closestMs: number, nowMs: number, sequence: number): string[] {
+function buildVevent(e: ShotlistEntry, closestMs: number, nowMs: number, sequence: number, pageOrigin: string): string[] {
   const dir = direction(e);
   const win =
     typeof e.angle_off_nadir_deg === 'number' && Number.isFinite(e.angle_off_nadir_deg)
       ? windowLabel(e.angle_off_nadir_deg)
       : '';
   const summary = `📸 ${e.target_name}${dir ? ` — ${dir}` : ''}`;
-  const deepLink = `${APP_URL}?target=${encodeURIComponent(e.target_id)}`;
+  const deepLink = `${pageOrigin.replace(/\/$/, '')}/?target=${encodeURIComponent(e.target_id)}`;
   const descParts = [dir, win ? `${win} window` : '', `Open: ${deepLink}`]
     .filter(Boolean)
     .join('. ');
 
   const lines: string[] = [
     'BEGIN:VEVENT',
-    `UID:${e.target_id}-${e.closest_approach}@map.astroanil.dev`,
+    `UID:${e.target_id}-${e.closest_approach}@${UID_DOMAIN}`,
     `DTSTAMP:${formatUtcStamp(nowMs)}`,
     `DTSTART:${formatUtcStamp(closestMs)}`,
     'DURATION:PT2M',
@@ -150,12 +151,17 @@ function buildVevent(e: ShotlistEntry, closestMs: number, nowMs: number, sequenc
  *  is already in the past are skipped (a reminder for a pass that already
  *  happened is noise). `sequence` should increase on each export so re-imports
  *  update rather than duplicate. Returns '' when nothing is exportable. */
-export function buildIcs(entries: ShotlistEntry[], nowMs: number, sequence = 0): string {
+export function buildIcs(
+  entries: ShotlistEntry[],
+  nowMs: number,
+  sequence = 0,
+  pageOrigin = DEFAULT_APP_ORIGIN,
+): string {
   const events: string[] = [];
   for (const e of entries) {
     const closestMs = Date.parse(e.closest_approach);
     if (Number.isNaN(closestMs) || closestMs <= nowMs) continue; // skip past / unparseable
-    events.push(...buildVevent(e, closestMs, nowMs, sequence));
+    events.push(...buildVevent(e, closestMs, nowMs, sequence, pageOrigin));
   }
   if (events.length === 0) return '';
 
