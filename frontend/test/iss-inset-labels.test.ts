@@ -17,12 +17,21 @@ vi.mock('maplibre-gl', () => {
     loaded(): boolean {
       return !(globalThis as { __holdIssIdle?: boolean }).__holdIssIdle;
     }
-    once(): void {}
+    once(event: string, callback: () => void): void {
+      if (event === 'idle') (globalThis as { __issFinishIdle?: () => void }).__issFinishIdle = callback;
+    }
     on(): void {}
     setMaxPitch(): void {}
     fov = 36.87;
+    roll = 0;
     setVerticalFieldOfView(value: number): void { this.fov = value; }
     getVerticalFieldOfView(): number { return this.fov; }
+    getRoll(): number { return (globalThis as { __issAppliedRoll?: number }).__issAppliedRoll ?? this.roll; }
+    jumpTo(camera?: { roll?: number }): void {
+      if ((globalThis as { __issKeepRoll?: boolean }).__issKeepRoll) return;
+      const roll = camera?.roll;
+      if (typeof roll === 'number' && Number.isFinite(roll)) this.roll = roll;
+    }
     getPixelRatio(): number { return 1; }
     setPixelRatio(): void {}
     resize(): void {}
@@ -30,7 +39,6 @@ vi.mock('maplibre-gl', () => {
     addSource(): void {}
     addLayer(): void {}
     calculateCameraOptionsFromTo(): { center: number[] } { return { center: [0, 0] }; }
-    jumpTo(): void {}
     isMoving(): boolean { return false; }
     remove(): void {}
     getCanvas(): { clientWidth: number; clientHeight: number } {
@@ -155,4 +163,64 @@ describe('horizon inset labels', () => {
       delete (globalThis as { __holdIssIdle?: boolean }).__holdIssIdle;
     }
   });
+
+  it('does not confirm the field before the camera roll is applied', async () => {
+    (globalThis as { __issKeepRoll?: boolean }).__issKeepRoll = true;
+    try {
+      vi.stubGlobal('fetch', fetchMock);
+      const { createIssRenderer } = await import('../src/map/adapters/maplibre/iss-view');
+      const frame = document.createElement('div');
+      document.body.append(frame);
+      const renderer = createIssRenderer(frame, {
+        onImagery() {},
+        onContextLost() {},
+      }, { labels: false });
+      let applied: number | null = null;
+      await renderer.aim({
+        ...sampleAim(),
+        fovEpoch: 4,
+        onCamera(degrees) {
+          applied = degrees;
+        },
+      });
+      expect(applied).toBeNull();
+      renderer.destroy();
+    } finally {
+      delete (globalThis as { __issKeepRoll?: boolean }).__issKeepRoll;
+    }
+  });
+
+  it('confirms a deferred earth-view camera when idle first exposes its applied roll', async () => {
+    const globals = globalThis as {
+      __holdIssIdle?: boolean;
+      __issKeepRoll?: boolean;
+      __issAppliedRoll?: number;
+      __issFinishIdle?: () => void;
+    };
+    globals.__holdIssIdle = true;
+    globals.__issKeepRoll = true;
+    const { createIssRenderer } = await import('../src/map/adapters/maplibre/iss-view');
+    const renderer = createIssRenderer(document.createElement('div'), {
+      onImagery() {},
+      onContextLost() {},
+    }, { labels: false });
+    try {
+      const confirm = vi.fn();
+      const pending = renderer.aim({ ...sampleAim(), fovEpoch: 8, onCamera: confirm });
+      expect(confirm).not.toHaveBeenCalled();
+      globals.__issAppliedRoll = 180;
+      expect(globals.__issFinishIdle).toBeTypeOf('function');
+      globals.__issFinishIdle?.();
+      await pending;
+      expect(confirm).toHaveBeenCalledOnce();
+      expect(confirm).toHaveBeenCalledWith(60, 8, 180);
+    } finally {
+      renderer.destroy();
+      delete globals.__holdIssIdle;
+      delete globals.__issKeepRoll;
+      delete globals.__issAppliedRoll;
+      delete globals.__issFinishIdle;
+    }
+  });
+
 });

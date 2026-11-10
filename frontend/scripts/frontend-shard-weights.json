@@ -74,6 +74,7 @@
   "test/iss-view-model.test.ts": 0.479,
   "test/iss-view-nav-race.test.ts": 1.228,
   "test/iss-view-nav.test.ts": 1.142,
+  "test/iss-view-recovery.test.ts": 1,
   "test/iss-view-split.test.ts": 0.573,
   "test/iss.test.ts": 0.439,
   "test/kml.test.ts": 0.436,
