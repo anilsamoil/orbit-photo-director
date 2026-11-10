@@ -12,7 +12,7 @@ import {
   AUDITED_RASTER_LEVELS, auditRasterLevels, captureEnvironmentOk, countryStyleVerdict, countrySweepZooms,
   anchorOnPlan, auditedNameCandidates, auditedNameReadable, clippedRasterRemnant, completeNameCount, imageryRegionDiff, imageryLabelRegions, imageryViewport, labelScreenVerdict, labelTile, loadCountryRasterLevels, loadCountrySymbolLayers, nameCountOk, oneNameSource, pairedRasterNames, planCameraContract, planContractForDrive, planLabelReaders, planLabelVerdict, rasterDuplicateVerdict, rasterNameEvidence, rasterPainted, RASTER_PAIR_TOLERANCE, symbolCrossesEdge,
 } from './plan-label-verdict.mjs';
-import { acceptPlanSweepRow, assertPlanLabelChecks } from './drive.mjs';
+import { acceptPlanSweepRow, assertPlanLabelChecks, labelsForCapture } from './drive.mjs';
 
 test('an exact sovereign name is not vetoed by an unrelated adjective', () => {
   assert.equal(rasterPainted('AUSTRALIA\nGreat Australian Bight', 'Australia'), true);
@@ -611,7 +611,22 @@ test('a low-zoom sweep rejects an empty list only on a camera that expects names
     country: 'France',
     names: [],
     mainNames: [],
+    mainTilesOk: true,
+    mainCameraOk: true,
   });
+  assert.throws(() => acceptPlanSweepRow({
+    cameraOk: true,
+    tilesOk: true,
+    mainTilesOk: false,
+    mainCameraOk: true,
+    tileZ: labelTile(2.5),
+    zoom: 2.5,
+    requestedZoom: 2.5,
+    center: [2, 46],
+    country: 'France',
+    names: ['France'],
+    mainNames: ['France'],
+  }), /plan label tiles/);
   assert.throws(() => acceptPlanSweepRow({
     cameraOk: true,
     tilesOk: true,
@@ -907,6 +922,43 @@ test('imagery label regions fail the Kenya edits, towns, and rotated look-alikes
     }
   }
   assert.deepEqual(missed, []);
+});
+
+test('a capture snapshot rejects France when the settled source says EGYPT', () => {
+  const canvas = { left: 0, top: 0, right: 400, bottom: 300 };
+  const box = { left: 40, top: 40, right: 120, bottom: 70 };
+  const place = (name) => ({ labels: [{ name, opacity: 1, box }], canvas, chrome: [] });
+  const early = {
+    names: ['France', 'Kenya'],
+    placement: place('France'),
+    zoom: 2.5,
+    center: [2, 46],
+    cameraOk: true,
+  };
+  const shot = {
+    evidence: {
+      names: ['EGYPT', 'Kenya'],
+      placement: place('EGYPT'),
+      zoom: 2.5,
+      center: [2, 46],
+      showsSame: false,
+      cameraOk: true,
+    },
+  };
+  const merged = labelsForCapture(early, shot);
+  assert.notDeepEqual(merged.names, early.names);
+  assert.throws(() => assertPlanLabelChecks({
+    tilesOk: true,
+    tileZ: labelTile(2.5),
+    zoom: merged.zoom,
+    country: 'France',
+    center: merged.center,
+    names: merged.names,
+    cameraOk: true,
+    requestedZoom: 2.5,
+    headPlacement: merged.placement,
+    mainPlacement: place('France'),
+  }), /plan label/);
 });
 
 test('historical plan captures stay incomplete and a new capture needs a full environment record', () => {

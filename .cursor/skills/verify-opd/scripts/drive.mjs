@@ -6970,10 +6970,50 @@ function planReleaseRasterCamera(map) {
   }
 }
 const PLAN_REPAINT_IDLE_MS = 2000;
+function planMotionSettled(map) {
+  const style = map.style || {};
+  if (typeof style.hasTransitions === 'function' && style.hasTransitions()) return false;
+  const placement = style.placement;
+  if (placement && typeof placement.hasTransitions === 'function' && placement.hasTransitions()) return false;
+  if (placement && placement.dirty === true) return false;
+  const source = typeof map.getSource === 'function' ? map.getSource('inset-countries') : null;
+  if (source && typeof source.loaded === 'function' && source.loaded() === false) return false;
+  return true;
+}
+function planSourceGeneration(map) {
+  const source = typeof map.getSource === 'function' ? map.getSource('inset-countries') : null;
+  if (!source) return 'none';
+  if (source._opdGeneration != null) return String(source._opdGeneration);
+  try { return JSON.stringify(source._data || source.data || null); } catch (error) { return 'unreadable'; }
+}
+function planFullReady(map) {
+  return planRasterReady(map)
+    && planMotionSettled(map)
+    && typeof map.loaded === 'function' && map.loaded() === true
+    && typeof map.areTilesLoaded === 'function' && map.areTilesLoaded() === true;
+}
+async function planReadEvidence(map) {
+  const center = typeof map.getCenter === 'function' ? map.getCenter() : null;
+  const camera = map.__opdRasterCamera;
+  const matched = camera
+    ? planCameraMatches(map, camera)
+    : { ok: true, zoom: map.getZoom(), center: center ? [center.lng, center.lat] : null };
+  return {
+    settled: planFullReady(map),
+    generation: planSourceGeneration(map),
+    names: planSymbolNames(map),
+    placement: planLabelPlacement(map),
+    zoom: matched.zoom,
+    center: matched.center,
+    cameraOk: matched.ok,
+    showsSame: await planCanadaShowsSame(map),
+  };
+}
 function settleIdle(map, limitMs, kick, full) {
   return new Promise((resolve) => {
     let finished = false;
     let timer = 0;
+    let holding = false;
     const finish = (value) => {
       if (finished) return;
       finished = true;
@@ -6983,18 +7023,26 @@ function settleIdle(map, limitMs, kick, full) {
       resolve(value);
     };
     let paints = 0;
-    const ready = (full) => planRasterReady(map)
-      && (!full || (
-        typeof map.loaded === 'function' && map.loaded() === true
-        && typeof map.areTilesLoaded === 'function' && map.areTilesLoaded() === true
-      ));
+    const ready = (useFull) => (useFull ? planFullReady(map) : planRasterReady(map));
+    const holdFull = () => {
+      if (holding || finished) return;
+      holding = true;
+      const generation = planSourceGeneration(map);
+      requestAnimationFrame(() => {
+        holding = false;
+        if (finished) return;
+        if (planFullReady(map) && planSourceGeneration(map) === generation) finish(true);
+      });
+    };
     const onIdle = () => {
-      if (ready(full)) finish(true);
+      if (!ready(full)) return;
+      if (full) holdFull();
+      else finish(true);
     };
     const onRender = () => {
       if (finished || !planRasterReady(map)) return;
       if (full) {
-        if (ready(true)) finish(true);
+        if (ready(true)) holdFull();
         return;
       }
       paints += 1;
@@ -7032,7 +7080,7 @@ async function planWaitTiles(map, full) {
     repaintMs = Math.round(performance.now() - idleStarted);
     labels = planVisibleTiles(map, 'inset-labels');
     base = planVisibleTiles(map, 'inset-basemap');
-    tilesOk = painted === true && planRasterReady(map);
+    tilesOk = painted === true && (full ? planFullReady(map) : planRasterReady(map));
   }
   const drawn = (pack) => (pack && pack.tiles ? pack.tiles.filter((tile) => tile.z === pack.z) : []);
   const urls = tilesOk
@@ -7402,6 +7450,8 @@ async function capturePlanCanvas(send) {
     for (const node of document.querySelectorAll('[data-iss-clock], [data-iss-edition]')) node.style.visibility = 'hidden';
     const waited = await planWaitTiles(map, true);
     if (!waited.tilesOk) return { ok: false, detail: waited.detail };
+    const evidence = await planReadEvidence(map);
+    if (!evidence.settled) return { ok: false, detail: { reason: 'revalidate', generation: evidence.generation } };
     const rect = canvas.getBoundingClientRect();
     const ignore = [];
     const chrome = [];
@@ -7413,13 +7463,24 @@ async function capturePlanCanvas(send) {
     };
     for (const node of document.querySelectorAll('[data-iss-clock], [data-iss-edition]')) take(node, ignore);
     for (const node of document.querySelectorAll('[data-iss-controls], [data-iss-split-chrome], .maplibregl-ctrl')) take(node, chrome);
-    return { ok: true, x: rect.x, y: rect.y, width: rect.width, height: rect.height, ignore, chrome };
+    return { ok: true, x: rect.x, y: rect.y, width: rect.width, height: rect.height, ignore, chrome, evidence };
   })()`);
   if (box && box.ok === false) {
     throw new Error(`plan label tiles ${JSON.stringify({ ok: false, check: 'tiles', reason: 'paint', detail: box.detail })}`);
   }
   await new Promise((resolve) => setTimeout(resolve, 200));
   if (!box || !(box.width > 2) || !(box.height > 2)) return null;
+  const again = await evaluate(send, `(async () => {
+    ${PLAN_TILE_HELPERS}
+    const frame = document.querySelector('[data-pip="plan"] [data-pip-frame]');
+    const map = frame && frame.__opdTrackInset;
+    if (!map) return null;
+    return planReadEvidence(map);
+  })()`);
+  if (!again || !again.settled) {
+    throw new Error(`plan label tiles ${JSON.stringify({ ok: false, check: 'tiles', reason: 'revalidate', detail: again })}`);
+  }
+  box.evidence = again;
   const image = await send('Page.captureScreenshot', {
     format: 'png',
     clip: { x: box.x, y: box.y, width: box.width, height: box.height, scale: 1 },
@@ -7452,6 +7513,22 @@ async function capturePlanCanvas(send) {
     png,
     ignore: (box.ignore || []).map(scaleRect),
     chrome: (box.chrome || []).map(scaleRect),
+    evidence: box.evidence,
+  };
+}
+
+/** Names and placement from the capture snapshot, not the sample taken before the barrier. */
+export function labelsForCapture(early, shot) {
+  const evidence = shot && shot.evidence;
+  if (!evidence) return early;
+  return {
+    ...early,
+    names: evidence.names,
+    placement: evidence.placement,
+    zoom: evidence.zoom,
+    center: evidence.center,
+    showsSame: evidence.showsSame,
+    cameraOk: evidence.cameraOk !== false,
   };
 }
 
@@ -7577,6 +7654,8 @@ function rasterNameVerdict(row, contract) {
 function assertLowZoomNames(row) {
   const tiles = tilesLoaded(row);
   if (!tiles.ok) throw new Error(`plan label tiles ${JSON.stringify(tiles)}`);
+  if (row.mainTilesOk === false) throw new Error(`plan label tiles ${JSON.stringify({ ok: false, check: 'tiles', reason: 'main', country: row.country, zoom: row.zoom })}`);
+  if (row.mainCameraOk === false) throw new Error(`plan label camera ${JSON.stringify({ country: row.country, zoom: row.zoom, center: row.center, mainCenter: row.mainCenter, cameraOk: false })}`);
   const names = shownLabelNames(row).map((name) => {
     const found = PLAN_COUNTRIES.find((entry) => entry.name.toLowerCase() === String(name).toLowerCase());
     return found ? found.name : name;
@@ -7624,12 +7703,13 @@ async function compareLockedPair(headSend, mainSend, lng, lat, zoom, country) {
   const head = await withLockedPlan(headSend, lng, lat, zoom, country, async (row) => ({ row, shot: await capturePlanCanvas(headSend) }), hideWait);
   const main = await withLockedPlan(mainSend, lng, lat, zoom, country, async (row) => ({ row, shot: await capturePlanCanvas(mainSend) }), false);
   savePlanPair(`${country}-z${zoom}-${lng}-${lat}`, head.shot, main.shot);
-  const contract = planContractForDrive(country, zoom, [lng, lat], process.env.OPD_VERIFY_CANADA_WAIT !== '0', head.row.showsSame === true);
+  const headView = labelsForCapture(head.row, head.shot);
+  const contract = planContractForDrive(country, zoom, [lng, lat], process.env.OPD_VERIFY_CANADA_WAIT !== '0', headView.showsSame === true);
   const verdict = assertPlanLabelChecks({
-    ...head.row,
+    ...headView,
     headShot: head.shot,
     mainShot: main.shot,
-    headPlacement: head.row.placement,
+    headPlacement: headView.placement,
     mainPlacement: main.row.placement,
     contract,
     labelOpacity: head.row.placement && head.row.placement.opacity ? head.row.placement.opacity[country] : null,
@@ -7723,7 +7803,8 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
           const camera = { center: [${country.lng}, ${country.lat}], zoom };
           map.jumpTo(camera);
           const waited = await planWaitTiles(map);
-          rows.push({ names: planSymbolNames(map), tilesOk: waited.tilesOk });
+          const seen = planCameraMatches(map, camera);
+          rows.push({ names: planSymbolNames(map), tilesOk: waited.tilesOk, cameraOk: seen.ok, center: seen.center, zoom: seen.zoom });
         }
         return { ok: true, rows };
       })()`);
@@ -7732,6 +7813,9 @@ export async function proveFractionalPlanLabels(send, progress = () => {}) {
       }
       for (let index = 0; index < swept.rows.length; index += 1) {
         swept.rows[index].mainNames = mainSwept.rows[index].names;
+        swept.rows[index].mainTilesOk = mainSwept.rows[index].tilesOk;
+        swept.rows[index].mainCameraOk = mainSwept.rows[index].cameraOk;
+        swept.rows[index].mainCenter = mainSwept.rows[index].center;
         const accepted = acceptPlanSweepRow(swept.rows[index]);
         if (accepted.below) belowZ3 += 1;
         if (index % 10 === 0 || index === swept.rows.length - 1) progress({ phase: 'verdicts', country: country.name, completed: index + 1, samples: swept.rows.length, stats: { ...rasterOcrStats } });

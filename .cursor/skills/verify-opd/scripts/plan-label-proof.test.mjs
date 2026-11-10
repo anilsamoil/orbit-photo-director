@@ -218,6 +218,36 @@ test('a full readiness wait still requires loaded() and areTilesLoaded()', async
   assert.ok(Date.now() - started >= 1500, Date.now() - started);
 });
 
+test('a full capture waits out placement and style transitions', async () => {
+  const { planWaitTiles } = loadHelpers();
+  const map = waitingMap({ idle: false });
+  map.loaded = () => true;
+  map.areTilesLoaded = () => true;
+  map.style.hasTransitions = () => true;
+  const renderListeners = [];
+  const baseOn = map.on;
+  map.on = (event, callback) => {
+    if (event === 'render') {
+      renderListeners.push(callback);
+      return;
+    }
+    baseOn(event, callback);
+  };
+  map.triggerRepaint = () => {
+    for (const callback of renderListeners.slice()) callback();
+  };
+  const started = Date.now();
+  const waited = await planWaitTiles(map, true);
+  assert.equal(waited.tilesOk, false, JSON.stringify(waited.detail));
+  assert.ok(Date.now() - started >= 1500, Date.now() - started);
+});
+
+test('capturePlanCanvas keeps the full readiness argument', () => {
+  const source = readFileSync(new URL('./drive.mjs', import.meta.url), 'utf8');
+  const capture = source.slice(source.indexOf('async function capturePlanCanvas'), source.indexOf('function visiblePlanNames'));
+  assert.match(capture, /planWaitTiles\(map, true\)/);
+});
+
 test('paint opacity includes the text color alpha', () => {
   const { planPaintOpacity } = loadHelpers();
   assert.equal(planPaintOpacity({ 'text-opacity': 1, 'text-color': '#f7f4ea' }), 1);
