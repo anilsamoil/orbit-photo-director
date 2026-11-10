@@ -19,6 +19,7 @@ import { drivePinTitle } from './pin-title.mjs';
 import { driveMapLightning } from './map-lightning.mjs';
 import { driveQueueLightning } from './queue-lightning.mjs';
 import { drivePlanOpen } from './plan-open.mjs';
+import { checkRasterOcr } from './raster-ocr.mjs';
 import { driveMapSafeArea } from './safe-area-chrome.mjs';
 import { driveSessionLock } from './session-lock.mjs';
 import { closeFixtureBrowsers } from './fixture-session.mjs';
@@ -826,6 +827,8 @@ function ownedBy(rootPid, pid) {
 async function doctor(home = homeDir()) {
   const state = readState(home);
   const problems = [];
+  let ocr;
+  try { ocr = checkRasterOcr(); } catch (error) { problems.push(error instanceof Error ? error.message : String(error)); }
   if (!state) problems.push('no state file');
   else {
     if (!alive(state.proxyPid)) problems.push(`proxy pid ${state.proxyPid} is not running`);
@@ -851,6 +854,7 @@ async function doctor(home = homeDir()) {
   }
   if (problems.length) throw new Error(problems.join('\n'));
   console.log(`ok ${state.url}`);
+  console.log(`OCR ${ocr.python}: ${ocr.probe}`);
   console.log(`proxy ${state.proxyPid} vite ${state.vitePid}`);
   console.log(`manifest ${state.manifestVersion}`);
   console.log(`launch valid until ${state.launchValidUntil}`);

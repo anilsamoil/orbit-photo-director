@@ -928,6 +928,11 @@ export function playwrightSend(session) {
       return {};
     }
     if (method === 'Page.enable') return {};
+    if (method === 'Network.setCacheDisabled') {
+      // Fresh WebKit contexts plus coldPlanTileCaches' unique URL nonce avoid
+      // cached tiles without forbidden cross-origin Cache-Control headers.
+      return {};
+    }
     if (method === 'Page.addScriptToEvaluateOnNewDocument') {
       session.initScripts.push(params.source);
       await page.addInitScript(params.source);
@@ -1003,6 +1008,8 @@ export function playwrightSend(session) {
     throw new Error(`webkit send has no ${method}`);
   };
   send.replacesContext = true;
+  send.session = session;
+  send.page = session.page;
   return send;
 }
 

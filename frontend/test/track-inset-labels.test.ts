@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 const created = vi.hoisted(() => ({
   options: null as null | {
     minZoom?: number;
+    validateStyle?: boolean;
     renderWorldCopies?: boolean;
     transformConstrain?: (center: { lng: number; lat: number }, zoom: number) => { center: { lng: number; lat: number }; zoom: number };
     style: {
@@ -16,12 +17,15 @@ const created = vi.hoisted(() => ({
         source?: string;
         minzoom?: number;
         maxzoom?: number;
-        paint?: { 'raster-opacity'?: number; 'text-color'?: string; 'fill-opacity'?: number };
+        filter?: unknown;
+        paint?: { 'raster-opacity'?: number; 'text-color'?: string; 'text-opacity'?: unknown; 'fill-opacity'?: number };
         layout?: {
           'text-field'?: unknown;
           'text-font'?: string[];
           'text-allow-overlap'?: boolean;
           'text-ignore-placement'?: boolean;
+          'text-variable-anchor-offset'?: unknown;
+          'symbol-sort-key'?: unknown;
         };
       }[];
     };
@@ -33,6 +37,10 @@ const created = vi.hoisted(() => ({
     container?: HTMLElement;
   },
   fit: null as null | { maxZoom?: number; padding?: number },
+  events: {} as Record<string, () => void>,
+  zoom: 0,
+  center: [-100, 50] as [number, number],
+  size: [478, 690] as [number, number],
   fitCount: 0,
   resizeCalls: 0,
   gestureStops: 0,
@@ -42,14 +50,22 @@ const created = vi.hoisted(() => ({
   zooming: false,
   staleDrag: false,
   sources: new Map<string, { features?: unknown[] }>(),
+  setDataCalls: [] as string[],
+  paintWrites: [] as unknown[],
   handlers: {} as Record<string, ((event: { originalEvent?: Event; preventDefault?: () => void }) => void)[]>,
 }));
 
 vi.mock('maplibre-gl', () => {
   class Marker {
+    constructor(public options?: { element?: HTMLElement }) {}
     setLngLat(): this { return this; }
-    addTo(): this { return this; }
-    remove(): void {}
+    addTo(map?: { options?: { container?: HTMLElement } }): this {
+      const element = this.options?.element;
+      const container = map?.options?.container;
+      if (element && container) container.append(element);
+      return this;
+    }
+    remove(): void { this.options?.element?.remove(); }
   }
   class Map {
     constructor(public options: typeof created.options) {
@@ -78,7 +94,28 @@ vi.mock('maplibre-gl', () => {
     isStyleLoaded(): boolean { return true; }
     once(): void {}
     on(type: string, fn: (event: { originalEvent?: Event; preventDefault?: () => void }) => void): void {
+      created.events[type] = fn as () => void;
       (created.handlers[type] ??= []).push(fn);
+    }
+    getZoom(): number { return created.zoom; }
+    project([lon, lat]: [number, number]): { x: number; y: number } {
+      const y = (latitude: number) => (1 - Math.asinh(Math.tan(latitude * Math.PI / 180)) / Math.PI) / 2;
+      const scale = 512 * 2 ** created.zoom;
+      return { x: created.size[0] / 2 + (lon - created.center[0]) / 360 * scale, y: created.size[1] / 2 + (y(lat) - y(created.center[1])) * scale };
+    }
+    unproject(point: { x: number; y: number } | readonly number[]): { lng: number; lat: number } {
+      const pair: readonly number[] = 'x' in point ? [point.x, point.y] : point;
+      const x = pair[0]!;
+      const y = pair[1]!;
+      const yOf = (latitude: number) => (1 - Math.asinh(Math.tan(latitude * Math.PI / 180)) / Math.PI) / 2;
+      const latOf = (mercatorY: number) => Math.atan(Math.sinh(Math.PI * (1 - 2 * mercatorY))) * 180 / Math.PI;
+      const scale = 512 * 2 ** created.zoom;
+      const mercatorY = yOf(created.center[1]) + (y - created.size[1] / 2) / scale;
+      return { lng: created.center[0] + (x - created.size[0] / 2) / scale * 360, lat: latOf(mercatorY) };
+    }
+    setFilter(id: string, filter: unknown): void {
+      const layer = created.options?.style.layers.find((entry) => entry.id === id);
+      if (layer) layer.filter = filter;
     }
     resize(): void {
       created.resizeCalls += 1;
@@ -95,6 +132,7 @@ vi.mock('maplibre-gl', () => {
     getSource(id: string): { setData(data: { features?: unknown[] }): void } {
       return {
         setData(data) {
+          created.setDataCalls.push(id);
           created.sources.set(id, data);
         },
       };
@@ -103,16 +141,39 @@ vi.mock('maplibre-gl', () => {
       created.fit = options;
       created.fitCount += 1;
     }
+    setPaintProperty(id: string, key: string, value: unknown): void {
+      const layer = created.options?.style.layers.find((entry) => entry.id === id);
+      if (layer) layer.paint = { ...layer.paint, [key]: value };
+      created.paintWrites.push(value);
+    }
     jumpTo(): void {}
     remove(): void {}
   }
   return { Map, Marker };
 });
 
-import { createTrackInset, letterboxCamera, PLAN_WHEEL_RESIZE_CAP_MS } from '../src/map/adapters/maplibre/track-inset';
+import { canadaRasterView, createTrackInset, letterboxCamera, PLAN_WHEEL_RESIZE_CAP_MS, rasterShowsSameCountry } from '../src/map/adapters/maplibre/track-inset';
+
+function project(lngLat: [number, number], center: [number, number], zoom: number, width: number, height: number): { x: number; y: number } {
+  const yOf = (latitude: number) => (1 - Math.asinh(Math.tan(latitude * Math.PI / 180)) / Math.PI) / 2;
+  const scale = 512 * 2 ** zoom;
+  return {
+    x: width / 2 + (lngLat[0] - center[0]) / 360 * scale,
+    y: height / 2 + (yOf(lngLat[1]) - yOf(center[1])) * scale,
+  };
+}
+
+function paint(): void {
+  const handlers = created.handlers.render ?? [];
+  handlers[handlers.length - 1]?.({});
+}
+
+function opacity(): unknown {
+  return created.options?.style.layers.find((layer) => layer.id === 'inset-countries')?.paint?.['text-opacity'];
+}
 
 describe('plan inset labels', () => {
-  it('draws the Esri reference raster above the basemap and lets a tighter track zoom past 2', () => {
+  it('draws the main country labels on the reference raster', () => {
     const frame = document.createElement('div');
     Object.defineProperty(frame, 'clientWidth', { value: 274 });
     Object.defineProperty(frame, 'clientHeight', { value: 900 });
@@ -130,22 +191,15 @@ describe('plan inset labels', () => {
     expect(style?.sources['inset-basemap']?.tiles).toEqual([
       'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
     ]);
+    expect(style?.sources['inset-basemap']?.maxzoom).toBe(20);
     expect(style?.sources['inset-labels']?.tiles?.[0]).toContain('World_Boundaries_and_Places');
-    expect(style?.sources['inset-labels']?.maxzoom).toBeGreaterThan(2);
+    expect(style?.sources['inset-labels']?.maxzoom).toBe(19);
     const ids = style?.layers.map((layer) => layer.id);
-    expect(ids).toEqual([
-      'inset-basemap',
-      'inset-night',
-      'inset-labels',
-      'inset-track',
-      'inset-countries',
-    ]);
+    expect(ids).toEqual(['inset-basemap', 'inset-night', 'inset-labels', 'inset-track', 'inset-countries']);
+    expect(style?.sources['inset-label-mask']).toBeUndefined();
+    expect(style?.sources['inset-country-fallbacks']).toBeUndefined();
     expect(style?.layers.find((layer) => layer.id === 'inset-labels')?.paint?.['raster-opacity']).toBe(0.85);
-    expect(style?.layers.find((layer) => layer.id === 'inset-labels')?.maxzoom).toBeUndefined();
     expect(style?.layers.find((layer) => layer.id === 'inset-night')?.paint?.['fill-opacity']).toBe(0.28);
-    expect(style?.layers.find((layer) => layer.id === 'inset-countries')?.maxzoom).toBe(3);
-    expect(ids).not.toContain('inset-cities');
-    expect(ids).not.toContain('inset-towns');
     expect(created.rotationLocks).toBe(2);
     expect(created.options?.interactive).toBe(true);
     expect(created.options?.scrollZoom).toBe(true);
@@ -155,11 +209,20 @@ describe('plan inset labels', () => {
     expect(style?.glyphs).toBe('/glyphs/{fontstack}/{range}.pbf');
     const countries = style?.layers.find((layer) => layer.id === 'inset-countries');
     expect(countries?.type).toBe('symbol');
+    expect(countries?.maxzoom).toBe(3);
     expect(countries?.layout?.['text-field']).toEqual(['get', 'name']);
     expect(countries?.layout?.['text-font']).toEqual(['Open Sans Regular']);
-    expect(countries?.layout?.['text-allow-overlap']).not.toBe(true);
-    expect(countries?.layout?.['text-ignore-placement']).not.toBe(true);
-    expect(style?.sources['inset-countries']?.data?.features?.some((feature) => feature.properties?.name === 'Brazil')).toBe(true);
+    expect(countries?.layout?.['text-allow-overlap']).toBeUndefined();
+    expect(countries?.layout?.['text-ignore-placement']).toBeUndefined();
+    expect(countries?.layout?.['text-variable-anchor-offset']).toBeUndefined();
+    expect(countries?.layout?.['symbol-sort-key']).toBeUndefined();
+    expect(countries?.paint?.['text-opacity']).toBeUndefined();
+    expect(style?.sources['inset-countries']?.data?.features?.map((feature) => feature.properties?.name)).toEqual([
+      'Canada', 'Mexico', 'Brazil', 'Argentina', 'France', 'Egypt', 'Nigeria', 'Kenya', 'China', 'India', 'Japan', 'Australia',
+    ]);
+    const source = readFileSync(resolve(__dirname, '../src/map/adapters/maplibre/track-inset.ts'), 'utf8');
+    expect(source).not.toContain('viewport.right >= 430');
+    expect(source).not.toContain('inset-countries-viewport');
     const glyphs = readFileSync(resolve(__dirname, '../public/glyphs/Open Sans Regular/0-255.pbf'));
     expect(glyphs.byteLength).toBeGreaterThan(10000);
     inset.show([{
@@ -168,6 +231,120 @@ describe('plan inset labels', () => {
       geometry: { type: 'LineString', coordinates: [[0, 0], [10, 10]] },
     }], { lon: 5, lat: 5 });
     expect(created.fit?.maxZoom).toBe(5);
+    inset.destroy();
+  });
+
+  it('hides a vector name only when the drawn reference tile shows that complete name', () => {
+    const canada = { tile: 3, service: 'reference', ink: [0.205078125, 0.313476562, 0.236816406, 0.317871094] as const };
+    const viewport = { left: 0, top: 0, right: 478, bottom: 690 };
+    const at = (zoom: number, center: [number, number], width = 478, height = 690) => (lngLat: [number, number]) => project(lngLat, center, zoom, width, height);
+    expect(rasterShowsSameCountry(1.5, 3, canada, at(1.5, [-100, 50]), viewport, [])).toBe(true);
+    expect(rasterShowsSameCountry(1.5, 3, canada, at(1.5, [2, 46]), viewport, [])).toBe(false);
+    expect(rasterShowsSameCountry(1.5, 4, canada, at(1.5, [-100, 50]), viewport, [])).toBe(false);
+    expect(rasterShowsSameCountry(2.5, 4, canada, at(2.5, [-100, 50]), viewport, [])).toBe(false);
+    expect(rasterShowsSameCountry(2.99, 4, canada, at(2.99, [-100, 50]), viewport, [])).toBe(false);
+    expect(rasterShowsSameCountry(3, 4, canada, at(3, [-100, 50]), viewport, [])).toBe(false);
+    expect(rasterShowsSameCountry(3.01, 4, canada, at(3.01, [-100, 50]), viewport, [])).toBe(false);
+    expect(rasterShowsSameCountry(5, 6, canada, at(5, [-100, 50]), viewport, [])).toBe(false);
+    expect(rasterShowsSameCountry(1.5, 3, { ...canada, service: 'dark' }, at(1.5, [-100, 50]), viewport, [])).toBe(false);
+    expect(rasterShowsSameCountry(1.5, 3, undefined, at(1.5, [-100, 50]), viewport, [])).toBe(false);
+    expect(rasterShowsSameCountry(1.5, 3, { ...canada, ink: [0.22, 0.31, 0.2201, 0.3101] }, at(1.5, [-100, 50]), viewport, [])).toBe(false);
+    const covered = rasterShowsSameCountry(1.5, 3, canada, at(1.5, [-100, 50]), viewport, [{ left: 200, top: 300, right: 280, bottom: 330 }]);
+    expect(covered).toBe(false);
+    for (const width of [429, 430, 431]) {
+      expect(rasterShowsSameCountry(1.5, 3, canada, at(1.5, [-100, 50], width, 800), { left: 0, top: 0, right: width, bottom: 800 }, [])).toBe(true);
+    }
+  });
+
+  it('canadaRasterView is the frame rasterShowsSameCountry sees', () => {
+    const frame = document.createElement('div');
+    Object.defineProperty(frame, 'clientWidth', { configurable: true, value: 478 });
+    Object.defineProperty(frame, 'clientHeight', { configurable: true, value: 690 });
+    const decide = (center: [number, number]) => {
+      const map = {
+        getZoom: () => 1.5,
+        project: (lngLat: [number, number]) => project(lngLat, center, 1.5, 478, 690),
+      };
+      const view = canadaRasterView(map as unknown as Parameters<typeof canadaRasterView>[0], frame);
+      expect(view).toBeTruthy();
+      return rasterShowsSameCountry(view!.zoom, view!.drawn, view!.entry, view!.project, view!.viewport, view!.occlusions);
+    };
+    expect(decide([-100, 50])).toBe(true);
+    expect(decide([2, 46])).toBe(false);
+  });
+
+  it('drops Canada at zoom 1.5 and puts the vector back when the raster name leaves the frame', () => {
+    const mount = (zoom: number, center: [number, number], width: number, height: number) => {
+      created.zoom = zoom;
+      created.center = center;
+      created.size = [width, height];
+      created.paintWrites = [];
+      const frame = document.createElement('div');
+      Object.defineProperty(frame, 'clientWidth', { configurable: true, value: width });
+      Object.defineProperty(frame, 'clientHeight', { configurable: true, value: height });
+      const inset = createTrackInset(frame, document.createElement('div'));
+      paint();
+      return inset;
+    };
+    const canada = mount(1.5, [-100, 50], 478, 690);
+    expect(opacity()).toEqual(['case', ['in', ['get', 'name'], ['literal', ['Canada']]], 0, 1]);
+    expect(created.paintWrites).toHaveLength(1);
+    paint();
+    expect(created.paintWrites).toHaveLength(1);
+    canada.destroy();
+
+    for (const width of [429, 430, 431]) {
+      const wide = mount(1.5, [-100, 50], width, 800);
+      expect(opacity(), String(width)).toEqual(['case', ['in', ['get', 'name'], ['literal', ['Canada']]], 0, 1]);
+      wide.destroy();
+    }
+
+    const away = mount(1.5, [2, 46], 478, 690);
+    expect(created.paintWrites).toEqual([]);
+    expect(opacity()).toBeUndefined();
+    away.destroy();
+
+    const hidden = mount(1.5, [-100, 50], 478, 690);
+    expect(opacity()).toEqual(['case', ['in', ['get', 'name'], ['literal', ['Canada']]], 0, 1]);
+    created.center = [2, 46];
+    paint();
+    expect(opacity()).toBe(1);
+    hidden.destroy();
+
+    for (const zoom of [2.5, 2.99, 3, 3.01, 5]) {
+      const edge = mount(zoom, [-100, 50], 478, 690);
+      expect(created.paintWrites, String(zoom)).toEqual([]);
+      expect(created.options?.style.layers.find((layer) => layer.id === 'inset-countries')?.maxzoom).toBe(3);
+      edge.destroy();
+    }
+
+    const france = mount(1.5, [2, 46], 478, 690);
+    expect(created.paintWrites).toEqual([]);
+    france.destroy();
+    const high = mount(6.5, [2, 46], 435, 590);
+    expect(created.paintWrites).toEqual([]);
+    expect(created.options?.style.layers.map((layer) => layer.id)).not.toContain('inset-countries-viewport');
+    high.destroy();
+  });
+
+  it('keeps the vector when chrome covers the raster name', () => {
+    created.zoom = 1.5;
+    created.center = [-100, 50];
+    created.size = [478, 690];
+    created.paintWrites = [];
+    const frame = document.createElement('div');
+    Object.defineProperty(frame, 'clientWidth', { value: 478 });
+    Object.defineProperty(frame, 'clientHeight', { value: 690 });
+    frame.getBoundingClientRect = () => ({ left: 0, top: 0, right: 478, bottom: 690, width: 478, height: 690, x: 0, y: 0, toJSON: () => ({}) });
+    const clock = document.createElement('div');
+    clock.dataset.issClock = '';
+    clock.getBoundingClientRect = () => ({ left: 200, top: 300, right: 280, bottom: 330, width: 80, height: 30, x: 200, y: 300, toJSON: () => ({}) });
+    document.body.append(clock);
+    const inset = createTrackInset(frame, document.createElement('div'));
+    paint();
+    expect(created.paintWrites).toEqual([]);
+    expect(opacity()).toBeUndefined();
+    clock.remove();
     inset.destroy();
   });
 
@@ -201,7 +378,7 @@ describe('plan inset labels', () => {
     inset.destroy();
   });
 
-  it('holds a gesture across ticks, a size change, a pixel ratio change, and an automatic resize', () => {
+  it('holds a gesture across ticks, a size change, a pixel ratio change, and an automatic resize', async () => {
     created.resizeCalls = 0;
     created.gestureStops = 0;
     created.gesturing = false;
@@ -242,10 +419,65 @@ describe('plan inset labels', () => {
     expect(created.gestureStops).toBe(0);
     created.gesturing = false;
     canvas.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, clientX: 80, clientY: 20, pointerId: 1 }));
+    expect(created.resizeCalls).toBe(armed);
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
     expect(created.resizeCalls).toBe(armed + 1);
     expect(created.gestureStops).toBe(0);
     Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: ratio });
     inset.destroy();
+  });
+
+  it.each(['pointerup', 'blur'])('rearms a %s resize frame for a new gesture and cancels it on destroy', async (ending) => {
+    created.resizeCalls = 0;
+    created.handlers = {};
+    created.zooming = false;
+    vi.useFakeTimers();
+    const requestFrame = vi.spyOn(window, 'requestAnimationFrame');
+    const cancelFrame = vi.spyOn(window, 'cancelAnimationFrame');
+    const frame = document.createElement('div');
+    Object.defineProperty(frame, 'clientWidth', { configurable: true, value: 320 });
+    Object.defineProperty(frame, 'clientHeight', { configurable: true, value: 640 });
+    const inset = createTrackInset(frame, document.createElement('div'));
+    const canvas = frame.querySelector('canvas')!;
+    const orbit = (frame as unknown as HTMLElement & { __opdTrackInset: { resize(): void } }).__opdTrackInset;
+    const armed = created.resizeCalls;
+    const down = (id: number): void => { canvas.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: id })); };
+    const end = (id: number): void => {
+      if (ending === 'blur') window.dispatchEvent(new Event('blur'));
+      else canvas.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: id }));
+    };
+    try {
+      down(1);
+      orbit.resize();
+      end(1);
+      end(1);
+      expect(requestFrame).toHaveBeenCalledTimes(1);
+      down(2);
+      expect(cancelFrame).toHaveBeenCalledWith(requestFrame.mock.results[0]?.value);
+      end(2);
+      expect(requestFrame).toHaveBeenCalledTimes(2);
+      orbit.resize();
+      expect(created.resizeCalls).toBe(armed);
+      down(3);
+      expect(cancelFrame).toHaveBeenCalledWith(requestFrame.mock.results[1]?.value);
+      await vi.advanceTimersByTimeAsync(20);
+      expect(created.resizeCalls).toBe(armed);
+      end(3);
+      await vi.advanceTimersByTimeAsync(20);
+      expect(created.resizeCalls).toBe(armed + 1);
+      down(4);
+      orbit.resize();
+      end(4);
+      inset.destroy();
+      expect(cancelFrame).toHaveBeenCalledWith(requestFrame.mock.results[3]?.value);
+      await vi.advanceTimersByTimeAsync(20);
+      expect(created.resizeCalls).toBe(armed + 1);
+    } finally {
+      inset.destroy();
+      requestFrame.mockRestore();
+      cancelFrame.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it('lets MapLibre see a canvas click, then opens the map once', async () => {
@@ -417,6 +649,8 @@ describe('plan inset labels', () => {
     expect(heldCanvas.width).toBe(478);
     expect(heldCanvas.height).toBe(690);
     heldCanvas.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, clientX: 30, clientY: 40, pointerId: 21, pointerType: 'touch' }));
+    expect(heldCanvas.width).toBe(478);
+    await vi.advanceTimersByTimeAsync(20);
     expect(heldCanvas.style.width).toBe('449px');
     expect(heldCanvas.style.height).toBe('620px');
     expect(heldCanvas.width).toBe(898);
@@ -474,6 +708,7 @@ describe('plan inset labels', () => {
     inset.show(null, { lon: 1, lat: 1 }, when);
     inset.show(null, { lon: 2, lat: 2 }, when);
     inset.show(null, { lon: 3, lat: 3 }, when);
+    await vi.advanceTimersByTimeAsync(20);
     expect(canvas.style.width).toBe(`${nextWidth}px`);
     expect(canvas.style.height).toBe(`${nextHeight}px`);
     expect(canvas.width).toBe(backingWidth);

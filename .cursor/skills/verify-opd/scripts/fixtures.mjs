@@ -283,6 +283,11 @@ def check_caller():
         # its named temp for the next writer's dead-owner cleanup if needed.
         os._exit(75)
 
+def public_owner(owner):
+    if not isinstance(owner, dict):
+        return owner
+    return {key: value for key, value in owner.items() if key != 'token'}
+
 def hook(point, **details):
     hook_dir = os.environ.get('OPD_VERIFY_FIXTURE_HOOK_DIR')
     points = os.environ.get('OPD_VERIFY_FIXTURE_HOOKS', '').split(',')
@@ -353,7 +358,7 @@ with open(lock_path[:-len('.lock')] + '.guard', 'a') as guard:
         print(json.dumps(dict(status='released' if matches else 'unchanged')))
     else:
         if owner is not None:
-            hook('writer-lock-observed', lockPath=lock_path, owner=owner)
+            hook('writer-lock-observed', lockPath=lock_path, owner=public_owner(owner))
             check_caller()
             expected = request.get('observedPid')
             matches = action != 'recover' or owner.get('pid') == expected
@@ -368,8 +373,8 @@ with open(lock_path[:-len('.lock')] + '.guard', 'a') as guard:
         if action == 'recover':
             print(json.dumps(dict(status='recovered' if recovered else 'unchanged')))
         elif owner is not None:
-            hook('writer-lock-waiting', lockPath=lock_path, owner=owner)
-            print(json.dumps(dict(status='busy', owner=owner)))
+            hook('writer-lock-waiting', lockPath=lock_path, owner=public_owner(owner))
+            print(json.dumps(dict(status='busy', owner=public_owner(owner))))
         else:
             tmp = lock_path + '.' + str(caller['pid']) + '.' + request['nonce']
             try:

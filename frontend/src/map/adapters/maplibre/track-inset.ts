@@ -4,21 +4,37 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { insetTrackBounds, type LonLat } from '../../../insets/bounds';
 import { PLAN_RASTER_NAME_ZOOM, planTier, type PlanPlace } from '../../../insets/plan-labels';
 import { terminatorNightPolygonFeatures } from '../../../terminator';
+import { countryLabelCounts, letteringOccluded } from './country-label-size';
+import countryRasterLevels from './country-raster-levels.json' with { type: 'json' };
 
 const ESRI_DARK_TILES = [
   'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
 ];
 
-/** Reference raster. It draws boundaries at zoom 0–2 and country names only once the fit zooms in. */
+/** Reference raster. Painted tile zooms live in country-raster-levels.json. */
 const ESRI_LABEL_TILES = [
   'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
 ];
+
+type RasterInk = { service: string; box: readonly number[]; ink?: readonly number[] };
+
+/** Audited national-name tile levels and their Mercator lettering bounds in each raster service. */
+const COUNTRY_RASTER_LEVELS: {
+  through: number;
+  countries: Record<string, readonly number[]>;
+  bounds?: Record<string, Record<string, readonly RasterInk[]>>;
+} = countryRasterLevels;
 
 /** Caps the fit. A tighter track zooms in. A full orbit stays below zoom 2. */
 const INSET_FIT_MAX_ZOOM = 5;
 
 /** Caps a pinch or a wheel. Past this the dark basemap is only pixels. */
 const INSET_MAX_ZOOM = 8;
+
+const INSET_BASEMAP_MAX_ZOOM = 20;
+
+/** Label tiles follow main. Capping at the audit overzooms the z6 border names into a second complete label. */
+const INSET_LABEL_MAX_ZOOM = 19;
 
 const INSET_GLYPHS = '/glyphs/{fontstack}/{range}.pbf';
 const INSET_GLYPH_RANGE = '/glyphs/Open%20Sans%20Regular/0-255.pbf';
@@ -42,6 +58,124 @@ const NIGHT_MINUTE_MS = 60_000;
 
 const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
 
+type ScreenBox = { left: number; top: number; right: number; bottom: number };
+
+/** Reference-raster names checked against main as a second copy of the vector label. */
+const DEMONSTRATED_DUPLICATE_RASTER: readonly { name: string; tile: number; service: 'reference' }[] = [
+  { name: 'Canada', tile: 3, service: 'reference' },
+];
+
+function collection(places: readonly PlanPlace[]): GeoJSON.FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: places.map((place) => ({
+      type: 'Feature' as const,
+      properties: { name: place.name },
+      geometry: { type: 'Point' as const, coordinates: [place.lon, place.lat] },
+    })),
+  };
+}
+
+/** Main's country symbol layer: centered placement, collision on, and a hard stop at zoom 3. */
+export function countryLabelLayer() {
+  return nameLayer('inset-countries', 'inset-countries', undefined, PLAN_RASTER_NAME_ZOOM);
+}
+
+function nameLayer(id: string, source: string, minzoom?: number, maxzoom?: number) {
+  return {
+    id,
+    type: 'symbol' as const,
+    source,
+    ...(minzoom === undefined ? {} : { minzoom }),
+    ...(maxzoom === undefined ? {} : { maxzoom }),
+    layout: {
+      'text-field': ['get', 'name'] as ['get', 'name'],
+      'text-font': ['Open Sans Regular'],
+      'text-size': 12,
+    },
+    paint: {
+      'text-color': '#f7f4ea',
+      'text-halo-color': '#02040c',
+      'text-halo-width': 1.4,
+    },
+  };
+}
+
+function drawnTile(zoom: number, maxzoom: number): number {
+  return Math.min(maxzoom, Math.max(0, Math.round(zoom + 1)));
+}
+
+function mercatorLngLat(x: number, y: number): [number, number] {
+  return [x * 360 - 180, Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180 / Math.PI];
+}
+
+function projectInk(ink: readonly number[], project: (lngLat: [number, number]) => { x: number; y: number }): ScreenBox {
+  const start = project(mercatorLngLat(ink[0]!, ink[1]!));
+  const end = project(mercatorLngLat(ink[2]!, ink[3]!));
+  return {
+    left: Math.min(start.x, end.x),
+    top: Math.min(start.y, end.y),
+    right: Math.max(start.x, end.x),
+    bottom: Math.max(start.y, end.y),
+  };
+}
+
+/** The vector stays unless this frame shows that country's complete name on the drawn reference tile. */
+export function rasterShowsSameCountry(
+  zoom: number,
+  drawn: number,
+  entry: { tile: number; service: string; ink?: readonly number[] } | undefined,
+  project: (lngLat: [number, number]) => { x: number; y: number },
+  viewport: ScreenBox,
+  occlusions: readonly ScreenBox[],
+): boolean {
+  if (!(zoom < PLAN_RASTER_NAME_ZOOM)) return false;
+  if (!entry || entry.tile !== drawn || entry.service !== 'reference' || !entry.ink) return false;
+  if (!countryLabelCounts({ width: entry.ink[2]! - entry.ink[0]!, height: entry.ink[3]! - entry.ink[1]! })) return false;
+  const box = projectInk(entry.ink, project);
+  const inside = box.left >= viewport.left && box.top >= viewport.top && box.right <= viewport.right && box.bottom <= viewport.bottom;
+  return inside && !letteringOccluded(box, occlusions);
+}
+
+function frameOcclusions(frame: HTMLElement): ScreenBox[] {
+  const frameBox = frame.getBoundingClientRect();
+  return Array.from(frame.ownerDocument.querySelectorAll('[data-iss-clock], [data-iss-edition], [data-iss-split-chrome]'))
+    .filter((element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== 'hidden')
+    .map((element) => {
+      const box = element.getBoundingClientRect();
+      return { left: box.left - frameBox.left, top: box.top - frameBox.top, right: box.right - frameBox.left, bottom: box.bottom - frameBox.top };
+    });
+}
+
+function rasterDuplicateView(map: MapLibreMap, frame: HTMLElement, item: { name: string; tile: number; service: 'reference' }) {
+  const zoom = map.getZoom();
+  const entries = COUNTRY_RASTER_LEVELS.bounds?.[item.name]?.[String(item.tile)] ?? [];
+  const ink = entries.find((entry) => entry.service === item.service);
+  return {
+    zoom,
+    drawn: drawnTile(zoom, INSET_LABEL_MAX_ZOOM),
+    entry: ink ? { tile: item.tile, service: item.service, ink: ink.ink } : undefined,
+    project: (lngLat: [number, number]) => map.project(lngLat),
+    viewport: { left: 0, top: 0, right: frame.clientWidth, bottom: frame.clientHeight },
+    occlusions: frameOcclusions(frame),
+  };
+}
+
+function hiddenCountryNames(map: MapLibreMap, frame: HTMLElement): string[] {
+  const hidden: string[] = [];
+  for (const item of DEMONSTRATED_DUPLICATE_RASTER) {
+    const view = rasterDuplicateView(map, frame, item);
+    if (rasterShowsSameCountry(view.zoom, view.drawn, view.entry, view.project, view.viewport, view.occlusions)) hidden.push(item.name);
+  }
+  return hidden;
+}
+
+/** The Canada duplicate, as rasterShowsSameCountry sees this frame. */
+export function canadaRasterView(map: MapLibreMap, frame: HTMLElement) {
+  const item = DEMONSTRATED_DUPLICATE_RASTER.find((entry) => entry.name === 'Canada');
+  return item ? rasterDuplicateView(map, frame, item) : null;
+}
+
 type InsetFrame = HTMLElement & { __opdTrackInset?: MapLibreMap };
 
 export type TrackInset = {
@@ -59,53 +193,6 @@ export function letterboxCamera(center: LngLat, zoom: number): { center: LngLat;
 export function planShouldRefit(freed: boolean, trackDirty: boolean, sizeChanged: boolean): boolean {
   if (freed) return false;
   return trackDirty || sizeChanged;
-}
-
-function collection(places: readonly PlanPlace[]): GeoJSON.FeatureCollection {
-  return {
-    type: 'FeatureCollection',
-    features: places.map((place) => ({
-      type: 'Feature',
-      properties: { name: place.name },
-      geometry: { type: 'Point', coordinates: [place.lon, place.lat] },
-    })),
-  };
-}
-
-function nameLayer(id: string, source: string, minzoom?: number, maxzoom?: number): {
-  id: string;
-  type: 'symbol';
-  source: string;
-  minzoom?: number;
-  maxzoom?: number;
-  layout: {
-    'text-field': ['get', 'name'];
-    'text-font': ['Open Sans Regular'];
-    'text-size': number;
-  };
-  paint: {
-    'text-color': string;
-    'text-halo-color': string;
-    'text-halo-width': number;
-  };
-} {
-  return {
-    id,
-    type: 'symbol',
-    source,
-    ...(minzoom === undefined ? {} : { minzoom }),
-    ...(maxzoom === undefined ? {} : { maxzoom }),
-    layout: {
-      'text-field': ['get', 'name'],
-      'text-font': ['Open Sans Regular'],
-      'text-size': 12,
-    },
-    paint: {
-      'text-color': '#f7f4ea',
-      'text-halo-color': '#02040c',
-      'text-halo-width': 1.4,
-    },
-  };
 }
 
 export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement): TrackInset {
@@ -131,9 +218,9 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
       version: 8,
       glyphs: INSET_GLYPHS,
       sources: {
-        'inset-basemap': { type: 'raster', tiles: ESRI_DARK_TILES, tileSize: 256, maxzoom: 20 },
+        'inset-basemap': { type: 'raster', tiles: ESRI_DARK_TILES, tileSize: 256, maxzoom: INSET_BASEMAP_MAX_ZOOM },
         'inset-night': { type: 'geojson', data: EMPTY },
-        'inset-labels': { type: 'raster', tiles: ESRI_LABEL_TILES, tileSize: 256, maxzoom: 19 },
+        'inset-labels': { type: 'raster', tiles: ESRI_LABEL_TILES, tileSize: 256, maxzoom: INSET_LABEL_MAX_ZOOM },
         'inset-countries': { type: 'geojson', data: collection(planTier(0)) },
         'inset-track': { type: 'geojson', data: EMPTY },
       },
@@ -152,7 +239,7 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
           source: 'inset-track',
           paint: { 'line-color': '#5cd0ff', 'line-width': 2 },
         },
-        nameLayer('inset-countries', 'inset-countries', undefined, PLAN_RASTER_NAME_ZOOM),
+        countryLabelLayer(),
       ],
     },
   });
@@ -179,6 +266,19 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
   let trackDirty = false;
   let fittedWidth = -1;
   let fittedHeight = -1;
+  let hiddenKey = '';
+  const syncDuplicateLabels = (): void => {
+    if (removed || !map.isStyleLoaded() || frame.clientWidth < 2 || frame.clientHeight < 2) return;
+    const hidden = hiddenCountryNames(map, frame);
+    const key = hidden.join('|');
+    if (key === hiddenKey) return;
+    hiddenKey = key;
+    frame.dataset.insetHiddenCountries = key;
+    map.setPaintProperty('inset-countries', 'text-opacity', key === '' ? 1 : ['case', ['in', ['get', 'name'], ['literal', hidden]], 0, 1]);
+  };
+  map.on('render', syncDuplicateLabels);
+  map.on('move', syncDuplicateLabels);
+  map.on('moveend', syncDuplicateLabels);
   let paintedWidth = -1;
   let paintedHeight = -1;
   let paintedRatio = -1;
@@ -187,6 +287,7 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
   let navMulti = false;
   let navOrigin: { x: number; y: number } | null = null;
   let resizeWaiting = false;
+  let resizeFrame = 0;
   let wheelCapTimer = 0;
   const resizeNow = map.resize.bind(map);
   const clearWheelCap = (): void => {
@@ -197,13 +298,13 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
     if (wheelCapTimer !== 0 || removed) return;
     wheelCapTimer = window.setTimeout(() => {
       wheelCapTimer = 0;
-      if (removed || !resizeWaiting || activePointers.size > 0) return;
+      if (removed || !resizeWaiting || activePointers.size > 0 || resizeFrame !== 0) return;
       resizeWaiting = false;
       resizeNow();
     }, PLAN_WHEEL_RESIZE_CAP_MS);
   };
   const flushResize = (): void => {
-    if (!resizeWaiting || activePointers.size > 0) return;
+    if (!resizeWaiting || activePointers.size > 0 || resizeFrame !== 0) return;
     if (map.scrollZoom?.isZooming()) {
       armWheelCap();
       return;
@@ -212,15 +313,16 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
     map.resize();
   };
   const settleResize = (): void => {
-    flushResize();
-    queueMicrotask(() => {
-      if (activePointers.size === 0) flushResize();
+    if (resizeFrame !== 0) return;
+    resizeFrame = window.requestAnimationFrame(() => {
+      resizeFrame = 0;
+      if (!removed) flushResize();
     });
   };
   Object.defineProperty(map, 'resize', {
     configurable: true,
     value(eventData?: object, constrainTransform?: boolean) {
-      if (activePointers.size > 0) {
+      if (activePointers.size > 0 || resizeFrame !== 0) {
         resizeWaiting = true;
         clearWheelCap();
         return map;
@@ -246,6 +348,10 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     if (activePointers.has(event.pointerId)) return;
     if (activePointers.size === 0) {
+      if (resizeFrame !== 0) {
+        window.cancelAnimationFrame(resizeFrame);
+        resizeFrame = 0;
+      }
       navMoved = false;
       navMulti = false;
       navOrigin = { x: event.clientX, y: event.clientY };
@@ -384,6 +490,7 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
       if (removed) return;
       removed = true;
       window.clearTimeout(openTimer);
+      window.cancelAnimationFrame(resizeFrame);
       clearWheelCap();
       frame.removeEventListener('click', stopClick);
       frame.removeEventListener('wheel', onWheel, true);

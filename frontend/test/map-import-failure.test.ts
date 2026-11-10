@@ -232,8 +232,6 @@ function stubResources(entries: ReturnType<typeof emptyScript>[]): void {
   });
 }
 
-const styleObservers: MutationObserver[] = [];
-
 const staleError = new TypeError(
   'Failed to fetch dynamically imported module: http://127.0.0.1:42700/assets/map-stale.js',
 );
@@ -390,7 +388,10 @@ describe('map import recovery', () => {
   });
 });
 
+let nativeHeadAppend: typeof document.head.appendChild;
+
 beforeEach(() => {
+  nativeHeadAppend = document.head.appendChild.bind(document.head);
   mapGate.mode = 'stale';
   mapGate.evaluations = 0;
   mapGate.renderWait = null;
@@ -446,8 +447,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  for (const observer of styleObservers) observer.disconnect();
-  styleObservers.length = 0;
+  document.head.appendChild = nativeHeadAppend;
   mapGate.release();
   document.head.querySelectorAll('script[src*="/assets/"]').forEach((node) => node.remove());
   document.head.querySelectorAll('link[href*="maplibre-vendor"]').forEach((node) => node.remove());
@@ -679,6 +679,26 @@ describe('map pane when the chunk fails', () => {
     expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes('maplibre-vendor-V.js?map-probe='))).toBe(true);
   });
 
+  it('loads the build map entry when the stylesheet error is dispatched during insertion', async () => {
+    mapGate.mode = 'ok';
+    seedSnapshot();
+    document.head.insertAdjacentHTML('beforeend', '<script type="module" src="/assets/index-ENTRY.js"></script>');
+    window.history.replaceState({}, '', '/?u=anil&map-retry=17');
+    sessionStorage.setItem(MAP_IMPORT_URL_KEY, 'http://127.0.0.1:42700/assets/maplibre-vendor-V.js');
+    const append = document.head.appendChild.bind(document.head);
+    document.head.appendChild = ((node: Node) => {
+      const inserted = append(node);
+      if (node instanceof HTMLLinkElement && node.rel === 'stylesheet') node.dispatchEvent(new Event('error'));
+      return inserted;
+    }) as typeof document.head.appendChild;
+    settleStylesheets('load');
+    const { init } = await import('../src/main');
+    await init();
+    const recovery = await import('../src/map-import');
+    await vi.waitFor(() => expect(recovery.loadFreshMapModule).toHaveBeenCalled());
+    expect(vi.mocked(recovery.loadFreshMapModule).mock.calls.at(-1)?.slice(0, 2)).toEqual(['http://127.0.0.1:42700/assets/index-MAP.js', '17']);
+  });
+
   it('loads the build map entry with a fresh graph instead of a stale stored vendor URL', async () => {
     mapGate.mode = 'ok';
     seedSnapshot();
@@ -784,15 +804,17 @@ describe('map pane when the chunk fails', () => {
 });
 
 function settleStylesheets(kind: 'load' | 'error'): void {
-  const observer = new MutationObserver(() => {
-    document.head.querySelectorAll('link[rel="stylesheet"]').forEach((node) => {
-      if (!(node instanceof HTMLLinkElement) || node.dataset.opdStyleReady === '1') return;
-      if (kind === 'load') Object.defineProperty(node, 'sheet', { configurable: true, value: { cssRules: [{}] } });
-      node.dispatchEvent(new Event(kind));
-    });
-  });
-  observer.observe(document.head, { childList: true });
-  styleObservers.push(observer);
+  const append = document.head.appendChild.bind(document.head);
+  document.head.appendChild = ((node: Node) => {
+    const link = node instanceof HTMLLinkElement && node.rel.toLowerCase() === 'stylesheet' ? node : null;
+    if (link && kind === 'load') {
+      Object.defineProperty(link, 'sheet', { configurable: true, value: { cssRules: [{}] } });
+      link.dispatchEvent(new Event('load'));
+    }
+    const inserted = append(node);
+    if (link && kind === 'error') link.dispatchEvent(new Event('error'));
+    return inserted;
+  }) as typeof document.head.appendChild;
 }
 
 describe('map error footer stays on the map', () => {
