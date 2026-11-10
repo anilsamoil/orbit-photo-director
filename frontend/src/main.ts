@@ -1708,7 +1708,7 @@ function showLaunchOnMap(eventId: string): void {
   const now = Date.now();
   const tiers = launchCatalog.read(now);
   const listed = tiers
-    ? tiers.pins.some((pin) => pin.eventId === eventId)
+    ? tiers.mapPins.some((pin) => pin.eventId === eventId)
     : selectLaunches(launchStore.getState(), now, 'map').some(({ item }) => item.event_id === eventId);
   if (!listed) return;
   setMapLaunchMode(true);

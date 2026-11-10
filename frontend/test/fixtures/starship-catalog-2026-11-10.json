@@ -1,0 +1,160 @@
+{
+  "schema_version": 3,
+  "generated_at": "2026-11-10T08:38:59Z",
+  "schedule_valid_until": "2026-11-10T09:53:59Z",
+  "geometry_valid_until": "2026-11-10T08:53:59Z",
+  "tle": {
+    "epoch": "2026-11-10T00:00:00Z",
+    "sha256": "dbe5da21875b22f43ca3a11c109416a7b6101c9284a0093cfb93d48405429922",
+    "source": "iss.tle"
+  },
+  "coverage": {
+    "from": "2026-11-10T08:38:59Z",
+    "until": "2026-11-24T08:38:59Z",
+    "schedule_fetched_at": "2026-11-10T08:32:05Z",
+    "pages": 1,
+    "received": 2,
+    "listed": 2,
+    "evaluated": 2,
+    "tier_counts": {
+      "shot": 0,
+      "likely": 0,
+      "watch": 2,
+      "unassessed": 0,
+      "none": 0
+    },
+    "complete": true,
+    "reasons": []
+  },
+  "items": [
+    {
+      "event_id": "6aa7b90b-e5ed-45d8-a52e-04fbf399d178",
+      "name": "Falcon 9 Block 5 | USSF-627",
+      "rocket": "Falcon 9 Block 5",
+      "site": {
+        "name": "Vandenberg SFB, CA, USA",
+        "lat": 34.632,
+        "lon": -120.611,
+        "pad": "Space Launch Complex 4E"
+      },
+      "schedule": {
+        "net": "2026-11-11T02:49:00Z",
+        "window_start": "2026-11-11T02:49:00Z",
+        "window_end": "2026-11-11T06:49:00Z",
+        "precision": "Minute",
+        "status": "Go",
+        "destination": null
+      },
+      "direction": {
+        "kind": "none",
+        "azimuth_deg": null,
+        "source": null,
+        "off_plane_deg": null
+      },
+      "tier": "watch",
+      "why": "Night pad 1894 km left, W1, 8 min after liftoff.",
+      "reasons": [
+        "TLE_AGE_OVER_24H",
+        "TRAJECTORY_UNVERIFIED"
+      ],
+      "shots": [
+        {
+          "subject": "pad",
+          "liftoff": "2026-11-11T06:49:00Z",
+          "evaluated_at": "2026-11-11T06:49:00Z",
+          "direction": {
+            "kind": "none",
+            "azimuth_deg": null,
+            "source": null,
+            "off_plane_deg": null
+          },
+          "start": "2026-11-11T06:53:31Z",
+          "best": "2026-11-11T06:56:45Z",
+          "end": "2026-11-11T06:59:00Z",
+          "best_offset_s": 465,
+          "look": {
+            "frame": "orbital-lvlh",
+            "azimuth_deg": 269.808,
+            "off_nadir_deg": 69.522
+          },
+          "window": "W1",
+          "slant_km": 1894.4,
+          "limb_margin_deg": -0.442,
+          "plume_mrad": null,
+          "light": "pad_night",
+          "lens": "telephoto",
+          "lens_reason": "Pad is a small target.",
+          "track": [],
+          "score": {
+            "low": 38.8,
+            "high": 51.3,
+            "terms": {
+              "A": [
+                0.1937,
+                0.1937
+              ],
+              "C": [
+                0.3,
+                0.8
+              ],
+              "D": [
+                1.0,
+                1.0
+              ],
+              "M": [
+                0.0,
+                0.0
+              ],
+              "R": [
+                0.5528,
+                0.5528
+              ]
+            }
+          },
+          "confidence": {
+            "tle_age_h": 30.983,
+            "along_track_sigma_km": 3.934,
+            "timing_sigma_s": 0.514,
+            "robust": true
+          }
+        }
+      ],
+      "revision": "c04841d2073554724033af33"
+    },
+    {
+      "event_id": "0f867f0c-5422-4d44-93b8-d7faaae7019b",
+      "name": "Starship | Starlink Group 31-2 (Starship Flight 15)",
+      "rocket": "Starship V3",
+      "site": {
+        "name": "SpaceX Starbase, TX, USA",
+        "lat": 25.99677,
+        "lon": -97.15799,
+        "pad": "Orbital Launch Pad 2"
+      },
+      "schedule": {
+        "net": "2026-11-13T22:45:00Z",
+        "window_start": "2026-11-13T22:45:00Z",
+        "window_end": "2026-11-14T00:00:00Z",
+        "precision": "Minute",
+        "status": "TBC",
+        "destination": "other"
+      },
+      "direction": {
+        "kind": "none",
+        "azimuth_deg": null,
+        "source": null,
+        "off_plane_deg": null
+      },
+      "tier": "watch",
+      "why": "The ISS orbit is too old to confirm or rule out a view.",
+      "reasons": [
+        "TLE_AGE_OVER_24H",
+        "TLE_AGE_OVER_48H",
+        "TRAJECTORY_UNVERIFIED"
+      ],
+      "shots": [],
+      "revision": "ef57baeda973b070b49f3f9c"
+    }
+  ],
+  "revision": "7196a47982825f754493117e"
+}
