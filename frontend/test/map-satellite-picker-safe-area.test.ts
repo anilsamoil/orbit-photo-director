@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { chromium, webkit, type Browser, type Page } from 'playwright';
+import { chromium, webkit, type Page } from 'playwright';
 import { build } from 'vite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { closeBrowser, launchTracked, type TrackedBrowser } from './close-browser.mjs';
 import { freezeDate } from './freeze-date';
 import fixture from './fixtures/iss-sgp4-fixture.json';
 
@@ -76,7 +77,7 @@ for (const engine of [
   { name: 'Chrome', type: chromium, executablePath: chromePath ?? chromium.executablePath() },
   { name: 'WebKit', type: webkit, executablePath: webkit.executablePath() },
 ].filter((engine) => !process.env.OPD_PICKER_ENGINE || engine.name === process.env.OPD_PICKER_ENGINE)) describe.skipIf(!existsSync(engine.executablePath))(`trusted satellite picker ${engine.name}`, () => {
-  let browser: Browser;
+  let session: TrackedBrowser;
   let assets: Map<string, string | Uint8Array>;
   let script: string;
   beforeAll(async () => {
@@ -88,12 +89,12 @@ for (const engine of [
     if (!('output' in bundle)) throw new Error('Expected one in-memory browser bundle');
     assets = new Map(bundle.output.map((item) => [`/${item.fileName}`, item.type === 'chunk' ? item.code : item.source]));
     script = bundle.output.find((item) => item.type === 'chunk' && item.isEntry)!.fileName;
-    browser = await engine.type.launch({ headless: true, executablePath: engine.executablePath });
+    session = await launchTracked(engine.type, { headless: true, executablePath: engine.executablePath });
   }, 60_000);
-  afterAll(async () => { await browser?.close(); }, 30_000);
+  afterAll(async () => { await closeBrowser(session, `satellite picker ${engine.name}`); }, 30_000);
 
   it.each(cases)('keeps $name reachable by native input', async ({ name, key, selector, query, width, height, insets }) => {
-    const context = await browser.newContext({ viewport: { width, height }, serviceWorkers: 'block' });
+    const context = await session.browser.newContext({ viewport: { width, height }, serviceWorkers: 'block' });
     try {
       const page = await context.newPage();
       const cdp = engine.name === 'Chrome' ? await context.newCDPSession(page) : null;
