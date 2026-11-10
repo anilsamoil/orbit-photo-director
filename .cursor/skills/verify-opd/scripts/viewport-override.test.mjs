@@ -21,7 +21,6 @@ test('iphone-13 accepts only 844x390', () => {
 test('ipad-pro-11 accepts the M4 sizes created at 834x1210 and 1210x834', () => {
   assert.deepEqual(parseViewportOverride('ipad-pro-11', '834x1210'), { width: 834, height: 1210, raw: '834x1210' });
   assert.deepEqual(parseViewportOverride('ipad-pro-11', '1210x834'), { width: 1210, height: 834, raw: '1210x834' });
-  assert.deepEqual(parseViewportOverride('ipad-pro-11', '820x1180'), { width: 820, height: 1180, raw: '820x1180' });
   const portrait = deviceDescriptor({
     name: 'iPad Pro 11',
     viewport: { width: 834, height: 1210 },

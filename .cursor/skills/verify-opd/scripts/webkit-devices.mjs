@@ -31,7 +31,6 @@ export const VIEWPORT_ALLOWLIST = {
   'ipad-pro-11': [
     { width: 834, height: 1210 },
     { width: 1210, height: 834 },
-    { width: 820, height: 1180 },
   ],
   'ipad-3': [
     { width: 768, height: 1024 },
