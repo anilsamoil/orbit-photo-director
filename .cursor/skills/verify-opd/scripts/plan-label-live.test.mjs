@@ -329,3 +329,81 @@ for (const engine of engines) {
     }
   });
 }
+
+test('a long symbol fade with a moved text offset fails closed', { timeout: 90000 }, async () => {
+  const session = await openMap(engines[0]);
+  try {
+    const { page } = session;
+    const result = await page.evaluate(async (helpers) => {
+      const map = window.__planMap;
+      const waitLoaded = () => new Promise((resolve) => {
+        const start = performance.now();
+        const tick = () => {
+          if ((map.loaded() && map.areTilesLoaded()) || performance.now() - start > 5000) resolve();
+          else requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      });
+      map.jumpTo({ center: [2, 46], zoom: 2.2 });
+      await waitLoaded();
+      map._idleTriggered = true;
+      map._fadeDuration = 12000;
+      map.setLayoutProperty('inset-countries', 'text-offset', [8, 0]);
+      await new Promise((resolve) => {
+        const start = performance.now();
+        const tick = () => {
+          const placement = map.style.placement;
+          if ((placement && placement.fadeDuration >= 5000) || performance.now() - start > 4000) resolve();
+          else requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      });
+      map._fadeDuration = 0;
+      map.triggerRepaint();
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      map._fadeDuration = 12000;
+      map.jumpTo({ center: [2.4, 46], zoom: 2.2 });
+      const armed = await new Promise((resolve) => {
+        const start = performance.now();
+        const onRender = () => {
+          const placement = map.style.placement;
+          const live = !!placement
+            && placement.stale === false
+            && placement.fadeDuration >= 5000
+            && placement.hasTransitions(performance.now()) === true
+            && placement.hasTransitions() === false
+            && map.loaded() === true
+            && map.areTilesLoaded() === true;
+          if (live || performance.now() - start > 4000) {
+            map.off('render', onRender);
+            resolve(live);
+          }
+        };
+        map.on('render', onRender);
+        map.triggerRepaint();
+      });
+      const run = new Function(`${helpers}; return planWaitTiles;`)();
+      const started = performance.now();
+      const waited = await run(map, true);
+      const placement = map.style.placement;
+      return {
+        armed,
+        offset: map.getLayoutProperty('inset-countries', 'text-offset'),
+        tilesOk: waited.tilesOk,
+        elapsed: performance.now() - started,
+        repaintMs: waited.repaintMs,
+        stillFading: placement.hasTransitions(performance.now()),
+        bare: placement.hasTransitions(),
+        stale: placement.stale,
+      };
+    }, PLAN_TILE_HELPERS);
+    assert.equal(result.armed, true, JSON.stringify(result));
+    assert.deepEqual(result.offset, [8, 0]);
+    assert.equal(result.bare, false, JSON.stringify(result));
+    assert.equal(result.stillFading, true, JSON.stringify(result));
+    assert.equal(result.tilesOk, false, JSON.stringify(result));
+    assert.ok(result.elapsed >= 1500 && result.elapsed < 7000, JSON.stringify(result));
+  } finally {
+    await session.close();
+  }
+});

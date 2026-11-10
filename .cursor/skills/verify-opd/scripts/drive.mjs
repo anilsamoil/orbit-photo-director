@@ -6970,12 +6970,17 @@ function planReleaseRasterCamera(map) {
   }
 }
 const PLAN_REPAINT_IDLE_MS = 2000;
+function planFrameNow(map) {
+  if (map && map.painter && Number.isFinite(map.painter.now)) return map.painter.now;
+  return performance.now();
+}
 function planMotionSettled(map) {
+  const now = planFrameNow(map);
   const style = map.style || {};
-  if (typeof style.hasTransitions === 'function' && style.hasTransitions()) return false;
+  if (typeof style.hasTransitions === 'function' && style.hasTransitions(now)) return false;
   const placement = style.placement;
-  if (placement && typeof placement.hasTransitions === 'function' && placement.hasTransitions()) return false;
-  if (placement && placement.dirty === true) return false;
+  if (placement && typeof placement.hasTransitions === 'function' && placement.hasTransitions(now)) return false;
+  if (placement && placement.stale === true) return false;
   const source = typeof map.getSource === 'function' ? map.getSource('inset-countries') : null;
   if (source && typeof source.loaded === 'function' && source.loaded() === false) return false;
   return true;
