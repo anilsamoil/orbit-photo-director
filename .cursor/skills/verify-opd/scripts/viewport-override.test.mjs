@@ -43,6 +43,7 @@ test('ipad-pro-11 rejects the stock 834x1194 override and other sizes', () => {
   assert.throws(() => parseViewportOverride('ipad-pro-11', '834x1194'), /834x1210 or 1210x834/);
   assert.throws(() => parseViewportOverride('ipad-pro-11', '768x1024'), /834x1210 or 1210x834/);
   assert.throws(() => parseViewportOverride('ipad-pro-11', '1024x768'), /834x1210 or 1210x834/);
+  assert.throws(() => parseViewportOverride('ipad-pro-11', '820x1180'), /834x1210 or 1210x834/);
   assert.throws(() => parseViewportOverride('desktop', '1400x900'), /834x1210 or 1210x834/);
 });
 
