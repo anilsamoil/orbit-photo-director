@@ -378,7 +378,7 @@ describe('plan inset labels', () => {
     inset.destroy();
   });
 
-  it('holds a gesture across ticks, a size change, a pixel ratio change, and an automatic resize', () => {
+  it('holds a gesture across ticks, a size change, a pixel ratio change, and an automatic resize', async () => {
     created.resizeCalls = 0;
     created.gestureStops = 0;
     created.gesturing = false;
@@ -419,10 +419,65 @@ describe('plan inset labels', () => {
     expect(created.gestureStops).toBe(0);
     created.gesturing = false;
     canvas.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, clientX: 80, clientY: 20, pointerId: 1 }));
+    expect(created.resizeCalls).toBe(armed);
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
     expect(created.resizeCalls).toBe(armed + 1);
     expect(created.gestureStops).toBe(0);
     Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: ratio });
     inset.destroy();
+  });
+
+  it.each(['pointerup', 'blur'])('rearms a %s resize frame for a new gesture and cancels it on destroy', async (ending) => {
+    created.resizeCalls = 0;
+    created.handlers = {};
+    created.zooming = false;
+    vi.useFakeTimers();
+    const requestFrame = vi.spyOn(window, 'requestAnimationFrame');
+    const cancelFrame = vi.spyOn(window, 'cancelAnimationFrame');
+    const frame = document.createElement('div');
+    Object.defineProperty(frame, 'clientWidth', { configurable: true, value: 320 });
+    Object.defineProperty(frame, 'clientHeight', { configurable: true, value: 640 });
+    const inset = createTrackInset(frame, document.createElement('div'));
+    const canvas = frame.querySelector('canvas')!;
+    const orbit = (frame as unknown as HTMLElement & { __opdTrackInset: { resize(): void } }).__opdTrackInset;
+    const armed = created.resizeCalls;
+    const down = (id: number): void => { canvas.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: id })); };
+    const end = (id: number): void => {
+      if (ending === 'blur') window.dispatchEvent(new Event('blur'));
+      else canvas.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: id }));
+    };
+    try {
+      down(1);
+      orbit.resize();
+      end(1);
+      end(1);
+      expect(requestFrame).toHaveBeenCalledTimes(1);
+      down(2);
+      expect(cancelFrame).toHaveBeenCalledWith(requestFrame.mock.results[0]?.value);
+      end(2);
+      expect(requestFrame).toHaveBeenCalledTimes(2);
+      orbit.resize();
+      expect(created.resizeCalls).toBe(armed);
+      down(3);
+      expect(cancelFrame).toHaveBeenCalledWith(requestFrame.mock.results[1]?.value);
+      await vi.advanceTimersByTimeAsync(20);
+      expect(created.resizeCalls).toBe(armed);
+      end(3);
+      await vi.advanceTimersByTimeAsync(20);
+      expect(created.resizeCalls).toBe(armed + 1);
+      down(4);
+      orbit.resize();
+      end(4);
+      inset.destroy();
+      expect(cancelFrame).toHaveBeenCalledWith(requestFrame.mock.results[3]?.value);
+      await vi.advanceTimersByTimeAsync(20);
+      expect(created.resizeCalls).toBe(armed + 1);
+    } finally {
+      inset.destroy();
+      requestFrame.mockRestore();
+      cancelFrame.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it('lets MapLibre see a canvas click, then opens the map once', async () => {
@@ -594,6 +649,8 @@ describe('plan inset labels', () => {
     expect(heldCanvas.width).toBe(478);
     expect(heldCanvas.height).toBe(690);
     heldCanvas.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, clientX: 30, clientY: 40, pointerId: 21, pointerType: 'touch' }));
+    expect(heldCanvas.width).toBe(478);
+    await vi.advanceTimersByTimeAsync(20);
     expect(heldCanvas.style.width).toBe('449px');
     expect(heldCanvas.style.height).toBe('620px');
     expect(heldCanvas.width).toBe(898);
@@ -651,6 +708,7 @@ describe('plan inset labels', () => {
     inset.show(null, { lon: 1, lat: 1 }, when);
     inset.show(null, { lon: 2, lat: 2 }, when);
     inset.show(null, { lon: 3, lat: 3 }, when);
+    await vi.advanceTimersByTimeAsync(20);
     expect(canvas.style.width).toBe(`${nextWidth}px`);
     expect(canvas.style.height).toBe(`${nextHeight}px`);
     expect(canvas.width).toBe(backingWidth);

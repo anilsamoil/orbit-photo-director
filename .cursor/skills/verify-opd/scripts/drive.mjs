@@ -5242,6 +5242,19 @@ async function dispatchPlanTouches(send, name, active, changed) {
     const name = ${JSON.stringify(name)};
     const activePoints = ${JSON.stringify(active)};
     const changedPoints = ${JSON.stringify(changed)};
+    const pointer = name === 'touchstart' ? 'pointerdown' : name === 'touchend' ? 'pointerup' : 'pointermove';
+    for (const point of changedPoints) {
+      canvas.dispatchEvent(new PointerEvent(pointer, {
+        bubbles: true,
+        cancelable: true,
+        clientX: point.x,
+        clientY: point.y,
+        pointerId: point.id,
+        pointerType: 'touch',
+        isPrimary: point.id === 1,
+        buttons: name === 'touchend' ? 0 : 1,
+      }));
+    }
     const make = (point) => {
       let touch = null;
       if (document.createTouch) {
@@ -5289,7 +5302,7 @@ async function dispatchPlanTouches(send, name, active, changed) {
   if (!sent?.ok) throw new Error(`plan pinch ${name} ${JSON.stringify(sent)}`);
 }
 
-async function provePlanRotatingPinch(send) {
+export async function provePlanRotatingPinch(send) {
   const armed = await evaluate(send, `(() => {
     const orbit = document.querySelector('[data-pip="plan"] [data-pip-frame]')?.__opdTrackInset;
     if (!orbit?.jumpTo || !orbit.getZoom) return null;

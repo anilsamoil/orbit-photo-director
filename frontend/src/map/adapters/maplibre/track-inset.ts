@@ -287,6 +287,7 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
   let navMulti = false;
   let navOrigin: { x: number; y: number } | null = null;
   let resizeWaiting = false;
+  let resizeFrame = 0;
   let wheelCapTimer = 0;
   const resizeNow = map.resize.bind(map);
   const clearWheelCap = (): void => {
@@ -297,13 +298,13 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
     if (wheelCapTimer !== 0 || removed) return;
     wheelCapTimer = window.setTimeout(() => {
       wheelCapTimer = 0;
-      if (removed || !resizeWaiting || activePointers.size > 0) return;
+      if (removed || !resizeWaiting || activePointers.size > 0 || resizeFrame !== 0) return;
       resizeWaiting = false;
       resizeNow();
     }, PLAN_WHEEL_RESIZE_CAP_MS);
   };
   const flushResize = (): void => {
-    if (!resizeWaiting || activePointers.size > 0) return;
+    if (!resizeWaiting || activePointers.size > 0 || resizeFrame !== 0) return;
     if (map.scrollZoom?.isZooming()) {
       armWheelCap();
       return;
@@ -312,15 +313,16 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
     map.resize();
   };
   const settleResize = (): void => {
-    flushResize();
-    queueMicrotask(() => {
-      if (activePointers.size === 0) flushResize();
+    if (resizeFrame !== 0) return;
+    resizeFrame = window.requestAnimationFrame(() => {
+      resizeFrame = 0;
+      if (!removed) flushResize();
     });
   };
   Object.defineProperty(map, 'resize', {
     configurable: true,
     value(eventData?: object, constrainTransform?: boolean) {
-      if (activePointers.size > 0) {
+      if (activePointers.size > 0 || resizeFrame !== 0) {
         resizeWaiting = true;
         clearWheelCap();
         return map;
@@ -346,6 +348,10 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     if (activePointers.has(event.pointerId)) return;
     if (activePointers.size === 0) {
+      if (resizeFrame !== 0) {
+        window.cancelAnimationFrame(resizeFrame);
+        resizeFrame = 0;
+      }
       navMoved = false;
       navMulti = false;
       navOrigin = { x: event.clientX, y: event.clientY };
@@ -484,6 +490,7 @@ export function createTrackInset(frame: HTMLElement, markerElement: HTMLElement)
       if (removed) return;
       removed = true;
       window.clearTimeout(openTimer);
+      window.cancelAnimationFrame(resizeFrame);
       clearWheelCap();
       frame.removeEventListener('click', stopClick);
       frame.removeEventListener('wheel', onWheel, true);
