@@ -7732,7 +7732,7 @@ export function acceptPlanSweepRow(row) {
   return { below: false };
 }
 
-async function compareLockedPair(headSend, mainSend, lng, lat, zoom, country) {
+export async function compareLockedPair(headSend, mainSend, lng, lat, zoom, country) {
   const hideWait = process.env.OPD_VERIFY_CANADA_WAIT !== '0';
   const head = await withLockedPlan(headSend, lng, lat, zoom, country, async (row) => ({ row, shot: await capturePlanCanvas(headSend) }), hideWait);
   const main = await withLockedPlan(mainSend, lng, lat, zoom, country, async (row) => ({ row, shot: await capturePlanCanvas(mainSend) }), false);
@@ -7746,7 +7746,7 @@ async function compareLockedPair(headSend, mainSend, lng, lat, zoom, country) {
     headPlacement: headView.placement,
     mainPlacement: mainView.placement,
     contract,
-    labelOpacity: head.row.placement && head.row.placement.opacity ? head.row.placement.opacity[country] : null,
+    labelOpacity: headView.placement && headView.placement.opacity ? headView.placement.opacity[country] : null,
     ignoreRects: head.shot ? head.shot.ignore : [],
     chromeRects: head.shot ? head.shot.chrome : [],
     mainIgnoreRects: main.shot ? main.shot.ignore : [],

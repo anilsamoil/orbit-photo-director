@@ -12,7 +12,7 @@ import {
   AUDITED_RASTER_LEVELS, auditRasterLevels, captureEnvironmentOk, countryStyleVerdict, countrySweepZooms,
   anchorOnPlan, auditedNameCandidates, auditedNameReadable, clippedRasterRemnant, completeNameCount, imageryRegionDiff, imageryLabelRegions, imageryViewport, labelScreenVerdict, labelTile, loadCountryRasterLevels, loadCountrySymbolLayers, nameCountOk, oneNameSource, pairedRasterNames, planCameraContract, planContractForDrive, planLabelReaders, planLabelVerdict, rasterDuplicateVerdict, rasterNameEvidence, rasterPainted, RASTER_PAIR_TOLERANCE, symbolCrossesEdge,
 } from './plan-label-verdict.mjs';
-import { acceptPlanSweepRow, assertPlanLabelChecks, assembleLockedPair } from './drive.mjs';
+import { acceptPlanSweepRow, assertPlanLabelChecks } from './drive.mjs';
 
 test('an exact sovereign name is not vetoed by an unrelated adjective', () => {
   assert.equal(rasterPainted('AUSTRALIA\nGreat Australian Bight', 'Australia'), true);
@@ -930,43 +930,6 @@ test('imagery label regions fail the Kenya edits, towns, and rotated look-alikes
     }
   }
   assert.deepEqual(missed, []);
-});
-
-test('the paired capture rejects EGYPT that arrives on main after the early row', () => {
-  const source = readFileSync(new URL('./drive.mjs', import.meta.url), 'utf8');
-  const pair = source.slice(source.indexOf('async function compareLockedPair'), source.indexOf('export async function proveFractionalPlanLabels'));
-  assert.match(pair, /assembleLockedPair\(head, main\)/);
-  assert.match(pair, /mainView\.placement/);
-  assert.doesNotMatch(source, /mainPlacement: main\.row\.placement/);
-  const canvas = { left: 0, top: 0, right: 400, bottom: 300 };
-  const box = { left: 40, top: 40, right: 120, bottom: 70 };
-  const place = (name) => ({ labels: [{ name, opacity: 1, box }], canvas, chrome: [] });
-  const early = {
-    names: ['France', 'Kenya'],
-    placement: place('France'),
-    zoom: 2.5,
-    center: [2, 46],
-    showsSame: false,
-    cameraOk: true,
-  };
-  const { headView, mainView } = assembleLockedPair({
-    row: early,
-    shot: { evidence: { ...early, names: ['France', 'Kenya'], placement: place('France') } },
-  }, {
-    row: early,
-    shot: { evidence: { ...early, names: ['EGYPT', 'Kenya'], placement: place('EGYPT') } },
-  });
-  assert.equal(mainView.placement.labels[0].name, 'EGYPT');
-  assert.throws(() => assertPlanLabelChecks({
-    ...headView,
-    tilesOk: true,
-    tileZ: labelTile(2.5),
-    country: 'France',
-    cameraOk: true,
-    requestedZoom: 2.5,
-    headPlacement: headView.placement,
-    mainPlacement: mainView.placement,
-  }), /plan label/);
 });
 
 test('historical plan captures stay incomplete and a new capture needs a full environment record', () => {

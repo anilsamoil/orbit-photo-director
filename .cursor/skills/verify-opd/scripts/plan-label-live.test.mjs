@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { assertPlanLabelChecks, PLAN_TILE_HELPERS } from './drive.mjs';
+import { assertPlanLabelChecks, compareLockedPair, PLAN_TILE_HELPERS } from './drive.mjs';
 import { decodePng } from './decode-png.mjs';
 import { FRANCE_Z12_NAMES, labelScreenVerdict, labelTile, loadCountryRasterLevels, rasterDuplicateVerdict } from './plan-label-verdict.mjs';
 import { ocrFrame } from './raster-ocr.mjs';
@@ -54,7 +54,8 @@ async function openMap(engine) {
   });
   await server.listen();
   const browser = await engine.type.launch({ headless: true, executablePath: engine.executablePath });
-  const page = await browser.newPage({ viewport: { width: 900, height: 800 } });
+  const context = await browser.newContext({ viewport: { width: 900, height: 800 } });
+  const page = await context.newPage();
   const address = server.httpServer?.address();
   const port = typeof address === 'object' && address ? address.port : 5173;
   page.on('pageerror', (error) => console.log('pageerror', engine.name, error.message));
@@ -63,6 +64,7 @@ async function openMap(engine) {
   await waitSettled(page);
   return {
     page,
+    context,
     close: async () => {
       await browser.close();
       await server.close();
@@ -329,6 +331,133 @@ for (const engine of engines) {
     }
   });
 }
+
+function pageSend(page, beforeCapture) {
+  let scripts = 0;
+  const send = async (method, params = {}) => {
+    if (method === 'Runtime.evaluate') {
+      scripts += 1;
+      if (scripts === 2 && beforeCapture) await beforeCapture();
+      try {
+        const value = await page.evaluate((expression) => (0, eval)(expression), params.expression);
+        return { result: { value } };
+      } catch (error) {
+        return { exceptionDetails: { text: error && error.message ? error.message : String(error) } };
+      }
+    }
+    if (method === 'Page.captureScreenshot') {
+      const clip = params.clip;
+      const buffer = await page.screenshot({
+        type: 'png',
+        clip: { x: clip.x, y: clip.y, width: clip.width, height: clip.height },
+      });
+      return { data: Buffer.from(buffer).toString('base64') };
+    }
+    if (method === 'Page.bringToFront') {
+      await page.bringToFront();
+      return {};
+    }
+    throw new Error(`unhandled ${method}`);
+  };
+  send.page = page;
+  return send;
+}
+
+async function nestPlanFrame(page) {
+  await page.evaluate(() => {
+    const frame = document.querySelector('[data-pip-frame]');
+    if (!frame || frame.closest('[data-pip="plan"]')) return;
+    const wrap = document.createElement('div');
+    wrap.dataset.pip = 'plan';
+    frame.parentElement.insertBefore(wrap, frame);
+    wrap.appendChild(frame);
+  });
+}
+
+async function showCanada(page) {
+  await page.evaluate(() => {
+    const frame = document.querySelector('[data-pip-frame]');
+    const map = frame.__opdTrackInset;
+    frame.dataset.insetHiddenCountries = '';
+    map.setPaintProperty('inset-countries', 'text-opacity', 1);
+    const native = map.setPaintProperty.bind(map);
+    map.setPaintProperty = (layer, prop, value) => {
+      if (layer === 'inset-countries' && prop === 'text-opacity') return map;
+      return native(layer, prop, value);
+    };
+  });
+}
+
+async function renameFrance(page) {
+  await page.evaluate(async () => {
+    const map = document.querySelector('[data-pip-frame]').__opdTrackInset;
+    const data = await map.getSource('inset-countries').getData();
+    const features = data.features.map((feature) => feature.properties && feature.properties.name === 'France'
+      ? { ...feature, properties: { ...feature.properties, name: 'Egypt' } }
+      : feature);
+    await map.getSource('inset-countries').setData({ type: 'FeatureCollection', features });
+  });
+}
+
+test('the paired capture rejects Egypt that arrives on main after the early row', { timeout: 180000 }, async () => {
+  const session = await openMap(engines[0]);
+  const main = await session.context.newPage();
+  try {
+    await main.goto(session.page.url(), { waitUntil: 'domcontentloaded' });
+    await main.waitForFunction(() => !!window.__planMap, undefined, { timeout: 20000 });
+    await waitSettled(main);
+    await nestPlanFrame(session.page);
+    await nestPlanFrame(main);
+    for (const page of [session.page, main]) {
+      await page.evaluate(() => {
+        const frame = document.querySelector('#frame');
+        frame.style.width = '860px';
+        frame.style.height = '700px';
+        frame.__opdTrackInset.resize();
+      });
+    }
+    await go(session.page, [2, 46], 2.5);
+    await go(main, [2, 46], 2.5);
+    let failed = null;
+    try {
+      await compareLockedPair(pageSend(session.page), pageSend(main, () => renameFrance(main)), 2, 46, 2.5, 'France');
+    } catch (error) {
+      failed = error;
+    }
+    assert.ok(failed, 'paired caller accepted the early France placement');
+    assert.match(failed.message, /plan label place/);
+    assert.match(failed.message, /"reason":"parity"/);
+  } finally {
+    await main.close();
+    await session.close();
+  }
+});
+
+test('a delayed Canada paint is read from the captured placement', { timeout: 180000 }, async () => {
+  const session = await openMap(engines[0]);
+  const main = await session.context.newPage();
+  try {
+    await main.goto(session.page.url(), { waitUntil: 'domcontentloaded' });
+    await main.waitForFunction(() => !!window.__planMap, undefined, { timeout: 20000 });
+    await waitSettled(main);
+    await nestPlanFrame(session.page);
+    await nestPlanFrame(main);
+    await go(session.page, [-100, 50], 1.5);
+    await go(main, [-100, 50], 1.5);
+    let failed = null;
+    try {
+      await compareLockedPair(pageSend(session.page, () => showCanada(session.page)), pageSend(main, () => showCanada(main)), -100, 50, 1.5, 'Canada');
+    } catch (error) {
+      failed = error;
+    }
+    assert.ok(failed, 'paired caller accepted the early Canada opacity');
+    assert.match(failed.message, /plan label raster-name/);
+    assert.match(failed.message, /"reason":"opacity"/);
+  } finally {
+    await main.close();
+    await session.close();
+  }
+});
 
 test('a long symbol fade with a moved text offset fails closed', { timeout: 90000 }, async () => {
   const session = await openMap(engines[0]);
