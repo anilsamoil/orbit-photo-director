@@ -1,6 +1,6 @@
 # Upcoming
 
-Upcoming lists Shot and Likely launches while a schema 3 catalog is current, and schema 2 shooting chances when that catalog is not, then future passes from the `top_24h` artifact. The generator writes that artifact from 90 minutes out through the 36 hour window. The page drops a pass once its closest approach is in the past. The pane title starts with Next 36 hours. When the verify catalog is current, Upcoming lists Verify Ascent and Verify Likely and does not list Verify Horizon. Those two cards sit above Verify Mesa. Mesa is about eight hours ahead. Ascent and Likely stay after Mesa is hidden. Verify Horizon is Watch. It is in the ISS picker only.
+Upcoming lists Shot and Likely launches while a schema 3 catalog is current, and schema 2 shooting chances when that catalog is not, then future passes from the `top_24h` artifact. The generator writes that artifact from 90 minutes out through the 36 hour window. The page drops a pass once its closest approach is in the past. The pane title starts with Next 36 hours. When the verify catalog is current, Upcoming lists Verify Ascent and Verify Likely and does not list Verify Horizon. Those two cards sit above Verify Mesa. Mesa is about eight hours ahead. Ascent and Likely stay after Mesa is hidden. Verify Horizon is Watch. Upcoming leaves it off. The map lists that schedule, and the ISS picker lists it too.
 
 ## Sub-features
 
