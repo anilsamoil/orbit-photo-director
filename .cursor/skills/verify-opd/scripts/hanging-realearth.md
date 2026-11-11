@@ -6,6 +6,8 @@ Run the full stock Map regression from the repository root.
 node --test .cursor/skills/verify-opd/scripts/hanging-realearth.test.mjs
 ```
 
+Run that file on its own. A full browser verifier run with `--test-timeout=180000` caps the file and cancels it, even though the stock Map drive sets `timeout: 900000`. That drive needs about 324s. The painted-replacement test in the same file allows 120s. Leave the CLI timeout unset so the file is not cut off at 180s. Budget the stock drive at about 324s and the file at the 900s allowance on that test.
+
 The test starts the normal verify proxy, opens WebKit iPhone 17 Pro at 402x874, and runs every Map drive assertion. Its preload holds only `https://realearth.ssec.wisc.edu/` requests with `page.route` before each page navigates, including replacement contexts. It does not abort the requests or replace other imagery. The output names the retained temporary home, `drive.log`, and `hanging-requests.json`. `OPD_VERIFY_HANG_HOME` selects another home, and `OPD_VERIFY_HANG_PORT` selects the proxy port instead of 42841. The Vite port is the next port.
 
 For another stock Map or ISS cell, use the normal `up`, `doctor`, and `down` commands with a separate `OPD_VERIFY_HOME` and port. Run its drive with the preload and an absolute evidence path.

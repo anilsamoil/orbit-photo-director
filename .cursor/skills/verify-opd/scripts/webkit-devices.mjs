@@ -766,11 +766,11 @@ async function settleFocusedPose(page, pose) {
           ...(selections.length <= 1 ? ['map-launch-more'] : []),
         ];
       }
-      const primary = tiers.highlights[0];
+      const primary = tiers.highlights[0] ?? tiers.mapPins[0] ?? null;
       return [
         'launch-data-details',
         ...(!primary ? ['map-launch-primary'] : []),
-        ...(!tiers.pins.some((pin) => pin !== primary) ? ['map-launch-more'] : []),
+        ...(!tiers.mapPins.some((pin) => pin !== primary) ? ['map-launch-more'] : []),
       ];
     });
   }
@@ -928,6 +928,11 @@ export function playwrightSend(session) {
       return {};
     }
     if (method === 'Page.enable') return {};
+    if (method === 'Network.setCacheDisabled') {
+      // Fresh WebKit contexts plus coldPlanTileCaches' unique URL nonce avoid
+      // cached tiles without forbidden cross-origin Cache-Control headers.
+      return {};
+    }
     if (method === 'Page.addScriptToEvaluateOnNewDocument') {
       session.initScripts.push(params.source);
       await page.addInitScript(params.source);
@@ -1003,6 +1008,8 @@ export function playwrightSend(session) {
     throw new Error(`webkit send has no ${method}`);
   };
   send.replacesContext = true;
+  send.session = session;
+  send.page = session.page;
   return send;
 }
 

@@ -214,6 +214,8 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   let snapshot: SceneSnapshot | null = null;
   let renderer: IssRenderer | null = null;
   let rendererReady = false;
+  let contextLost = false;
+  const retiredRenderers = new WeakSet<IssRenderer>();
   let frameState: SceneFrame | null = null;
   let imagery: ImageryState = { kind: 'ready' };
   let held: IssScenePhase = 'running';
@@ -498,7 +500,6 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     });
 
   void boot(bootGeneration);
-  if (options.drive !== 'manual') startTimer();
 
   const scene: IssScene = {
     generation: () => generation,
@@ -518,14 +519,13 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       if (phase === 'dormant' || phase === 'suspended') return;
       held = phase;
       setPhase('suspended');
-      stopTimer();
       paintSerial += 1;
     },
     resume() {
       if (phase !== 'suspended') return;
-      const next = held === 'error' || held === 'loading' || held === 'running' ? held : 'running';
+      const next = held === 'loading' && rendererReady && snapshot ? 'running'
+        : held === 'error' || held === 'loading' || held === 'running' ? held : 'running';
       setPhase(next);
-      if (options.drive !== 'manual' && next === 'running') startTimer();
       if (next === 'running') void paint();
     },
     retry() {
@@ -541,7 +541,6 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       generation += 1;
       paintSerial += 1;
       setPhase('dormant');
-      stopTimer();
       document.removeEventListener('visibilitychange', onVisibility);
       splitMedia?.removeEventListener('change', onSplitChange);
       window.removeEventListener('resize', onResize);
@@ -549,8 +548,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       fullscreen.dispose();
       stopLaunches();
       storedAim.flush();
-      renderer?.destroy();
-      renderer = null;
+      dropRenderer(renderer);
       rendererReady = false;
       parkSplit();
       root.remove();
@@ -561,8 +559,12 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   return scene;
 
   async function boot(token: number): Promise<void> {
+    appliedFovDeg = null;
+    paintFov();
+    let created: IssRenderer | null = null;
+    const ownsRenderer = (): boolean => created === null ? token === generation : renderer === created;
     try {
-      renderer = factory(frame, {
+      created = factory(frame, {
         onLaunchLook(eventId) {
           const active = activePick();
           if (active.kind !== 'held' || eventId !== active.eventId) return;
@@ -576,7 +578,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
           if (launchCard.dataset.issLaunchState === 'selected') factVisibility.textContent = visibility;
         },
         onImagery(note) {
-          if (token !== generation || !snapshot || !frameState) return;
+          if (!ownsRenderer() || !snapshot || !frameState) return;
           imagery = note;
           const when = options.nowMs();
           const light = frameState.ok ? groundLightAt(when, frameState.pose.camera.latDeg, frameState.pose.camera.lonDeg) : null;
@@ -590,22 +592,35 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
           }));
         },
         onContextLost() {
-          if (token !== generation) return;
+          if (!ownsRenderer()) return;
+          generation += 1;
+          contextLost = true;
+          rendererReady = false;
+          dropRenderer(renderer);
           fail('WebGL context lost');
         },
       });
-      await renderer.ready();
+      if (token !== generation) {
+        dropRenderer(created);
+        return;
+      }
+      renderer = created;
+      await created.ready();
     } catch (error) {
-      if (token !== generation) return;
+      if (token !== generation) {
+        dropRenderer(created);
+        return;
+      }
+      dropRenderer(created);
       fail(explainBoot(error));
       return;
     }
     if (token !== generation) {
-      renderer?.destroy();
-      renderer = null;
+      dropRenderer(created);
       return;
     }
     rendererReady = true;
+    contextLost = false;
     if (snapshot && phase === 'loading') {
       setPhase('running');
       await paint();
@@ -651,7 +666,10 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
         heightPx: fit.heightPx,
         lightingUtcMs: when,
         fovEpoch: issued,
-        onCamera: confirmAppliedFov,
+        onCamera(applied, epoch, rollDeg) {
+          if (token !== generation) return;
+          confirmAppliedFov(applied, epoch, rollDeg);
+        },
       });
     } catch (error) {
       if (token !== generation) return;
@@ -1039,7 +1057,6 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     retry.hidden = false;
     mapButton.hidden = false;
     setTelemetryOpen(true);
-    stopTimer();
   }
 
   function setTelemetryOpen(open: boolean): void {
@@ -1216,6 +1233,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   }
 
   function setOpticalFov(value: number): void {
+    if (contextLost) return;
     const next = clampFov(value);
     if (next === opticalFovDeg) return;
     opticalFovDeg = next;
@@ -1225,10 +1243,22 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     if (phase === 'running' && rendererReady) void paint();
   }
 
-  function confirmAppliedFov(applied: number, token: number): void {
+  function confirmAppliedFov(applied: number, token: number, rollDeg?: number): void {
     if (token !== fovEpoch || phase !== 'running' || !Number.isFinite(applied)) return;
+    const wrapped = (((rollDeg ?? Number.NaN) % 360) + 360) % 360;
+    if (!Number.isFinite(wrapped) || Math.abs(wrapped - EARTH_VIEW_ROLL_DEG) > 0.5) return;
     appliedFovDeg = applied;
     paintFov();
+  }
+
+  function dropRenderer(created: IssRenderer | null): void {
+    if (!created || retiredRenderers.has(created)) return;
+    retiredRenderers.add(created);
+    created.destroy();
+    if (renderer === created) {
+      renderer = null;
+      rendererReady = false;
+    }
   }
 
   function paintFov(): void {
@@ -1304,6 +1334,8 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   function setPhase(next: IssScenePhase): void {
     phase = next;
     root.dataset.issPhase = next;
+    if (next === 'running' && options.drive !== 'manual') startTimer();
+    else stopTimer();
   }
 
   function hideActions(): void {
@@ -1345,7 +1377,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   }
 
   function startTimer(): void {
-    stopTimer();
+    if (timer !== 0) return;
     timer = window.setInterval(() => {
       void paint('timer');
     }, 500);

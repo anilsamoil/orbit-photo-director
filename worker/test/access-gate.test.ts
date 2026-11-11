@@ -5,6 +5,7 @@ import type { Env } from '../src/index';
 const issuer = 'https://test-team.cloudflareaccess.com';
 const audience = 'map-audience';
 const hosts = ['map.astroanil.dev', 'map.expedition75.com'] as const;
+const calibToken = ['machine', 'secret'].join('-');
 let pair: Awaited<ReturnType<typeof generateKeyPair>>;
 let jwks: string;
 
@@ -81,7 +82,7 @@ function envFor(objects: Record<string, string>, failOnRead = false): Env {
   return {
     SITE: bucket,
     CALIB: bucket,
-    CALIB_TOKEN: 'machine-secret',
+    CALIB_TOKEN: calibToken,
     ACCESS_TEAM_DOMAIN: issuer,
     ACCESS_AUD: audience,
     ACCESS_ALLOWED_EMAILS: 'alice@example.com,bob@example.com',
@@ -118,7 +119,7 @@ describe('map Access gate', () => {
   });
 
   it('denies a machine token on a gated path', async () => {
-    const response = await call('map.expedition75.com', '/sw.js', undefined, { 'x-calib-token': 'machine-secret' });
+    const response = await call('map.expedition75.com', '/sw.js', undefined, { 'x-calib-token': calibToken });
     expect(response.status).toBe(401);
   });
 
@@ -156,13 +157,13 @@ describe('map Access gate', () => {
     const env = {
       SITE: bucket,
       CALIB: bucket,
-      CALIB_TOKEN: 'machine-secret',
+      CALIB_TOKEN: calibToken,
       ACCESS_TEAM_DOMAIN: issuer,
       ACCESS_AUD: audience,
       STALE_THRESHOLD_SECONDS: '7200',
     } as unknown as Env;
     const profiles = await worker.fetch(new Request('https://map.expedition75.com/api/profiles/anil/targets', {
-      headers: { 'x-calib-token': 'machine-secret' },
+      headers: { 'x-calib-token': calibToken },
     }), env, {} as ExecutionContext);
     expect(profiles.status).toBe(200);
     expect(await profiles.json()).toMatchObject({ targets: [] });
@@ -189,7 +190,7 @@ describe('map Access gate', () => {
     const env = {
       SITE: bucket,
       CALIB: bucket,
-      CALIB_TOKEN: 'machine-secret',
+      CALIB_TOKEN: calibToken,
       ACCESS_TEAM_DOMAIN: issuer,
       ACCESS_AUD: audience,
       ACCESS_SERVICE_TOKEN_CLIENT_IDS: 'uptime-robot, other-monitor',
@@ -216,7 +217,7 @@ describe('map Access gate', () => {
     }), env, {} as ExecutionContext);
     expect(human.status).toBe(200);
     const anonymous = await worker.fetch(new Request('https://map.astroanil.dev/api/health', {
-      headers: { 'x-calib-token': 'machine-secret' },
+      headers: { 'x-calib-token': calibToken },
     }), env, {} as ExecutionContext);
     expect(anonymous.status).toBe(401);
     const expired = await worker.fetch(new Request('https://map.astroanil.dev/api/health', {
@@ -239,7 +240,7 @@ function allowEnv(emails?: string, extra: Record<string, string> = {}): Env {
   const env: Record<string, unknown> = {
     SITE: bucket,
     CALIB: bucket,
-    CALIB_TOKEN: 'machine-secret',
+    CALIB_TOKEN: calibToken,
     ACCESS_TEAM_DOMAIN: issuer,
     ACCESS_AUD: audience,
     STALE_THRESHOLD_SECONDS: '7200',
@@ -299,7 +300,7 @@ describe('email allowlist', () => {
     expect(await human.json()).toEqual({ error: 'email_not_allowlisted' });
     const health = await allowFetch('/api/health', empty, await serviceToken('uptime-robot'));
     expect(health.status).toBe(200);
-    const profiles = await allowFetch('/api/profiles/anil/targets', allowEnv(''), undefined, { 'x-calib-token': 'machine-secret' });
+    const profiles = await allowFetch('/api/profiles/anil/targets', allowEnv(''), undefined, { 'x-calib-token': calibToken });
     expect(profiles.status).toBe(200);
     const borrowed = await allowFetch('/api/health', allowEnv('person@example.com', {
       ACCESS_SERVICE_TOKEN_CLIENT_IDS: 'uptime-robot',

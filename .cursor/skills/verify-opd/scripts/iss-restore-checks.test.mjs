@@ -1,0 +1,139 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { test } from 'node:test';
+import { runInNewContext } from 'node:vm';
+
+const source = readFileSync(process.env.OPD_VERIFY_RESTORE_SOURCE || new URL('./drive.mjs', import.meta.url), 'utf8');
+const aim = { mode: 'horizon', windowId: null, azimuthDeg: 0, opticalFovDeg: 81.2, look: { rightDeg: 5, upDeg: 0 } };
+const stored = { raw: JSON.stringify(aim), lat: 10, lng: 20 };
+const origin = { lat: 10, lng: 19 };
+
+function expression(functionName, step) {
+  const functionStart = source.indexOf(`async function ${functionName}(`);
+  assert.notEqual(functionStart, -1, functionName);
+  const stepStart = source.indexOf(`'${step}'`, functionStart);
+  assert.notEqual(stepStart, -1, step);
+  const start = source.lastIndexOf('`(() => {', stepStart);
+  const end = source.indexOf('})()`', start) + '})()`'.length;
+  assert.ok(start > functionStart && end < stepStart, 'the test must execute the drive wait expression');
+  return runInNewContext(source.slice(start, end), {
+    aim, stored, origin, windowMismatch: "cupola.value !== '' || !chip.hidden",
+  });
+}
+
+const keyboard = expression('proveIssKeyboard', 'iss fov label before key');
+const restore = expression('proveIssAimLink', 'iss aim restored from the link');
+const optical = expression('proveIssOpticalFov', 'iss fov ready');
+
+function run(probe, overrides = {}) {
+  const sample = {
+    phase: 'running', state: 'live', text: '81.2°', center: { lat: 10, lng: 20 }, fov: 81.2, roll: 180,
+    ...overrides,
+  };
+  const elements = {
+    '[data-iss-scene]': { getAttribute: () => sample.phase },
+    '[data-iss-fov]': sample.labelMissing ? null : { getAttribute: () => sample.state, textContent: sample.text },
+    '[data-iss-preset="horizon"]': { getAttribute: () => 'true' },
+    '[data-iss-preset="nadir"]': { getAttribute: () => 'false' },
+    '[data-iss-cupola]': { value: '' },
+    '[data-iss-window]': { hidden: true },
+    '[data-iss-frame]': { getBoundingClientRect: () => ({ width: 300, height: 200, left: 0, top: 0 }) },
+  };
+  return runInNewContext(probe, {
+    URLSearchParams,
+    location: { search: '?e2e', hash: `#${new URLSearchParams({ iss: stored.raw })}` },
+    document: { getElementById: () => ({ className: 'view-iss' }), querySelector: (selector) => elements[selector] },
+    window: {
+      __opdIss: { getCenter: () => sample.center, getVerticalFieldOfView: () => sample.fov, getRoll: () => sample.roll, getZoom: () => 2 },
+      __opdFovWatch: sample.badWatch ? { bad: sample.badWatch } : null,
+    },
+  });
+}
+
+test('link restore accepts a finite running/live camera that matches the stored aim', () => {
+  assert.equal(run(restore).ok, true);
+});
+
+for (const phase of ['', 'loading', 'paused']) {
+  test(`link restore waits for running instead of accepting phase ${JSON.stringify(phase)}`, () => {
+    assert.equal(run(restore, { phase }), null);
+  });
+}
+
+test('link restore reports an error phase immediately', () => {
+  assert.throws(() => run(restore, { phase: 'error' }), /iss aim restore is in error/);
+});
+
+for (const state of ['', 'pending']) {
+  test(`link restore waits for live instead of accepting state ${JSON.stringify(state)}`, () => {
+    assert.equal(run(restore, { state }), null);
+  });
+}
+
+for (const state of ['error', 'stale']) {
+  test(`link restore rejects unexpected readout state ${state}`, () => {
+    assert.throws(() => run(restore, { state }), /iss aim restore fov state/);
+  });
+}
+
+for (const [name, center] of [['missing', null], ['NaN latitude', { lat: NaN, lng: 20 }], ['NaN longitude', { lat: 10, lng: NaN }], ['infinite latitude', { lat: Infinity, lng: 20 }]]) {
+  test(`link restore rejects invalid center ${name}`, () => {
+    assert.throws(() => run(restore, { center }), /iss aim restore center is NaN/);
+  });
+}
+
+for (const fov of [NaN, Infinity, -Infinity]) {
+  test(`link restore rejects invalid camera field ${fov}`, () => {
+    assert.throws(() => run(restore, { fov }), /iss aim restore field is NaN/);
+  });
+}
+
+test('link restore reports a nonnumeric live readout immediately', () => {
+  assert.throws(() => run(restore, { text: 'not a field' }), /iss aim restore label is NaN/);
+});
+
+for (const overrides of [{ labelMissing: true }, { text: '' }, { text: '  ' }, { fov: 84 }, { text: '80°' }, { center: { lat: 12, lng: 20 } }, { center: origin }]) {
+  test(`link restore keeps waiting for incomplete or mismatched sample ${JSON.stringify(overrides)}`, () => {
+    assert.equal(run(restore, overrides), null);
+  });
+}
+
+for (const roll of [180, -180, 540, 179.6, 180.4]) {
+  test(`keyboard readiness accepts applied roll ${roll}`, () => {
+    assert.equal(run(keyboard, { roll }).ok, true);
+  });
+}
+
+for (const roll of [0, 179, 181]) {
+  test(`keyboard readiness waits for incorrect roll ${roll}`, () => {
+    assert.equal(run(keyboard, { roll }), null);
+  });
+}
+
+for (const roll of [NaN, Infinity, -Infinity]) {
+  test(`keyboard readiness rejects nonfinite roll ${roll}`, () => {
+    assert.throws(() => run(keyboard, { roll }), /iss roll is NaN/);
+  });
+}
+
+for (const roll of [180, -180, 540, 179.6, 180.4]) {
+  test(`optical readiness accepts applied roll ${roll}`, () => {
+    assert.equal(run(optical, { roll }).ok, true);
+  });
+}
+
+for (const roll of [NaN, Infinity, -Infinity, 0]) {
+  test(`optical readiness rejects a live readout with invalid roll ${roll}`, () => {
+    assert.throws(() => run(optical, { roll }), /live fov does not match the camera/);
+  });
+}
+
+test('optical readiness waits for the first live readout', () => {
+  assert.equal(run(optical, { state: 'pending', text: '', roll: 0 }), null);
+});
+
+for (const [name, probe] of [['keyboard', keyboard], ['link restore', restore], ['optical', optical]]) {
+  test(`first-live camera violation fails ${name}`, () => {
+    assert.throws(() => run(probe, { badWatch: { roll: 0 } }), /live fov before the camera/);
+  });
+}

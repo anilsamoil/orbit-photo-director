@@ -106,7 +106,7 @@ for (const [engine, launch] of [['webkit', launchWebkit], ['chrome', launchChrom
           assert.equal(after.legacyMapData, false, 'tier catalog legitimately retires the captured closed disclosure');
           if (emptyCatalog) {
             assert.equal(after.primary, undefined, 'empty catalog retires the primary disclosure');
-            assert.match(await session.page.locator('#map-launch-coverage').textContent(), /No Shot or Likely launch/);
+            assert.match(await session.page.locator('#map-launch-coverage').textContent(), /No upcoming launch is listed in the available schedule/);
           } else assert.match(after.primary, /Shot/i, 'real schema-3 catalog was parsed and rendered');
           assert.deepEqual(after.survivors, before.survivors, 'mixed extant disclosures survive the refresh');
           assert.equal(after.insertedMore, emptyCatalog ? undefined : false, 'catalog controls use their expected defaults');
