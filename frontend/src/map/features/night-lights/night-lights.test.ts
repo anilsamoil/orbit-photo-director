@@ -114,4 +114,21 @@ describe('night-lights', () => {
     expect(vendor.tilesSetOn.get('viirs-night-lights')?.at(-1)?.[0]).toContain(CANONICAL_VIIRS_DATE);
     expect(vendor.visibilityOf('viirs-night-lights-layer')).toBe('visible');
   });
+
+  it('shows the composite again after the error retry and after a later hide and show', () => {
+    const vendor = mounted();
+    click('toggle-night-lights');
+    vendor.fire('error', { sourceId: 'viirs-night-lights' });
+    click('toggle-night-lights');
+    const afterRetry = vendor.tilesSetOn.get('viirs-night-lights')?.length ?? 0;
+    expect(afterRetry).toBeGreaterThan(0);
+    expect(vendor.tilesSetOn.get('viirs-night-lights')?.at(-1)?.[0]).toContain(CANONICAL_VIIRS_DATE);
+    expect(vendor.visibilityOf('viirs-night-lights-layer')).toBe('visible');
+    click('toggle-night-lights');
+    expect(vendor.visibilityOf('viirs-night-lights-layer')).toBe('none');
+    click('toggle-night-lights');
+    expect(vendor.visibilityOf('viirs-night-lights-layer')).toBe('visible');
+    expect(vendor.tilesSetOn.get('viirs-night-lights')?.at(-1)?.[0]).toContain(CANONICAL_VIIRS_DATE);
+    expect(vendor.tilesSetOn.get('viirs-night-lights')?.length).toBe(afterRetry);
+  });
 });

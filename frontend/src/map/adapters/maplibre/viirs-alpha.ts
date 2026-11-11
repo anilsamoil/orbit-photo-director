@@ -105,6 +105,7 @@ export function createViirsAlphaHandler(viewMs: () => number, transform: TileTra
     request.searchParams.delete('night');
     const upstream = request.href;
     let bytes = cache.get(upstream);
+    const alreadyCached = bytes !== undefined;
     if (bytes) {
       cache.delete(upstream);
       cache.set(upstream, bytes);
@@ -113,7 +114,14 @@ export function createViirsAlphaHandler(viewMs: () => number, transform: TileTra
       if (!response.ok) throw new Error(`viirs-alpha upstream fetch failed: ${response.status}`);
       bytes = await response.arrayBuffer();
       signal.throwIfAborted();
-      if (bytes.byteLength <= VIIRS_CACHE_MAX_BYTES) {
+    }
+    let remembered = alreadyCached;
+    signal.throwIfAborted();
+    for (;;) {
+      tile.atMs = nightLightsMinute(viewMs());
+      const data = await transform(bytes, { ...tile }, signal);
+      signal.throwIfAborted();
+      if (!remembered && bytes.byteLength <= VIIRS_CACHE_MAX_BYTES) {
         const previous = cache.get(upstream);
         if (previous) size -= previous.byteLength;
         cache.delete(upstream);
@@ -125,13 +133,8 @@ export function createViirsAlphaHandler(viewMs: () => number, transform: TileTra
           size -= oldest[1].byteLength;
           cache.delete(oldest[0]);
         }
+        remembered = cache.has(upstream);
       }
-    }
-    signal.throwIfAborted();
-    for (;;) {
-      tile.atMs = nightLightsMinute(viewMs());
-      const data = await transform(bytes, { ...tile }, signal);
-      signal.throwIfAborted();
       if (tile.atMs === nightLightsMinute(viewMs())) return { data };
     }
   };

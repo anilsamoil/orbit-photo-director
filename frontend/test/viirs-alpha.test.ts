@@ -152,6 +152,34 @@ describe('tile lifecycle', () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
+  it('refetches a repaired 200 after a bad 200 fails to decode, on retry and on toggle', async () => {
+    const bad = new Uint8Array([9, 9, 9]);
+    const good = new Uint8Array([4, 5, 6]);
+    const rendered = new Uint8Array([7, 7, 7]);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(bad.slice(), { status: 200 }))
+      .mockResolvedValueOnce(new Response(good.slice(), { status: 200 }))
+      .mockResolvedValueOnce(new Response(bad.slice(), { status: 200 }))
+      .mockResolvedValueOnce(new Response(good.slice(), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const transform = vi.fn(async (bytes: ArrayBuffer) => {
+      if (new Uint8Array(bytes)[0] === 9) throw new Error('decode failed');
+      return rendered.buffer;
+    });
+    const handler = createViirsAlphaHandler(() => noon, transform);
+
+    await expect(handler({ url: tileUrl() }, new AbortController())).rejects.toThrow('decode failed');
+    const retry = await handler({ url: tileUrl() }, new AbortController());
+    expect(new Uint8Array(retry.data as ArrayBuffer)).toEqual(rendered);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    await expect(handler({ url: tileUrl(1) }, new AbortController())).rejects.toThrow('decode failed');
+    const toggled = await handler({ url: tileUrl(1) }, new AbortController());
+    expect(new Uint8Array(toggled.data as ArrayBuffer)).toEqual(rendered);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(transform).toHaveBeenCalledTimes(4);
+  });
+
   it('does not cache an upstream failure', async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(new Response('', { status: 503 }))
       .mockResolvedValueOnce(new Response(new Uint8Array([1])));
