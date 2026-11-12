@@ -382,5 +382,112 @@ for (const engine of [
       expect.soft(containers.some((width) => width <= 260), `${engine.name} containers ${containers.join(',')}`).toBe(true);
       expect.soft(containers.some((width) => width > 260), `${engine.name} containers ${containers.join(',')}`).toBe(true);
     }, 120_000);
+
+    it('keeps a 60-character unbroken heading visible wider than 260px and at 260px', async () => {
+      if (!browser) throw new Error(`${engine.name} was not opened`);
+      const body = buildPassList(40, -90, 1, [{ name: 'ISS', color: '#5cd0ff', passes }], now);
+      body.querySelector('.pin-pass-heading')!.textContent = heading60;
+      const markup = body.outerHTML;
+      const layouts = [
+        { width: 1024, height: 768, band: 'above' as const },
+        { width: 402, height: 874, band: 'within' as const },
+      ];
+      for (const size of layouts) {
+        const context = await browser.newContext({ viewport: size, deviceScaleFactor: 1 });
+        try {
+          const page = await context.newPage();
+          await page.route('**/*', (route) => route.abort());
+          await page.setContent(html, { waitUntil: 'domcontentloaded' });
+          await page.evaluate(() => document.fonts.ready);
+          await page.evaluate(() => {
+            document.querySelector('#view')!.classList.add('view-map');
+            document.querySelector('#map-pane')!.classList.add('active');
+            document.querySelector('#map')!.innerHTML = '<div class="maplibregl-control-container"><div class="maplibregl-ctrl-top-left"><div class="maplibregl-ctrl maplibregl-ctrl-group"><button></button><button></button><button></button></div></div></div>';
+            const toggle = document.querySelector('#map-chrome-toggle')!;
+            toggle.textContent = 'Hide';
+            toggle.setAttribute('aria-expanded', 'true');
+          });
+          await page.addScriptTag({ content: `${placementScript}\nwindow.placeInspector = inspectorSync({ getContainer: () => document.querySelector('#map'), resize() {} });` });
+          await page.evaluate((pin) => {
+            document.querySelector('#map-inspector')!.innerHTML = `<div class="maplibregl-popup"><div class="maplibregl-popup-content">${pin}<button class="maplibregl-popup-close-button" type="button">×</button></div></div>`;
+            (window as unknown as { placeInspector: () => void }).placeInspector();
+          }, markup);
+          await page.evaluate(() => document.fonts.ready);
+          await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+          const measured = await page.evaluate(() => {
+            const heading = document.querySelector<HTMLElement>('.pin-pass-heading')!;
+            const content = document.querySelector<HTMLElement>('.maplibregl-popup-content')!;
+            const popup = document.querySelector<HTMLElement>('.dropped-pin-popup')!;
+            const close = document.querySelector<HTMLElement>('.maplibregl-popup-close-button')!;
+            const glyphRange = document.createRange();
+            glyphRange.selectNodeContents(close);
+            const glyph = glyphRange.getBoundingClientRect();
+            const contentBox = content.getBoundingClientRect();
+            const node = heading.firstChild!;
+            const text = node.textContent ?? '';
+            const hidden: string[] = [];
+            const clipped: string[] = [];
+            for (let index = 0; index < text.length; index += 1) {
+              const range = document.createRange();
+              range.setStart(node, index);
+              range.setEnd(node, index + 1);
+              const rect = range.getBoundingClientRect();
+              const overlapW = Math.min(rect.right, glyph.right) - Math.max(rect.left, glyph.left);
+              const overlapH = Math.min(rect.bottom, glyph.bottom) - Math.max(rect.top, glyph.top);
+              const covered = overlapW > 0.5 && overlapH > 0.5;
+              const hit = document.elementFromPoint((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2);
+              const outside = rect.width <= 0 || rect.height <= 0
+                || rect.left < contentBox.left - 0.5
+                || rect.right > contentBox.right + 0.5;
+              if (covered || !heading.contains(hit)) hidden.push(text[index]!);
+              if (outside) clipped.push(text[index]!);
+            }
+            const lines = (() => {
+              const range = document.createRange();
+              range.selectNodeContents(heading);
+              return [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0).length;
+            })();
+            const scrollWidth = heading.scrollWidth;
+            const clientWidth = heading.clientWidth;
+            const contentScroll = content.scrollWidth;
+            const contentClient = content.clientWidth;
+            heading.textContent = 'ISS — next 5 passes';
+            const normalRange = document.createRange();
+            normalRange.selectNodeContents(heading);
+            const normalLines = [...normalRange.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0).length;
+            return {
+              container: popup.clientWidth,
+              text,
+              scrollWidth,
+              clientWidth,
+              contentScroll,
+              contentClient,
+              lines,
+              normalLines,
+              normalScroll: heading.scrollWidth,
+              normalClient: heading.clientWidth,
+              hidden: hidden.join(''),
+              clipped: clipped.join(''),
+            };
+          });
+          const label = `${engine.name} ${size.width}×${size.height} container ${measured.container}`;
+          if (size.band === 'above') expect(measured.container, label).toBeGreaterThan(260);
+          else expect(measured.container, label).toBeLessThanOrEqual(260);
+          expect.soft(measured.text, label).toBe(heading60);
+          expect.soft(measured.text, label).toHaveLength(60);
+          expect.soft(measured.scrollWidth, `${label} heading scrollWidth`).toBeLessThanOrEqual(measured.clientWidth);
+          expect.soft(measured.contentScroll, `${label} content scrollWidth`).toBeLessThanOrEqual(measured.contentClient);
+          expect.soft(measured.lines, `${label} wraps`).toBeGreaterThan(1);
+          expect.soft(measured.hidden, `${label} hidden ${measured.hidden}`).toBe('');
+          expect.soft(measured.clipped, `${label} clipped ${measured.clipped}`).toBe('');
+          if (size.band === 'above') {
+            expect.soft(measured.normalLines, `${label} normal heading lines`).toBe(1);
+            expect.soft(measured.normalScroll, `${label} normal heading scrollWidth`).toBeLessThanOrEqual(measured.normalClient);
+          }
+        } finally {
+          await context.close();
+        }
+      }
+    }, 120_000);
   });
 }
