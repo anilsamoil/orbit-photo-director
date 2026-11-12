@@ -17,6 +17,8 @@ const mutations = [
   ['restore-finite-center', "      if (!center || !Number.isFinite(center.lat) || !Number.isFinite(center.lng)) {\n        throw new Error('iss aim restore center is NaN');\n      }\n", ''],
   ['restore-finite-field', "      if (!Number.isFinite(fov)) throw new Error('iss aim restore field is NaN');\n", ''],
   ['restore-invalid-label-diagnostic', "if (!Number.isFinite(shown)) throw new Error('iss aim restore label is NaN');", 'if (!Number.isFinite(shown)) return null;'],
+  ['reload-finite-field', "      if (typeof fov === 'number' && !Number.isFinite(fov)) throw new Error('iss aim restore field is NaN');\n      if (typeof fov !== 'number' || Math.abs(fov - ${narrowed.fov}) > 0.5) return null;\n", "      if (typeof fov !== 'number' || Math.abs(fov - ${narrowed.fov}) > 0.5) return null;\n"],
+  ['restore-current-roll', "      if (!Number.isFinite(roll)) throw new Error('iss aim restore roll is NaN');\n      if (Math.abs(fov - ${aim.opticalFovDeg}) > 0.5) return null;\n      if (Math.abs(roll - 180) > 0.5) return null;\n", "      if (Math.abs(fov - ${aim.opticalFovDeg}) > 0.5) return null;\n"],
 ];
 
 const dir = mkdtempSync(join(tmpdir(), 'opd-backlog-278-restore-mutants-'));

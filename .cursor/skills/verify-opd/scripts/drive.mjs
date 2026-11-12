@@ -9716,6 +9716,7 @@ async function proveIssAimReload(send, evidenceDir) {
       if (!cupola || cupola.value !== '3') return null;
       if (horizon?.getAttribute('aria-pressed') === 'true') return null;
       const fov = window.__opdIss?.getVerticalFieldOfView?.();
+      if (typeof fov === 'number' && !Number.isFinite(fov)) throw new Error('iss aim restore field is NaN');
       if (typeof fov !== 'number' || Math.abs(fov - ${narrowed.fov}) > 0.5) return null;
       const raw = sessionStorage.getItem('opd-iss-aim');
       if (!raw) return null;
@@ -9740,6 +9741,7 @@ async function proveIssAimReload(send, evidenceDir) {
       if (sessionStorage.getItem('opd-iss-aim') !== null) return null;
       if (localStorage.getItem('opd-iss-aim') !== null) return null;
       const fov = window.__opdIss?.getVerticalFieldOfView?.();
+      if (typeof fov === 'number' && !Number.isFinite(fov)) throw new Error('iss aim restore field is NaN');
       if (typeof fov !== 'number' || Math.abs(fov - ${ISS_LENS_FOV_DEG}) > 0.5 || Math.abs(fov - ${lens}) > 0.5) return null;
       return { ok: true, fov };
     })()`,
@@ -9766,6 +9768,7 @@ async function proveIssAimReload(send, evidenceDir) {
       if (sessionStorage.getItem('opd-iss-aim') !== null) return null;
       if (localStorage.getItem('opd-iss-aim') !== null) return null;
       const fov = window.__opdIss?.getVerticalFieldOfView?.();
+      if (typeof fov === 'number' && !Number.isFinite(fov)) throw new Error('iss aim restore field is NaN');
       if (typeof fov !== 'number' || Math.abs(fov - ${ISS_LENS_FOV_DEG}) > 0.5 || Math.abs(fov - ${lens}) > 0.5) return null;
       return { ok: true, fov };
     })()`,
@@ -10134,7 +10137,7 @@ async function proveIssAimLink(send) {
       const cupola = document.querySelector('[data-iss-cupola]');
       const chip = document.querySelector('[data-iss-window]');
       const map = window.__opdIss;
-      if (!cupola || !chip || !map?.getVerticalFieldOfView || !map.getCenter) return null;
+      if (!cupola || !chip || !map?.getVerticalFieldOfView || !map.getCenter || !map.getRoll) return null;
       if (horizon?.getAttribute('aria-pressed') !== ${JSON.stringify(aim.mode === 'horizon' ? 'true' : 'false')}) return null;
       if (nadir?.getAttribute('aria-pressed') !== ${JSON.stringify(aim.mode === 'nadir' ? 'true' : 'false')}) return null;
       if (${windowMismatch}) return null;
@@ -10153,8 +10156,11 @@ async function proveIssAimLink(send) {
       const fromOrigin = Math.abs(center.lat - ${origin.lat}) + Math.abs(center.lng - ${origin.lng});
       if (back > 0.35 || fromOrigin < 0.2) return null;
       const fov = map.getVerticalFieldOfView();
+      const roll = ((map.getRoll() % 360) + 360) % 360;
       if (!Number.isFinite(fov)) throw new Error('iss aim restore field is NaN');
+      if (!Number.isFinite(roll)) throw new Error('iss aim restore roll is NaN');
       if (Math.abs(fov - ${aim.opticalFovDeg}) > 0.5) return null;
+      if (Math.abs(roll - 180) > 0.5) return null;
       if (window.__opdFovWatch && window.__opdFovWatch.bad) {
         throw new Error('live fov before the camera ' + JSON.stringify(window.__opdFovWatch.bad));
       }

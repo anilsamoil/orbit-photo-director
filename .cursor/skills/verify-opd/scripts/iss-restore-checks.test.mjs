@@ -17,13 +17,14 @@ function expression(functionName, step) {
   const end = source.indexOf('})()`', start) + '})()`'.length;
   assert.ok(start > functionStart && end < stepStart, 'the test must execute the drive wait expression');
   return runInNewContext(source.slice(start, end), {
-    aim, stored, origin, windowMismatch: "cupola.value !== '' || !chip.hidden",
+    aim, stored, origin, narrowed: { fov: 40 }, windowMismatch: "cupola.value !== '' || !chip.hidden",
   });
 }
 
 const keyboard = expression('proveIssKeyboard', 'iss fov label before key');
 const restore = expression('proveIssAimLink', 'iss aim restored from the link');
 const optical = expression('proveIssOpticalFov', 'iss fov ready');
+const reloaded = expression('proveIssAimReload', 'iss aim restored after reload');
 
 function run(probe, overrides = {}) {
   const sample = {
@@ -52,6 +53,49 @@ function run(probe, overrides = {}) {
 
 test('link restore accepts a finite running/live camera that matches the stored aim', () => {
   assert.equal(run(restore).ok, true);
+});
+
+function runReload(overrides = {}) {
+  const sample = { fov: 40, raw: '{"windowId":3}', ...overrides };
+  const elements = {
+    '[data-iss-window]': sample.chipMissing ? null : { hidden: false, textContent: 'W3' },
+    '[data-iss-cupola]': { value: '3' },
+    '[data-iss-preset="horizon"]': { getAttribute: () => 'false' },
+  };
+  const map = sample.mapMissing ? null : { getVerticalFieldOfView: () => sample.fov };
+  return runInNewContext(reloaded, {
+    document: {
+      getElementById: () => ({ className: 'view-iss' }),
+      querySelector: (selector) => elements[selector] ?? null,
+    },
+    window: { __opdIss: map },
+    sessionStorage: { getItem: () => sample.raw },
+    localStorage: { getItem: (key) => key === 'opd-iss-aim' ? sample.raw : null },
+  });
+}
+
+test('reload restore accepts the stored finite field', () => {
+  assert.equal(runReload().ok, true);
+  assert.equal(runReload({ fov: 40.4 }).ok, true);
+});
+
+for (const fov of [NaN, Infinity, -Infinity]) {
+  test(`reload restore rejects nonfinite field ${fov}`, () => {
+    assert.throws(() => runReload({ fov }), /iss aim restore field is NaN/);
+  });
+}
+
+for (const overrides of [{ fov: undefined }, { fov: 40.6 }, { mapMissing: true }, { raw: null }, { chipMissing: true }]) {
+  test(`reload restore keeps waiting for incomplete sample ${JSON.stringify(overrides)}`, () => {
+    assert.equal(runReload(overrides), null);
+  });
+}
+
+test('link restore checks the current roll on every observation', () => {
+  assert.equal(run(restore, { roll: 180 }).ok, true);
+  assert.equal(run(restore, { roll: 0 }), null);
+  assert.throws(() => run(restore, { roll: NaN }), /iss aim restore roll is NaN/);
+  assert.equal(run(restore, { roll: 180 }).ok, true);
 });
 
 for (const phase of ['', 'loading', 'paused']) {
@@ -95,6 +139,24 @@ test('link restore reports a nonnumeric live readout immediately', () => {
 for (const overrides of [{ labelMissing: true }, { text: '' }, { text: '  ' }, { fov: 84 }, { text: '80°' }, { center: { lat: 12, lng: 20 } }, { center: origin }]) {
   test(`link restore keeps waiting for incomplete or mismatched sample ${JSON.stringify(overrides)}`, () => {
     assert.equal(run(restore, overrides), null);
+  });
+}
+
+for (const roll of [180, -180, 540, 179.6, 180.4]) {
+  test(`link restore accepts applied roll ${roll}`, () => {
+    assert.equal(run(restore, { roll }).ok, true);
+  });
+}
+
+for (const roll of [0, 179, 181]) {
+  test(`link restore waits for incorrect roll ${roll}`, () => {
+    assert.equal(run(restore, { roll }), null);
+  });
+}
+
+for (const roll of [NaN, Infinity, -Infinity]) {
+  test(`link restore rejects nonfinite roll ${roll}`, () => {
+    assert.throws(() => run(restore, { roll }), /iss aim restore roll is NaN/);
   });
 }
 
