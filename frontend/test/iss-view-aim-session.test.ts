@@ -129,6 +129,36 @@ function expectSession(session: StoredAim, aim: StoredAim): void {
   expect(session.opticalFovDeg).toBe(aim.opticalFovDeg);
 }
 
+const NON_FINITE_AZIMUTH = '{"mode":"horizon","azimuthDeg":1e309,"windowId":3,"look":{"rightDeg":-1.25,"upDeg":0.5},"opticalFovDeg":60}';
+const NON_FINITE_LOOK_RIGHT = '{"mode":"horizon","azimuthDeg":30,"windowId":3,"look":{"rightDeg":1e309,"upDeg":0.5},"opticalFovDeg":60}';
+const NON_FINITE_LOOK_UP = '{"mode":"horizon","azimuthDeg":30,"windowId":3,"look":{"rightDeg":-1.25,"upDeg":1e309},"opticalFovDeg":60}';
+const NON_FINITE_FIELD = '{"mode":"horizon","azimuthDeg":30,"windowId":3,"look":{"rightDeg":-1.25,"upDeg":0.5},"opticalFovDeg":1e309}';
+
+async function expectNonFiniteAimDiscarded(json: string): Promise<void> {
+  forgetAimPlaces();
+  sessionStorage.setItem(AIM_KEY, json);
+  vi.resetModules();
+  const view = await import('../src/iss-view');
+  const host = document.createElement('div');
+  const scene = view.mountIssScene(host, {
+    nowMs: () => now,
+    drive: 'manual',
+    createRenderer: renderer([]),
+  });
+  const session = view.issPresetSession();
+  expect((host.querySelector('[data-iss-cupola]') as HTMLSelectElement).value).toBe('');
+  expect(host.querySelector('[data-iss-window]')?.hasAttribute('hidden')).toBe(true);
+  expect(host.querySelector('[data-iss-preset="horizon"]')?.getAttribute('aria-pressed')).toBe('true');
+  expect(session.windowId).toBeNull();
+  expect(session.mode).toBe('horizon');
+  expect(session.azimuthDeg).toBe(0);
+  expect(session.look.rightDeg).toBe(0);
+  expect(session.look.upDeg).toBe(0);
+  expect(session.opticalFovDeg).toBeCloseTo(sensorField().vertical, 5);
+  scene.dispose();
+  host.remove();
+}
+
 async function mountStored(): Promise<{ view: typeof import('../src/iss-view'); scene: IssScene; host: HTMLElement; aims: IssAim[] }> {
   const view = await import('../src/iss-view');
   const host = document.createElement('div');
@@ -150,6 +180,12 @@ beforeEach(() => {
 
 describe('ISS aim session storage', () => {
   it('restores window 3, the pan, and a narrowed field after a reload', async () => {
+    await expectNonFiniteAimDiscarded(NON_FINITE_AZIMUTH);
+    await expectNonFiniteAimDiscarded(NON_FINITE_LOOK_RIGHT);
+    await expectNonFiniteAimDiscarded(NON_FINITE_LOOK_UP);
+    await expectNonFiniteAimDiscarded(NON_FINITE_FIELD);
+    forgetAimPlaces();
+    vi.resetModules();
     const view = await import('../src/iss-view');
     const aims: IssAim[] = [];
     const host = document.createElement('div');
