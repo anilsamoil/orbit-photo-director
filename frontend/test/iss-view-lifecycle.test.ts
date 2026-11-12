@@ -742,6 +742,76 @@ describe('ISS chrome starts out of the way', () => {
     scene.dispose();
   });
 
+  it('keeps the pinched field when the context is lost and Cupola asks for the lens', async () => {
+    sessionStorage.clear();
+    localStorage.removeItem('opd-iss-aim');
+    vi.resetModules();
+    const view = await import('../src/iss-view');
+    const host = document.createElement('div');
+    const hooks: IssRendererHooks[] = [];
+    const aims: IssAim[] = [];
+    const scene = view.mountIssScene(host, {
+      nowMs: () => startMs + 60_000,
+      drive: 'manual',
+      createRenderer: (_frame, next) => {
+        hooks.push(next);
+        return {
+          ready: () => Promise.resolve(),
+          aim: (aim) => {
+            aims.push(aim);
+            aim.onCamera?.(aim.verticalFovDeg, aim.fovEpoch ?? 0, 180);
+            return Promise.resolve();
+          },
+          resize: () => {},
+          destroy: () => {},
+        };
+      },
+    });
+    try {
+      scene.update(shot('fov-cupola-lost'));
+      const readout = host.querySelector('[data-iss-fov]') as HTMLElement;
+      for (let i = 0; i < 20 && readout.dataset.issFovState !== 'live'; i += 1) {
+        await scene.paint();
+        await Promise.resolve();
+      }
+      const frame = host.querySelector('[data-iss-frame]') as HTMLElement;
+      frame.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true, cancelable: true }));
+      const lens = sensorField().vertical;
+      const pinched = view.issPresetSession().opticalFovDeg;
+      const applied = readout.textContent;
+      expect(pinched).toBeLessThan(lens - 1);
+      expect(applied).toBe(`${pinched.toFixed(1)}°`);
+      expect(readout.dataset.issFovState).toBe('live');
+      const before = JSON.parse(sessionStorage.getItem('opd-iss-aim') ?? 'null') as { opticalFovDeg: number };
+      expect(before.opticalFovDeg).toBeCloseTo(pinched, 5);
+
+      hooks.at(-1)?.onContextLost();
+      expect(scene.phase()).toBe('error');
+      expect(host.querySelector('[data-iss-status]')?.textContent).toBe('WebGL context lost');
+      const cupola = host.querySelector('[data-iss-cupola]') as HTMLSelectElement;
+      cupola.value = '3';
+      cupola.dispatchEvent(new Event('change'));
+
+      expect(view.issPresetSession().opticalFovDeg).toBeCloseTo(pinched, 5);
+      expect(view.issPresetSession().windowId).toBe(3);
+      expect(host.querySelector('[data-iss-window]')?.textContent).toBe('W3');
+      expect(readout.textContent).toBe(applied);
+      expect(readout.dataset.issFovState).toBe('live');
+      const stored = JSON.parse(sessionStorage.getItem('opd-iss-aim') ?? 'null') as { opticalFovDeg: number; windowId: number };
+      expect(stored.windowId).toBe(3);
+      expect(stored.opticalFovDeg).toBeCloseTo(pinched, 5);
+
+      scene.retry();
+      for (let i = 0; i < 30 && scene.phase() !== 'running'; i += 1) await Promise.resolve();
+      expect(scene.phase()).toBe('running');
+      expect(lastAim(aims).verticalFovDeg).toBeCloseTo(pinched, 5);
+    } finally {
+      scene.dispose();
+      sessionStorage.clear();
+      localStorage.removeItem('opd-iss-aim');
+    }
+  });
+
   it('stays pending until the camera roll is the earth view', async () => {
     let confirmed = 0;
     const host = document.createElement('div');
