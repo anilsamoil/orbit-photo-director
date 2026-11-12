@@ -5,7 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const tests = ['test/iss-view-recovery.test.ts', 'test/iss-view-lifecycle.test.ts', 'test/iss-inset-labels.test.ts'];
+const tests = ['test/iss-view-aim-session.test.ts', 'test/iss-view-recovery.test.ts', 'test/iss-view-lifecycle.test.ts', 'test/iss-inset-labels.test.ts'];
 const mutations = [
   {
     "name": "fu174-no-retirement",
@@ -90,6 +90,12 @@ const mutations = [
     "file": "src/iss-view/index.ts",
     "before": "    if (windowId !== null && !contextLost) opticalFovDeg = lensFovDeg;\n",
     "after": "    if (windowId !== null) opticalFovDeg = lensFovDeg;\n"
+  },
+  {
+    "name": "persisted-finite-guard",
+    "file": "src/iss-view/index.ts",
+    "before": "  if (typeof aim.azimuthDeg !== 'number' || !Number.isFinite(aim.azimuthDeg)) return null;\n  const windowId = storedWindowId(aim.windowId);\n  if (windowId === undefined) return null;\n  if (!aim.look || typeof aim.look !== 'object') return null;\n  const look = aim.look as { rightDeg?: unknown; upDeg?: unknown };\n  if (typeof look.rightDeg !== 'number' || typeof look.upDeg !== 'number') return null;\n  if (!Number.isFinite(look.rightDeg) || !Number.isFinite(look.upDeg)) return null;\n  if (typeof aim.opticalFovDeg !== 'number' || !Number.isFinite(aim.opticalFovDeg)) return null;\n",
+    "after": "  if (typeof aim.azimuthDeg !== 'number') return null;\n  const windowId = storedWindowId(aim.windowId);\n  if (windowId === undefined) return null;\n  if (!aim.look || typeof aim.look !== 'object') return null;\n  const look = aim.look as { rightDeg?: unknown; upDeg?: unknown };\n  if (typeof look.rightDeg !== 'number' || typeof look.upDeg !== 'number') return null;\n  if (typeof aim.opticalFovDeg !== 'number') return null;\n"
   }
 ];
 const originals = new Map(mutations.map(({ file }) => [file, readFileSync(resolve(root, file), 'utf8')]));

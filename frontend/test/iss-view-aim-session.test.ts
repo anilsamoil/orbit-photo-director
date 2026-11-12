@@ -133,10 +133,17 @@ const NON_FINITE_AZIMUTH = '{"mode":"horizon","azimuthDeg":1e309,"windowId":3,"l
 const NON_FINITE_LOOK_RIGHT = '{"mode":"horizon","azimuthDeg":30,"windowId":3,"look":{"rightDeg":1e309,"upDeg":0.5},"opticalFovDeg":60}';
 const NON_FINITE_LOOK_UP = '{"mode":"horizon","azimuthDeg":30,"windowId":3,"look":{"rightDeg":-1.25,"upDeg":1e309},"opticalFovDeg":60}';
 const NON_FINITE_FIELD = '{"mode":"horizon","azimuthDeg":30,"windowId":3,"look":{"rightDeg":-1.25,"upDeg":0.5},"opticalFovDeg":1e309}';
+const MALFORMED_AIM = '{';
+const NULL_AIM = 'null';
+const NONNUMERIC_AZIMUTH = '{"mode":"horizon","azimuthDeg":"30","windowId":3,"look":{"rightDeg":-1.25,"upDeg":0.5},"opticalFovDeg":60}';
+const NONNUMERIC_LOOK = '{"mode":"horizon","azimuthDeg":30,"windowId":3,"look":{"rightDeg":"nope","upDeg":0.5},"opticalFovDeg":60}';
+const NONNUMERIC_FIELD = '{"mode":"horizon","azimuthDeg":30,"windowId":3,"look":{"rightDeg":-1.25,"upDeg":0.5},"opticalFovDeg":"60"}';
 
-async function expectNonFiniteAimDiscarded(json: string): Promise<void> {
+async function expectDiscardedAim(place: 'session' | 'link' | 'device', json: string): Promise<void> {
   forgetAimPlaces();
-  sessionStorage.setItem(AIM_KEY, json);
+  if (place === 'session') sessionStorage.setItem(AIM_KEY, json);
+  else if (place === 'link') setIssParam(json);
+  else localStorage.setItem(AIM_KEY, json);
   vi.resetModules();
   const view = await import('../src/iss-view');
   const host = document.createElement('div');
@@ -180,10 +187,23 @@ beforeEach(() => {
 
 describe('ISS aim session storage', () => {
   it('restores window 3, the pan, and a narrowed field after a reload', async () => {
-    await expectNonFiniteAimDiscarded(NON_FINITE_AZIMUTH);
-    await expectNonFiniteAimDiscarded(NON_FINITE_LOOK_RIGHT);
-    await expectNonFiniteAimDiscarded(NON_FINITE_LOOK_UP);
-    await expectNonFiniteAimDiscarded(NON_FINITE_FIELD);
+    await expectDiscardedAim('session', NON_FINITE_AZIMUTH);
+    await expectDiscardedAim('session', NON_FINITE_LOOK_RIGHT);
+    await expectDiscardedAim('session', NON_FINITE_LOOK_UP);
+    await expectDiscardedAim('session', NON_FINITE_FIELD);
+    await expectDiscardedAim('session', MALFORMED_AIM);
+    await expectDiscardedAim('session', NULL_AIM);
+    await expectDiscardedAim('session', NONNUMERIC_AZIMUTH);
+    await expectDiscardedAim('session', NONNUMERIC_LOOK);
+    await expectDiscardedAim('session', NONNUMERIC_FIELD);
+    await expectDiscardedAim('link', MALFORMED_AIM);
+    await expectDiscardedAim('link', NULL_AIM);
+    await expectDiscardedAim('link', NONNUMERIC_AZIMUTH);
+    await expectDiscardedAim('link', NON_FINITE_AZIMUTH);
+    await expectDiscardedAim('device', MALFORMED_AIM);
+    await expectDiscardedAim('device', NULL_AIM);
+    await expectDiscardedAim('device', NONNUMERIC_FIELD);
+    await expectDiscardedAim('device', NON_FINITE_FIELD);
     forgetAimPlaces();
     vi.resetModules();
     const view = await import('../src/iss-view');
