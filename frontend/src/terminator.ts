@@ -175,14 +175,17 @@ export function subsolarFeature(when: Date): GeoJSON.Feature {
  *  under the terminator-line layer so the day/night boundary reads at a glance
  *  the way GoISSWatch's "clean dark night-side" does.
  *
- *  Strategy: for each latitude in 1° steps, sample the two terminator
+ *  Strategy: for each latitude in 2° steps, sample the two terminator
  *  longitudes (dawn + dusk). The night arc between them is whichever
  *  longitude span is FARTHER from the subsolar longitude. We emit a thin
  *  polygon per pair of adjacent latitudes (so we cleanly avoid the
  *  antimeridian + pole sagas the v1 module deferred): the polygon is a
  *  quadrilateral [lat_i_night_west, lat_i_night_east, lat_i+1_night_east,
  *  lat_i+1_night_west]. Splits at antimeridian crossings by emitting two
- *  quads (the western part and the eastern part).
+ *  quads (the western part and the eastern part). Quads that share a
+ *  latitude edge are then welded, so that edge is not drawn twice. A
+ *  full-width polar edge is left intact: joining it to both sides would
+ *  bridge longitude 180 to -180 and fill the day side.
  *
  *  Polar regions (full day or full night per `terminatorLonAtLat` returning
  *  null) handled at the calling boundary: when a latitude has no terminator
@@ -280,6 +283,74 @@ function nightBandRings(
   return pieces.map(wrapRing).filter((ring) => ring.length >= 4);
 }
 
+type LonLat = [number, number];
+
+function sameLonLat(a: LonLat, b: LonLat): boolean {
+  return Math.abs(a[0] - b[0]) <= 1e-8 && Math.abs(a[1] - b[1]) <= 1e-8;
+}
+
+function openLonLatRing(ring: readonly LonLat[]): LonLat[] {
+  if (ring.length > 1) {
+    const first = ring[0]!;
+    const last = ring[ring.length - 1]!;
+    if (first[0] === last[0] && first[1] === last[1]) return ring.slice(0, -1);
+  }
+  return ring.slice();
+}
+
+/** A ring that jumps more than 180° of longitude bridges the antimeridian the wrong way. */
+function staysOnOneSide(ring: readonly LonLat[]): boolean {
+  const open = openLonLatRing(ring);
+  for (let index = 0; index < open.length; index += 1) {
+    const start = open[index]!;
+    const end = open[(index + 1) % open.length]!;
+    if (Math.abs(start[0] - end[0]) > 180) return false;
+  }
+  return open.length >= 3;
+}
+
+/** Join two rings along one shared latitude edge. The shared edge is dropped. */
+function joinAlongSharedEdge(bottom: readonly LonLat[], top: readonly LonLat[]): LonLat[] | null {
+  const left = openLonLatRing(bottom);
+  const right = openLonLatRing(top);
+  for (let i = 0; i < left.length; i += 1) {
+    const a = left[i]!;
+    const b = left[(i + 1) % left.length]!;
+    if (Math.abs(a[1] - b[1]) > 1e-8) continue;
+    for (let j = 0; j < right.length; j += 1) {
+      const c = right[j]!;
+      const d = right[(j + 1) % right.length]!;
+      if (!sameLonLat(a, d) || !sameLonLat(b, c)) continue;
+      const joined: LonLat[] = [];
+      for (let step = 0; step < left.length; step += 1) joined.push(left[(i + 1 + step) % left.length]!);
+      for (let step = 1; step < right.length; step += 1) joined.push(right[(j + 1 + step) % right.length]!);
+      joined.push(joined[0]!);
+      return staysOnOneSide(joined) ? joined : null;
+    }
+  }
+  return null;
+}
+
+/** Weld exact shared latitude edges. Polar full-width edges stay separate. */
+function weldNightBands(rings: readonly (readonly LonLat[])[]): LonLat[][] {
+  let pending = rings.filter(staysOnOneSide).map((ring) => ring.slice());
+  const fixed = rings.filter((ring) => !staysOnOneSide(ring)).map((ring) => ring.slice());
+  let merged = true;
+  while (merged) {
+    merged = false;
+    for (let i = 0; i < pending.length && !merged; i += 1) {
+      for (let j = i + 1; j < pending.length && !merged; j += 1) {
+        const joined = joinAlongSharedEdge(pending[i]!, pending[j]!) ?? joinAlongSharedEdge(pending[j]!, pending[i]!);
+        if (!joined) continue;
+        pending = pending.filter((_, index) => index !== i && index !== j);
+        pending.push(joined);
+        merged = true;
+      }
+    }
+  }
+  return [...pending, ...fixed];
+}
+
 export function terminatorNightPolygonFeatures(when: Date): GeoJSON.Feature[] {
   const subsolar = subsolarPoint(when);
   const LAT_STEP = 2; // 2° step is plenty for visual fill; halves polygon count vs 1° step
@@ -371,11 +442,23 @@ export function terminatorNightPolygonFeatures(when: Date): GeoJSON.Feature[] {
     }
   }
 
+  const bandRings = features.flatMap((feature) => {
+    if (feature.geometry.type !== 'Polygon') return [];
+    const ring = feature.geometry.coordinates[0];
+    if (!ring) return [];
+    return [ring.map((position): LonLat => [position[0] ?? 0, position[1] ?? 0])];
+  });
+  const seamless = weldNightBands(bandRings).map((ring): GeoJSON.Feature => ({
+    type: 'Feature',
+    properties: {},
+    geometry: { type: 'Polygon', coordinates: [ring] },
+  }));
+
   // World-copy duplication so the night shading renders continuously when
   // the operator pans east/west across world copies. Mirrors the line
   // duplication pattern above.
   const duplicated: GeoJSON.Feature[] = [];
-  for (const f of features) {
+  for (const f of seamless) {
     duplicated.push(f);
     const g = f.geometry as GeoJSON.Polygon;
     duplicated.push({

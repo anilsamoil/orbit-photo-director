@@ -19,7 +19,7 @@ export const NIGHT_LIGHTS_LAYER: RasterLayer = {
   type: 'raster',
   source: 'viirs-night-lights',
   layout: { visibility: 'none' },
-  paint: { 'raster-opacity': 0.95 },
+  paint: { 'raster-opacity': ['interpolate', ['linear'], ['zoom'], 2, 0.95, 4, 0.95, 6, 0.85, 8, 0.74] },
 };
 
 export const CANONICAL_VIIRS_DATE = '2016-01-01';

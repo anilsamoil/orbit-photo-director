@@ -53,6 +53,30 @@ it('rejects an over-cap, future, repeated-sector or malformed artifact', () => {
   expect(flashFeatures(feed, now).features[0]?.properties?.ageSeconds).toBe(220);
 });
 
+it('paints lightning above night lights and the terminator, and below the ISS and labels', async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(now);
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(raw)));
+  document.body.innerHTML = '<button id="toggle-lightning"></button><div id="lightning-status" hidden></div>';
+  const vendor = createVendorDouble({
+    layers: [
+      { id: 'terminator-night-fill-layer', type: 'fill', source: 'terminator-night-fill' },
+      { id: 'viirs-night-lights-layer', type: 'raster', source: 'viirs-night-lights' },
+      { id: 'iss-track-layer', type: 'line', source: 'iss-track' },
+      { id: 'esri-labels-reference-layer', type: 'raster', source: 'esri-labels-reference' },
+    ],
+  });
+  lightning.mount(createMapCore(vendor, createClock()));
+  document.getElementById('toggle-lightning')!.click();
+  await vi.advanceTimersByTimeAsync(1);
+  const painted = vendor.paintedLayers();
+  const lightningAt = painted.indexOf('lightning-layer');
+  expect(lightningAt).toBeGreaterThan(painted.indexOf('terminator-night-fill-layer'));
+  expect(lightningAt).toBeGreaterThan(painted.indexOf('viirs-night-lights-layer'));
+  expect(lightningAt).toBeLessThan(painted.indexOf('iss-track-layer'));
+  expect(lightningAt).toBeLessThan(painted.indexOf('esri-labels-reference-layer'));
+});
+
 it('fetches only on enable, paints below the ISS, hides on scrub and expires across failed refreshes', async () => {
   vi.useFakeTimers();
   vi.setSystemTime(now);

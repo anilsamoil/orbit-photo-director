@@ -7,7 +7,7 @@ export const TERMINATOR_FILL_LAYER: FillLayer = {
   paint: {
     'fill-color': '#000000',
     'fill-opacity': 0.30,
-    'fill-antialias': true,
+    'fill-antialias': false,
   },
 };
 

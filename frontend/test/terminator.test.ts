@@ -9,6 +9,23 @@ import {
   terminatorNightPolygonFeatures,
 } from '../src/terminator';
 
+function ringOf(feature: GeoJSON.Feature): [number, number][] {
+  return (feature.geometry as GeoJSON.Polygon).coordinates[0] as [number, number][];
+}
+
+function containsRing(ring: readonly [number, number][], lon: number, lat: number): boolean {
+  let inside = false;
+  for (let index = 0, previous = ring.length - 1; index < ring.length; previous = index, index += 1) {
+    const current = ring[index]!;
+    const prior = ring[previous]!;
+    const crosses = (current[1] > lat) !== (prior[1] > lat);
+    if (crosses && lon < ((prior[0] - current[0]) * (lat - current[1])) / (prior[1] - current[1]) + current[0]) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
 describe('equationOfTimeMinutes', () => {
   // Reference data from NOAA Solar Calculator (rounded).
   // Spencer's two-term approximation matches within ~1 minute of the
@@ -358,6 +375,23 @@ describe('terminatorNightPolygonFeatures (v2)', () => {
       return minLat > 70 && minLon <= -179 && maxLon >= 179;
     });
     expect(hasNorthernPolarNight).toBe(true);
+  });
+
+  it('crosses interior 2° band edges inside one polygon', () => {
+    const when = new Date('2024-09-22T12:00:00Z');
+    const features = terminatorNightPolygonFeatures(when).filter((feature) => {
+      const ring = (feature.geometry as GeoJSON.Polygon).coordinates[0] as [number, number][];
+      return ring.every(([lon]) => lon <= 180 && lon >= -180);
+    });
+    const lon = 150;
+    for (let lat = -86; lat <= 86; lat += 2) {
+      const owners = [lat - 0.2, lat + 0.2].map((sampleLat) =>
+        features.filter((feature) => containsRing(ringOf(feature), lon, sampleLat)),
+      );
+      expect(owners[0], `lat ${lat} south`).toHaveLength(1);
+      expect(owners[1], `lat ${lat} north`).toHaveLength(1);
+      expect(owners[0]![0], `lat ${lat}`).toBe(owners[1]![0]);
+    }
   });
 
   it('includes world-copy duplicates for continuous east/west panning', () => {

@@ -46,34 +46,17 @@ export function gibsBlueMarbleUrl(): string {
   return BLUE_MARBLE_TEMPLATE;
 }
 
-/** VIIRS Black Marble annual night-lights composite (v2 — Chris feedback
- *  2026-05-27). GIBS layer ID `VIIRS_Black_Marble` is published as an annual
- *  composite — date convention is YYYY-01-01 for the year's image.
- *
- *  Tile format: 8-bit RGB PNG, NO alpha channel. Non-illuminated areas
- *  render as opaque dark navy (~rgb 4,5,15), NOT transparent. Verified via
- *  curl + Pillow 2026-05-27. This matters: any layer above the basemap that
- *  uses this raster at high opacity will darken the entire scene, not just
- *  paint lights. The opacity of `viirs-night-lights-layer` in map.ts is
- *  sized accordingly (currently 0.55 — low enough that the dark background
- *  reads as a dim wash and the basemap/clouds show through).
- *
- *  If you ever need true alpha (lights opaque, dark areas transparent), use
- *  a `maplibregl.addProtocol` tile transformer to luminance-key each PNG.
- *  Don't change the opacity assuming the PNG is transparent.
- *  v3.5 (1.6.23.0) did exactly this — see frontend/src/map/adapters/maplibre/viirs-alpha.ts.
- *
- *  Max zoom for this layer per GIBS catalog: GoogleMapsCompatible_Level8
- *  (i.e., z8). MapLibre overzooms above that.
- *
- *  yearIso = "YYYY-01-01"; the caller picks current year and walks back if
- *  the annual product hasn't published yet. */
+/** Static VIIRS Black Marble snapshots: GIBS publishes 2012 and 2016 only.
+ *  The product uses 2016, not a current annual feed. Native sensor resolution
+ *  is 750 m; imagery is rendered at 500 m. The 256 px RGB tiles include an
+ *  opaque navy background, removed by the local viirs-alpha protocol.
+ *  Level8 is the native tile ceiling; larger map zooms add no source detail. */
 export function gibsBlackMarbleUrl(yearIso: string): string {
   const layer = 'VIIRS_Black_Marble';
   return `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/${layer}/default/${yearIso}/GoogleMapsCompatible_Level8/{z}/{y}/{x}.png`;
 }
 
-/** Maxzoom for the VIIRS Black Marble annual composite (GIBS).
+/** Maxzoom for the static VIIRS Black Marble composite (GIBS).
  *  Source caps at Level8; MapLibre overzooms above this with no extra fetch. */
 export const VIIRS_BLACK_MARBLE_MAX_ZOOM = 8;
 
