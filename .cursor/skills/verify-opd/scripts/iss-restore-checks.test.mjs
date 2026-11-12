@@ -56,13 +56,31 @@ test('link restore accepts a finite running/live camera that matches the stored 
 });
 
 function runReload(overrides = {}) {
-  const sample = { fov: 40, raw: '{"windowId":3}', ...overrides };
+  const sample = {
+    fov: 40,
+    raw: '{"windowId":3}',
+    phase: 'running',
+    state: 'live',
+    roll: 180,
+    center: { lat: 10, lng: 20 },
+    text: undefined,
+    ...overrides,
+  };
+  if (sample.text === undefined) {
+    sample.text = typeof sample.fov === 'number' && Number.isFinite(sample.fov) ? `${sample.fov.toFixed(1)}°` : '';
+  }
   const elements = {
     '[data-iss-window]': sample.chipMissing ? null : { hidden: false, textContent: 'W3' },
     '[data-iss-cupola]': { value: '3' },
     '[data-iss-preset="horizon"]': { getAttribute: () => 'false' },
+    '[data-iss-scene]': sample.sceneMissing ? null : { getAttribute: () => sample.phase },
+    '[data-iss-fov]': sample.labelMissing ? null : { getAttribute: () => sample.state, textContent: sample.text },
   };
-  const map = sample.mapMissing ? null : { getVerticalFieldOfView: () => sample.fov };
+  const map = sample.mapMissing ? null : {
+    getVerticalFieldOfView: () => sample.fov,
+    getCenter: () => sample.center,
+    getRoll: () => sample.roll,
+  };
   return runInNewContext(reloaded, {
     document: {
       getElementById: () => ({ className: 'view-iss' }),
@@ -90,6 +108,44 @@ for (const overrides of [{ fov: undefined }, { fov: 40.6 }, { mapMissing: true }
     assert.equal(runReload(overrides), null);
   });
 }
+
+const reloadRejects = [
+  ['phase error', { phase: 'error' }, /iss aim restore is in error/],
+  ['phase blank', { phase: '' }, null],
+  ['phase loading', { phase: 'loading' }, null],
+  ['phase paused', { phase: 'paused' }, null],
+  ['phase suspended', { phase: 'suspended' }, null],
+  ['readout pending', { state: 'pending' }, null],
+  ['readout blank', { state: '' }, null],
+  ['readout error', { state: 'error' }, /iss aim restore fov state/],
+  ['readout stale', { state: 'stale' }, /iss aim restore fov state/],
+  ['readout not a field', { text: 'not a field' }, /iss aim restore label is NaN/],
+  ['center missing', { center: null }, /iss aim restore center is NaN/],
+  ['center NaN latitude', { center: { lat: NaN, lng: 20 } }, /iss aim restore center is NaN/],
+  ['center NaN longitude', { center: { lat: 10, lng: NaN } }, /iss aim restore center is NaN/],
+  ['center infinite latitude', { center: { lat: Infinity, lng: 20 } }, /iss aim restore center is NaN/],
+  ['roll NaN', { roll: NaN }, /iss aim restore roll is NaN/],
+  ['roll Infinity', { roll: Infinity }, /iss aim restore roll is NaN/],
+  ['roll 0', { roll: 0 }, null],
+];
+assert.equal(reloadRejects.length, 17);
+
+for (const [engine, probe] of [
+  ['reload', (overrides) => runReload(overrides)],
+  ['link', (overrides) => run(restore, overrides)],
+]) {
+  for (const [name, overrides, error] of reloadRejects) {
+    test(`${engine} restore rejects ${name} while the field matches`, () => {
+      const result = () => probe(overrides);
+      if (error) assert.throws(result, error);
+      else assert.equal(result(), null);
+    });
+  }
+}
+
+test('reload restore does not widen the half-degree field tolerance', () => {
+  assert.equal(runReload({ fov: 60 }), null);
+});
 
 test('link restore checks the current roll on every observation', () => {
   assert.equal(run(restore, { roll: 180 }).ok, true);

@@ -9715,9 +9715,33 @@ async function proveIssAimReload(send, evidenceDir) {
       if (!chip || chip.hidden || (chip.textContent || '').trim() !== 'W3') return null;
       if (!cupola || cupola.value !== '3') return null;
       if (horizon?.getAttribute('aria-pressed') === 'true') return null;
-      const fov = window.__opdIss?.getVerticalFieldOfView?.();
-      if (typeof fov === 'number' && !Number.isFinite(fov)) throw new Error('iss aim restore field is NaN');
-      if (typeof fov !== 'number' || Math.abs(fov - ${narrowed.fov}) > 0.5) return null;
+      const scene = document.querySelector('[data-iss-scene]');
+      const label = document.querySelector('[data-iss-fov]');
+      const map = window.__opdIss;
+      const phase = scene?.getAttribute('data-iss-phase') || '';
+      if (phase === 'error') throw new Error('iss aim restore is in error');
+      if (phase !== 'running') return null;
+      if (!label) return null;
+      const state = label.getAttribute('data-iss-fov-state') || '';
+      if (state === 'pending' || state === '') return null;
+      if (state !== 'live') throw new Error('iss aim restore fov state ' + state);
+      if (!map?.getVerticalFieldOfView || !map.getCenter || !map.getRoll) return null;
+      const center = map.getCenter();
+      if (!center || !Number.isFinite(center.lat) || !Number.isFinite(center.lng)) {
+        throw new Error('iss aim restore center is NaN');
+      }
+      const fov = map.getVerticalFieldOfView();
+      if (typeof fov !== 'number') return null;
+      if (!Number.isFinite(fov)) throw new Error('iss aim restore field is NaN');
+      if (Math.abs(fov - ${narrowed.fov}) > 0.5) return null;
+      const roll = ((map.getRoll() % 360) + 360) % 360;
+      if (!Number.isFinite(roll)) throw new Error('iss aim restore roll is NaN');
+      if (Math.abs(roll - 180) > 0.5) return null;
+      const text = (label.textContent || '').trim();
+      if (!text) return null;
+      const shown = Number.parseFloat(text);
+      if (!Number.isFinite(shown)) throw new Error('iss aim restore label is NaN');
+      if (Math.abs(shown - fov) > 0.2) return null;
       const raw = sessionStorage.getItem('opd-iss-aim');
       if (!raw) return null;
       if (localStorage.getItem('opd-iss-aim') !== raw) return null;
