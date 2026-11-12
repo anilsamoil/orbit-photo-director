@@ -84,6 +84,12 @@ const mutations = [
     "file": "src/map/adapters/maplibre/iss-view.ts",
     "before": "      if (!sawCamera) publishAppliedCamera(map, aim);\n",
     "after": ""
+  },
+  {
+    "name": "cupola-lost-fov-bypasses-gate",
+    "file": "src/iss-view/index.ts",
+    "before": "    if (windowId !== null && !contextLost) opticalFovDeg = lensFovDeg;\n",
+    "after": "    if (windowId !== null) opticalFovDeg = lensFovDeg;\n"
   }
 ];
 const originals = new Map(mutations.map(({ file }) => [file, readFileSync(resolve(root, file), 'utf8')]));

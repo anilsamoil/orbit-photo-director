@@ -1022,7 +1022,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     session.look.rightDeg = 0;
     session.look.upDeg = 0;
     panOrigin = null;
-    if (windowId !== null) opticalFovDeg = lensFovDeg;
+    if (windowId !== null && !contextLost) opticalFovDeg = lensFovDeg;
     session.opticalFovDeg = opticalFovDeg;
     syncPreset();
     syncCupola();
