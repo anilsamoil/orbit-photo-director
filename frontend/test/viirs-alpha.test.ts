@@ -1,104 +1,245 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { nightLightsFade, nightLightsMinute, viirsAlphaUrl } from '../src/night-lights';
 import {
-  LUMINANCE_RAMP,
-  LUMINANCE_THRESHOLD,
-  VIIRS_ALPHA_PROTOCOL,
-  keyAlpha,
-  viirsAlphaUrl,
+  colorNightLightsPixels, createViirsAlphaHandler, maskNightLightsPixels,
+  renderNightLightsTile, VIIRS_ALPHA_PROTOCOL, VIIRS_CACHE_MAX_TILES,
 } from '../src/map/adapters/maplibre/viirs-alpha';
 
-// V4-P3 (v3.5, 2026-05-29): luminance-key protocol for the VIIRS Black
-// Marble PNG. We can't test the actual MapLibre addProtocol registration
-// here — happy-dom has neither OffscreenCanvas nor a real canvas 2d
-// context with getImageData/putImageData. But the pixel-walk is a pure
-// function, and that's where the interesting logic lives.
+const noon = Date.parse('2026-03-20T12:00:00Z');
+const rgba = (value: number, alpha = 255) => new Uint8ClampedArray([value, value, value, alpha]);
+const tileUrl = (x = 0, atMs = noon) => viirsAlphaUrl('2016-01-01', atMs)
+  .replace('{z}', '8').replace('{y}', '95').replace('{x}', String(x));
 
-function rgba(r: number, g: number, b: number, a = 255): Uint8ClampedArray {
-  return new Uint8ClampedArray([r, g, b, a]);
-}
+afterEach(() => { vi.unstubAllGlobals(); });
 
-describe('keyAlpha', () => {
-  it('dark navy background pixel (rgb 4,5,15) becomes fully transparent', () => {
-    // Background of the actual GIBS VIIRS_Black_Marble PNG. Luminance is
-    // 0.299*4 + 0.587*5 + 0.114*15 ≈ 5.84 — well under the threshold.
-    const px = rgba(4, 5, 15);
-    keyAlpha(px);
-    expect(px[3]).toBe(0);
+describe('night-light color and coverage', () => {
+  it('removes the navy background and keeps a dim fringe warm and transparent', () => {
+    const navy = new Uint8ClampedArray([4, 5, 15, 255]);
+    expect([...colorNightLightsPixels(navy)]).toEqual([255, 179, 95, 0]);
+    expect([...colorNightLightsPixels(rgba(40))]).toEqual([255, 195, 117, 36]);
   });
 
-  it('bright city-lights pixel (rgb 255,235,150) stays fully opaque', () => {
-    // A representative bright city pixel. Luminance ≈ 0.299*255 + 0.587*235
-    // + 0.114*150 = 76.245 + 137.9 + 17.1 ≈ 231 — well above threshold+ramp.
-    const px = rgba(255, 235, 150);
-    keyAlpha(px);
-    expect(px[3]).toBe(255);
+  it('keeps dim towns visible and bright cores warm, below full opacity', () => {
+    expect([...colorNightLightsPixels(rgba(30))]).toEqual([255, 190, 110, 22]);
+    expect([...colorNightLightsPixels(rgba(50))]).toEqual([255, 198, 122, 49]);
+    expect([...colorNightLightsPixels(rgba(100))]).toEqual([255, 211, 139, 102]);
+    expect([...colorNightLightsPixels(rgba(200))]).toEqual([255, 226, 161, 188]);
+    expect([...colorNightLightsPixels(rgba(255))]).toEqual([255, 233, 170, 230]);
+    expect([...colorNightLightsPixels(new Uint8ClampedArray([255, 235, 150, 255]))]).toEqual([255, 230, 166, 212]);
   });
 
-  it('pixel exactly at the threshold gets alpha=0 (strict less-than ramp)', () => {
-    // Construct a pixel whose luminance is exactly LUMINANCE_THRESHOLD via
-    // a pure-green color: 0.587 * g = threshold → g = threshold/0.587. The
-    // ramp condition is `< threshold + ramp`; the threshold boundary itself
-    // falls in the ramp (alpha ramps from 0). At the exact threshold the
-    // ramp factor is 0 → alpha 0.
-    const g = Math.round(LUMINANCE_THRESHOLD / 0.587);
-    const px = rgba(0, g, 0);
-    // Recompute and confirm: with rounding, luminance is at most a fraction
-    // off the threshold. The test stays meaningful whether we end up just
-    // above or just below — alpha must be 0 or near-0, never 255.
-    keyAlpha(px);
-    expect(px[3]).toBeLessThanOrEqual(20);
-  });
-
-  it('mid-ramp pixel (luminance halfway through ramp) gets alpha ≈ 127', () => {
-    // Pure green at luminance threshold+ramp/2. With threshold=30, ramp=10
-    // the midpoint is 35 → g ≈ 60. The ramp factor is 0.5 → alpha ≈ 127.5
-    // → rounded to 128. Allow ±2 slack for the integer-rounding of g.
-    const targetLum = LUMINANCE_THRESHOLD + LUMINANCE_RAMP / 2;
-    const g = Math.round(targetLum / 0.587);
-    const px = rgba(0, g, 0);
-    keyAlpha(px);
-    expect(px[3]).toBeGreaterThanOrEqual(120);
-    expect(px[3]).toBeLessThanOrEqual(135);
-  });
-
-  it('multi-pixel buffer keys each pixel independently', () => {
-    // Three pixels: dark, mid-ramp, bright. Each pixel is 4 bytes (RGBA).
-    const targetMidLum = LUMINANCE_THRESHOLD + LUMINANCE_RAMP / 2;
-    const gMid = Math.round(targetMidLum / 0.587);
-    const buf = new Uint8ClampedArray([
-      4, 5, 15, 255,          // dark — alpha → 0
-      0, gMid, 0, 255,        // mid-ramp — alpha ≈ 127
-      255, 235, 150, 255,     // bright — alpha stays 255
-    ]);
-    keyAlpha(buf);
-    expect(buf[3]).toBe(0);
-    expect(buf[7]).toBeGreaterThanOrEqual(120);
-    expect(buf[7]).toBeLessThanOrEqual(135);
-    expect(buf[11]).toBe(255);
-  });
-
-  it('returns the same buffer (mutates in place)', () => {
-    const px = rgba(4, 5, 15);
-    const result = keyAlpha(px);
-    expect(result).toBe(px);
+  it('preserves source transparency and proportional partial coverage in place', () => {
+    const partial = rgba(150, 64);
+    expect(colorNightLightsPixels(partial)).toBe(partial);
+    expect([...partial]).toEqual([255, 219, 151, 37]);
+    expect([...colorNightLightsPixels(rgba(150))]).toEqual([255, 219, 151, 147]);
+    expect([...colorNightLightsPixels(rgba(255, 0))]).toEqual([255, 233, 170, 0]);
   });
 });
 
-describe('viirsAlphaUrl', () => {
-  it('returns a string starting with the viirs-alpha:// scheme', () => {
-    const url = viirsAlphaUrl('2016-01-01');
-    expect(url.startsWith(`${VIIRS_ALPHA_PROTOCOL}://`)).toBe(true);
+describe('night-side mask', () => {
+  it('has a smooth twilight shoulder, zero daylight and full night at minus three degrees', () => {
+    expect(nightLightsFade(15)).toBe(0);
+    expect(nightLightsFade(0)).toBe(0);
+    expect(nightLightsFade(-1)).toBe(7 / 27);
+    expect(nightLightsFade(-1.5)).toBe(0.5);
+    expect(nightLightsFade(-3)).toBe(1);
+    expect(nightLightsFade(-60)).toBe(1);
+    expect(nightLightsFade(-0.01)).toBe(0.000033259259259259265);
+    expect(nightLightsFade(-2.99)).toBe(0.9999667407407407);
   });
 
-  it('embeds the upstream GIBS URL without double-encoding', () => {
-    const url = viirsAlphaUrl('2016-01-01');
-    expect(url).toContain('https://gibs.earthdata.nasa.gov/');
-    expect(url).toContain('VIIRS_Black_Marble');
-    expect(url).toContain('/2016-01-01/');
-    // No URL-encoding: the colon and slashes from the upstream URL must
-    // pass through literally so the handler can strip the prefix cleanly.
-    expect(url).not.toContain('%3A');
-    expect(url).not.toContain('%2F');
+  it('masks both day quadrants and joins the night side across the antimeridian', () => {
+    const pixels = new Uint8ClampedArray(Array.from({ length: 4 }, () => [255, 220, 150, 200]).flat());
+    maskNightLightsPixels(pixels, 4, 1, { z: 0, x: 0, y: 0, atMs: noon });
+    expect([pixels[3], pixels[7], pixels[11], pixels[15]]).toEqual([200, 0, 0, 200]);
+  });
+
+  it('scrubbing twelve hours reverses the lit hemisphere without changing color or raising alpha', () => {
+    const pixels = new Uint8ClampedArray(Array.from({ length: 4 }, () => [255, 220, 150, 80]).flat());
+    maskNightLightsPixels(pixels, 4, 1, { z: 0, x: 0, y: 0, atMs: noon + 12 * 3600_000 });
+    expect([pixels[3], pixels[7], pixels[11], pixels[15]]).toEqual([0, 80, 80, 0]);
+    expect([...pixels.slice(4, 7)]).toEqual([255, 220, 150]);
+  });
+
+  it('feathers a pixel between 0° and -3° instead of switching it fully on', () => {
+    const pixels = new Uint8ClampedArray([255, 220, 150, 200]);
+    maskNightLightsPixels(pixels, 1, 1, { z: 6, x: 48, y: 8, atMs: noon });
+    expect([...pixels]).toEqual([255, 220, 150, 32]);
+  });
+
+  it('uses Mercator pixel latitude for polar day and night', () => {
+    const north = rgba(255);
+    const south = rgba(255);
+    const summer = Date.parse('2026-06-21T12:00:00Z');
+    maskNightLightsPixels(north, 1, 1, { z: 2, x: 0, y: 0, atMs: summer });
+    maskNightLightsPixels(south, 1, 1, { z: 2, x: 0, y: 3, atMs: summer });
+    expect(north[3]).toBe(0);
+    expect(south[3]).toBe(255);
+  });
+});
+
+describe('view-time tile URLs', () => {
+  it('keeps the public static source and quantizes only the local mask instant', () => {
+    const url = viirsAlphaUrl('2016-01-01', noon + 12345);
+    expect(url.startsWith(`${VIIRS_ALPHA_PROTOCOL}://https://gibs.earthdata.nasa.gov/`)).toBe(true);
+    expect(url).toContain('/2016-01-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.png');
+    expect(url).toContain(`?night=${noon}`);
+    expect(nightLightsMinute(noon - 1)).toBe(noon - 60_000);
+  });
+});
+
+describe('tile lifecycle', () => {
+  it('reuses upstream bytes across mask times while transforming each requested instant', async () => {
+    const fetchMock = vi.fn(async () => new Response(new Uint8Array([1, 2, 3])));
+    vi.stubGlobal('fetch', fetchMock);
+    let viewMs = noon;
+    const transform = vi.fn(async (bytes: ArrayBuffer, tile: { atMs: number }) => { void tile; return bytes; });
+    const handler = createViirsAlphaHandler(() => viewMs, transform);
+    const first = new AbortController();
+    await handler({ url: tileUrl() }, first);
+    viewMs = noon + 60_000;
+    await handler({ url: tileUrl(0, viewMs) }, new AbortController());
+    viewMs = noon - 60_000;
+    await handler({ url: tileUrl(0, viewMs) }, new AbortController());
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledWith(tileUrl().replace('viirs-alpha://', '').split('?')[0], { signal: first.signal });
+    expect(transform.mock.calls.map(call => call[1].atMs)).toEqual([noon, noon + 60_000, noon - 60_000]);
+  });
+
+  it.each([60_000, -60_000])('late completion uses the authoritative view after a %i ms scrub', async delta => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new Uint8Array([1]))));
+    let viewMs = noon;
+    let resume: (() => void) | undefined;
+    let started: (() => void) | undefined;
+    const firstStarted = new Promise<void>(resolve => { started = resolve; });
+    const delayed = new Promise<void>(resolve => { resume = resolve; });
+    let calls = 0;
+    const handler = createViirsAlphaHandler(() => viewMs, async (_bytes, tile) => {
+      calls += 1;
+      if (calls === 1) { started?.(); await delayed; }
+      return new Float64Array([tile.atMs]).buffer;
+    });
+    const old = handler({ url: tileUrl() }, new AbortController());
+    await firstStarted;
+    viewMs += delta;
+    const latest = await handler({ url: tileUrl(0, viewMs) }, new AbortController());
+    resume?.();
+    const late = await old;
+    expect(new Float64Array(latest.data as ArrayBuffer)[0]).toBe(viewMs);
+    expect(new Float64Array(late.data as ArrayBuffer)[0]).toBe(viewMs);
+    const queuedOld = await handler({ url: tileUrl() }, new AbortController());
+    expect(new Float64Array(queuedOld.data as ArrayBuffer)[0]).toBe(viewMs);
+  });
+
+  it('bounds the raw tile count and evicts least recently used entries', async () => {
+    const fetchMock = vi.fn(async () => new Response(new Uint8Array([1])));
+    vi.stubGlobal('fetch', fetchMock);
+    const handler = createViirsAlphaHandler(() => noon, async bytes => bytes);
+    for (let x = 0; x <= VIIRS_CACHE_MAX_TILES; x += 1) await handler({ url: tileUrl(x) }, new AbortController());
+    await handler({ url: tileUrl(VIIRS_CACHE_MAX_TILES) }, new AbortController());
+    expect(fetchMock).toHaveBeenCalledTimes(VIIRS_CACHE_MAX_TILES + 1);
+    await handler({ url: tileUrl(0) }, new AbortController());
+    expect(fetchMock).toHaveBeenCalledTimes(VIIRS_CACHE_MAX_TILES + 2);
+  });
+
+  it('also bounds bytes when tiles are unusually large', async () => {
+    const fetchMock = vi.fn(async () => new Response(new Uint8Array(3 * 1024 * 1024)));
+    vi.stubGlobal('fetch', fetchMock);
+    const handler = createViirsAlphaHandler(() => noon, async bytes => bytes);
+    for (const x of [0, 1, 2, 0]) await handler({ url: tileUrl(x) }, new AbortController());
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it('refetches a repaired 200 after a bad 200 fails to decode, on retry and on toggle', async () => {
+    const bad = new Uint8Array([9, 9, 9]);
+    const good = new Uint8Array([4, 5, 6]);
+    const rendered = new Uint8Array([7, 7, 7]);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(bad.slice(), { status: 200 }))
+      .mockResolvedValueOnce(new Response(good.slice(), { status: 200 }))
+      .mockResolvedValueOnce(new Response(bad.slice(), { status: 200 }))
+      .mockResolvedValueOnce(new Response(good.slice(), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const transform = vi.fn(async (bytes: ArrayBuffer) => {
+      if (new Uint8Array(bytes)[0] === 9) throw new Error('decode failed');
+      return rendered.buffer;
+    });
+    const handler = createViirsAlphaHandler(() => noon, transform);
+
+    await expect(handler({ url: tileUrl() }, new AbortController())).rejects.toThrow('decode failed');
+    const retry = await handler({ url: tileUrl() }, new AbortController());
+    expect(new Uint8Array(retry.data as ArrayBuffer)).toEqual(rendered);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    await expect(handler({ url: tileUrl(1) }, new AbortController())).rejects.toThrow('decode failed');
+    const toggled = await handler({ url: tileUrl(1) }, new AbortController());
+    expect(new Uint8Array(toggled.data as ArrayBuffer)).toEqual(rendered);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(transform).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not cache an upstream failure', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response('', { status: 503 }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([1])));
+    vi.stubGlobal('fetch', fetchMock);
+    const handler = createViirsAlphaHandler(() => noon, async bytes => bytes);
+    await expect(handler({ url: tileUrl() }, new AbortController())).rejects.toThrow('503');
+    await expect(handler({ url: tileUrl() }, new AbortController())).resolves.toHaveProperty('data');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('honors cancellation before a cached transform and after decode work', async () => {
+    const fetchMock = vi.fn(async () => new Response(new Uint8Array([1])));
+    vi.stubGlobal('fetch', fetchMock);
+    const controller = new AbortController();
+    const transform = vi.fn(async (bytes: ArrayBuffer) => { controller.abort(); return bytes; });
+    const handler = createViirsAlphaHandler(() => noon, transform);
+    await expect(handler({ url: tileUrl() }, controller)).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(handler({ url: tileUrl() }, controller)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(transform).toHaveBeenCalledOnce();
+  });
+
+  it('rejects cancellation after fetch and never caches the aborted response', async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn().mockImplementationOnce(async () => {
+      controller.abort();
+      return new Response(new Uint8Array([1]));
+    }).mockResolvedValue(new Response(new Uint8Array([1])));
+    vi.stubGlobal('fetch', fetchMock);
+    const transform = vi.fn(async (bytes: ArrayBuffer) => bytes);
+    const handler = createViirsAlphaHandler(() => noon, transform);
+    await expect(handler({ url: tileUrl() }, controller)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(transform).not.toHaveBeenCalled();
+    await handler({ url: tileUrl() }, new AbortController());
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('closes decoded bitmaps when canvas creation fails instead of exposing raw opaque tiles', async () => {
+    const close = vi.fn();
+    vi.stubGlobal('createImageBitmap', vi.fn(async () => ({ width: 1, height: 1, close })));
+    vi.stubGlobal('OffscreenCanvas', class { getContext() { return null; } });
+    await expect(renderNightLightsTile(new ArrayBuffer(0), { z: 0, x: 0, y: 0, atMs: noon }, new AbortController().signal))
+      .rejects.toThrow('2D canvas');
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('closes decoded bitmaps on success, and passes only masked pixels to PNG encoding', async () => {
+    vi.stubGlobal('Image', class { src = ''; async decode() {} });
+    vi.stubGlobal('URL', { createObjectURL: () => 'blob:night-lights-test', revokeObjectURL: vi.fn() });
+    const close = vi.fn();
+    const frame = { data: rgba(255), width: 1, height: 1 };
+    const put = vi.fn();
+    vi.stubGlobal('createImageBitmap', vi.fn(async () => ({ width: 1, height: 1, close })));
+    vi.stubGlobal('OffscreenCanvas', class {
+      getContext() { return { drawImage() {}, getImageData: () => frame, putImageData: put }; }
+      async convertToBlob() { return new Blob([new Uint8Array([1])]); }
+    });
+    await renderNightLightsTile(new ArrayBuffer(0), { z: 0, x: 0, y: 0, atMs: noon }, new AbortController().signal);
+    expect(put).toHaveBeenCalledOnce();
+    expect(frame.data[3]).toBe(0);
+    expect(close).toHaveBeenCalledOnce();
   });
 });

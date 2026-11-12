@@ -29,7 +29,7 @@ describe('gibsBlackMarbleUrl', () => {
     expect(url).toContain('VIIRS_Black_Marble');
     expect(url).toContain('/2016-01-01/');
     expect(url).toContain('GoogleMapsCompatible_Level8');
-    // PNG (not JPG) — annual product has transparent day-side pixels.
+    // PNG (not JPG); the local adapter supplies night-side transparency.
     expect(url).toMatch(/\.png$/);
   });
 
@@ -72,19 +72,8 @@ describe('VIIRS Black Marble canonical date (v2 hotfix)', () => {
   });
 });
 
-// v3.5 (2026-05-29) regression coverage, driven through renderMap on the
-// recording double:
-//   1. The day-mask layer (added in v3.1) and its source MUST NOT exist
-//      anywhere in the renderMap layer/source bring-up. The mask's opaque
-//      #0b0d12 fill hid the basemap, clouds, AND the raster on the sun
-//      side; the operator wanted the day side to look like normal daytime.
-//   2. The viirs-night-lights-layer raster-opacity must be 0.95 (was 0.55
-//      in v3.3/v3.4). v3.5 introduced the viirs-alpha:// MapLibre protocol
-//      that luminance-keys the tile so dark background pixels become
-//      transparent. With the dark background gone the layer can paint at
-//      0.95 without darkening basemap/clouds, and bright city lights are
-//      no longer muted.
-describe('v3.5 night-lights regressions', () => {
+// Night-only transparency must never use an opaque day mask above other overlays.
+describe('night-lights rendering regressions', () => {
   let mapModule: typeof import('../src/map');
 
   function click(id: string): void {
@@ -112,8 +101,23 @@ describe('v3.5 night-lights regressions', () => {
     localStorage.clear();
   });
 
-  it('viirs-night-lights-layer paints at raster-opacity 0.95 (was 0.55 in v3.3/v3.4)', () => {
-    expect(renderedMap().getLayer('viirs-night-lights-layer')?.paint).toEqual({ 'raster-opacity': 0.95 });
+  it('keeps overview lights vivid while reducing source overzoom glare', () => {
+    expect(renderedMap().getLayer('viirs-night-lights-layer')?.paint).toEqual({ 'raster-opacity': ['interpolate', ['linear'], ['zoom'], 2, 0.95, 4, 0.95, 6, 0.85, 8, 0.74] });
+  });
+
+  it('keeps the current night-only mask when terminator guides are hidden and time is scrubbed', () => {
+    const map = renderedMap();
+    click('toggle-night-lights');
+    const first = map.tilesSetOn('viirs-night-lights').at(-1)?.[0];
+    expect(first).toContain('?night=');
+    click('toggle-terminator');
+    expect(map.tilesSetOn('viirs-night-lights').at(-1)?.[0]).toBe(first);
+    mapModule.setLookahead(90, false);
+    const scrubbed = map.tilesSetOn('viirs-night-lights').at(-1)?.[0];
+    expect(scrubbed).toContain('?night=');
+    expect(scrubbed).not.toBe(first);
+    expect(map.visibilityOf('viirs-night-lights-layer')).toBe('visible');
+    expect(map.visibilityOf('terminator-night-fill-layer')).toBe('none');
   });
 
   it('the global dim is a background layer shown only with lights ON and terminator OFF (v3.6)', () => {

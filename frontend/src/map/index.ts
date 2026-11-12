@@ -6,7 +6,8 @@ import { createVendorMap } from './adapters/maplibre';
 import { createIssRenderer } from './adapters/maplibre/iss-view';
 import { createTrackInset } from './adapters/maplibre/track-inset';
 import { sceneFrame, sensorField } from '../iss-view/model';
-import { registerViirsAlphaProtocol, viirsAlphaUrl } from './adapters/maplibre/viirs-alpha';
+import { registerViirsAlphaProtocol } from './adapters/maplibre/viirs-alpha';
+import { viirsAlphaUrl } from '../night-lights';
 import { initialCamera } from './map-core/camera';
 import { createClock } from './map-core/clock';
 import { createMapCore, type MapCore } from './map-core/core';
@@ -150,10 +151,10 @@ export {
 export { applyFollowISS, readBearingMode, _resetFollowStateForTest } from './features/follow-iss';
 export type { BearingMode } from './features/follow-iss';
 
-registerViirsAlphaProtocol();
 
 let core: MapCore | null = null;
 const clock = createClock();
+registerViirsAlphaProtocol(() => clock.viewMs());
 bindBasemapClock(clock);
 bindTerminatorClock(clock);
 bindGroundTrackClock(clock);
@@ -272,11 +273,11 @@ export function buildStyle(): StyleSpec {
       
       'viirs-night-lights': {
         type: 'raster',
-        tiles: [viirsAlphaUrl('2016-01-01')],
+        tiles: [viirsAlphaUrl('2016-01-01', clock.viewMs())],
         tileSize: 256,
         maxzoom: VIIRS_BLACK_MARBLE_MAX_ZOOM,
         attribution:
-          'Night lights: <a href="https://earthdata.nasa.gov">NASA GIBS VIIRS Black Marble</a>',
+          'Night lights: <a href="https://earthdata.nasa.gov">NASA GIBS VIIRS Black Marble</a> (static 2016)',
       },
       
       

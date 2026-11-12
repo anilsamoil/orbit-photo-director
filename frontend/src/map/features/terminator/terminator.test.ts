@@ -45,6 +45,8 @@ describe('terminator', () => {
     api().terminator.mount(createMapCore(vendor, clock));
     expect(vendor.visibilityOf('terminator-line-layer')).toBe('visible');
     expect(vendor.visibilityOf('terminator-night-fill-layer')).toBe('visible');
+    expect(vendor.layers.find((layer) => layer.id === 'terminator-night-fill-layer')?.paint)
+      .toMatchObject({ 'fill-antialias': false, 'fill-opacity': 0.30 });
     expect(vendor.visibilityOf('subsolar-point-layer')).toBe('visible');
     expect(vendor.sources.get('terminator-line')?.type).toBe('geojson');
     expect(vendor.sources.get('terminator-night-fill')?.type).toBe('geojson');
