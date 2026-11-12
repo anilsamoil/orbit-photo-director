@@ -419,6 +419,7 @@ for (const engine of [
             const content = document.querySelector<HTMLElement>('.maplibregl-popup-content')!;
             const popup = document.querySelector<HTMLElement>('.dropped-pin-popup')!;
             const close = document.querySelector<HTMLElement>('.maplibregl-popup-close-button')!;
+            const closeBox = close.getBoundingClientRect();
             const glyphRange = document.createRange();
             glyphRange.selectNodeContents(close);
             const glyph = glyphRange.getBoundingClientRect();
@@ -434,12 +435,10 @@ for (const engine of [
               const rect = range.getBoundingClientRect();
               const overlapW = Math.min(rect.right, glyph.right) - Math.max(rect.left, glyph.left);
               const overlapH = Math.min(rect.bottom, glyph.bottom) - Math.max(rect.top, glyph.top);
-              const covered = overlapW > 0.5 && overlapH > 0.5;
-              const hit = document.elementFromPoint((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2);
               const outside = rect.width <= 0 || rect.height <= 0
                 || rect.left < contentBox.left - 0.5
                 || rect.right > contentBox.right + 0.5;
-              if (covered || !heading.contains(hit)) hidden.push(text[index]!);
+              if (overlapW > 0.5 && overlapH > 0.5) hidden.push(text[index]!);
               if (outside) clipped.push(text[index]!);
             }
             const lines = (() => {
@@ -468,6 +467,8 @@ for (const engine of [
               normalClient: heading.clientWidth,
               hidden: hidden.join(''),
               clipped: clipped.join(''),
+              closeWidth: closeBox.width,
+              closeHeight: closeBox.height,
             };
           });
           const label = `${engine.name} ${size.width}×${size.height} container ${measured.container}`;
@@ -480,6 +481,8 @@ for (const engine of [
           expect.soft(measured.lines, `${label} wraps`).toBeGreaterThan(1);
           expect.soft(measured.hidden, `${label} hidden ${measured.hidden}`).toBe('');
           expect.soft(measured.clipped, `${label} clipped ${measured.clipped}`).toBe('');
+          expect.soft(measured.closeWidth, `${label} close width`).toBe(44);
+          expect.soft(measured.closeHeight, `${label} close height`).toBe(44);
           if (size.band === 'above') {
             expect.soft(measured.normalLines, `${label} normal heading lines`).toBe(1);
             expect.soft(measured.normalScroll, `${label} normal heading scrollWidth`).toBeLessThanOrEqual(measured.normalClient);

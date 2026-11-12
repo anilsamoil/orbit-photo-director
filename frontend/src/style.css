@@ -4620,7 +4620,6 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
 
 #map-pane.map-inspector-open .maplibregl-popup-content:has(> .dropped-pin-popup) {
   padding: 8px 12px 12px;
-  --pin-close-ink-size: 28px;
 }
 
 #map-pane.map-inspector-open .maplibregl-popup-content:has(> .launch-ascent-card) {
@@ -4656,8 +4655,20 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
   line-height: 1.2;
 }
 
+@container (min-width: 261px) {
+  .maplibregl-popup-content:has(> .dropped-pin-popup) .maplibregl-popup-close-button {
+    display: flex;
+    align-items: flex-start;
+    justify-content: flex-end;
+    box-sizing: border-box;
+    line-height: 1;
+    padding: 2px 4px 0 0;
+  }
+}
+
 @container (max-width: 260px) {
   #map-pane.map-inspector-open .maplibregl-popup-content:has(> .dropped-pin-popup) {
+    --pin-close-ink-size: 28px;
     padding-top: 4px;
   }
   .dropped-pin-popup > strong,
