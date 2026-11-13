@@ -15,21 +15,26 @@ import {
   type HazardNotice,
 } from '../src/launch-hazards';
 import { parseLaunchArtifact } from '../src/launch-schema';
-import { tiersAt } from '../src/launch-tiers';
+import { renderTierCard, openTierDetails } from '../src/launch-tier-card';
+import { tiersAt, type TierLaunch } from '../src/launch-tiers';
 import { createClock } from '../src/map/map-core/clock';
 import { createMapCore } from '../src/map/map-core/core';
 import {
+  bindAscentPad,
   focusLaunchOnMap,
   launchHazardFillLayer,
   launchHazardOutlineLayer,
   noteLaunchCore,
+  reloadLaunchHazards,
   resetLaunchForTest,
   syncLaunchHazards,
+  syncMapLaunchMode,
   useHazardBundleForTest,
 } from '../src/map/features/launch-corridor';
 import { buildTierMapFeatures } from '../src/map/features/launch-corridor/geometry';
 import { getMapLaunchMode, setMapLaunchMode } from '../src/map-launch-mode';
 import type { TierCatalog } from '../src/launch-tiers';
+import type { VendorDouble } from './vendor-map-double';
 import { createVendorDouble } from './vendor-map-double';
 import capturedCatalog from './fixtures/starship-catalog-2026-11-10.json' with { type: 'json' };
 
@@ -226,6 +231,110 @@ function rawBundle(): HazardBundle {
   return parsed;
 }
 
+type StarshipItem = {
+  event_id: string;
+  schedule: {
+    net: string;
+    window_start: string | null;
+    window_end: string | null;
+    precision: string;
+    status: string;
+  };
+  reasons: string[];
+};
+
+type HazardFile = {
+  revision: string;
+  checked_at: string;
+  valid_until: string;
+  status?: string;
+  notices: { area_id: string }[];
+  geojson: { features: { properties: { area_id: string } }[] };
+};
+
+function hazardFile(): HazardFile {
+  return JSON.parse(readFileSync(HAZARD_FILE, 'utf8')) as HazardFile;
+}
+
+function jsonResponse(body: unknown, status = 200): Promise<Response> {
+  return Promise.resolve(new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  }));
+}
+
+function painted(vendor: VendorDouble): GeoJSON.Feature[] {
+  const source = vendor.sources.get('launch-hazards');
+  if (!source || source.type !== 'geojson' || typeof source.data === 'string') return [];
+  return source.data.features;
+}
+
+async function catalogStore(now: number, edit?: (item: StarshipItem) => void): Promise<LaunchCatalogStore> {
+  const parsed = parseLaunchArtifact(structuredClone(capturedCatalog));
+  if (parsed.schema_version !== 3) throw new Error('expected a catalog');
+  parsed.generated_at = new Date(now - 60_000).toISOString();
+  parsed.geometry_valid_until = new Date(now + 10 * 60_000).toISOString();
+  parsed.schedule_valid_until = new Date(now + 60 * 60_000).toISOString();
+  const item = parsed.items.find((entry) => entry.event_id === STARSHIP_FLIGHT15_EVENT_ID) as StarshipItem | undefined;
+  if (!item) throw new Error('missing starship');
+  edit?.(item);
+  const text = JSON.stringify(parsed);
+  const sha = sha256(Buffer.from(text));
+  const pointer = {
+    schema_version: 2,
+    revision: parsed.revision,
+    generated_at: parsed.generated_at,
+    valid_until: parsed.geometry_valid_until,
+    path: `launch/catalog/v/${parsed.revision}.json`,
+    sha256: sha,
+  };
+  const store = new LaunchCatalogStore(async (input) => new Response(
+    String(input).includes('latest.json') ? JSON.stringify(pointer) : text,
+    { status: 200, headers: { 'content-type': 'application/json' } },
+  ));
+  await store.refresh();
+  return store;
+}
+
+function followStore(store: LaunchCatalogStore): void {
+  vi.spyOn(launchCatalog, 'read').mockImplementation((now: number) => store.read(now));
+  vi.spyOn(launchCatalog, 'attempt').mockImplementation((id: string, now: number) => store.attempt(id, now));
+}
+
+const STARSHIP_PIN: TierLaunch = {
+  eventId: STARSHIP_FLIGHT15_EVENT_ID,
+  revision: 'ef57baeda973b070b49f3f9c',
+  name: 'Starship | Starlink Group 31-2 (Starship Flight 15)',
+  rocket: 'Starship V3',
+  site: { name: 'SpaceX Starbase, TX, USA', lat: 25.99677, lon: -97.15799, pad: 'Orbital Launch Pad 2' },
+  tier: 'watch',
+  why: 'Watch',
+  reasons: [],
+  schedule: {
+    netMs: NOV13,
+    windowStartMs: NOV13,
+    windowEndMs: WINDOW_END,
+    precision: 'Minute',
+    status: 'TBC',
+  },
+  top: null,
+  corridor: null,
+  whenMs: NOV13,
+  liveUntilMs: WINDOW_END,
+};
+
+function rect(node: HTMLElement, x: number, y: number, w: number, h: number): void {
+  vi.spyOn(node, 'getBoundingClientRect').mockReturnValue(new DOMRect(x, y, w, h));
+}
+
+function mount(now = '2026-11-13T22:50:00Z') {
+  const vendor = createVendorDouble();
+  const core = createMapCore(vendor, createClock(() => Date.parse(now)));
+  noteLaunchCore(core);
+  useHazardBundleForTest(rawBundle());
+  return { vendor, core };
+}
+
 afterEach(() => {
   resetLaunchForTest();
   setMapLaunchMode(false);
@@ -346,17 +455,10 @@ describe('Starship Flight 15 hazard notices', () => {
 });
 
 describe('hazard overlay on the map', () => {
-  const bundle = rawBundle();
-
-  function mount(now = '2026-11-13T22:50:00Z') {
-    const vendor = createVendorDouble();
-    const core = createMapCore(vendor, createClock(() => Date.parse(now)));
-    noteLaunchCore(core);
-    useHazardBundleForTest(bundle);
-    return { vendor, core };
-  }
-
   it('paints closed polygons inside the window and none between windows', () => {
+    vi.spyOn(launchCatalog, 'read').mockReturnValue({
+      mapPins: [{ eventId: STARSHIP_FLIGHT15_EVENT_ID }],
+    } as unknown as TierCatalog);
     const attempt = vi.spyOn(launchCatalog, 'attempt').mockReturnValue(ATTEMPT);
     const { vendor, core } = mount();
     setMapLaunchMode(true);
@@ -419,13 +521,14 @@ describe('hazard overlay on the map', () => {
     const box = fit?.args[0] as { west: number; east: number } | undefined;
     if (!box) throw new Error('expected a fit');
     expect(box.east - box.west).toBeGreaterThan(10);
+    expect(fit?.args[1]).toMatchObject({ padding: 50, maxZoom: 5, duration: 600, bearing: 0 });
     const lines = vendor.sources.get('ascent-trajectory');
     expect(lines).toBeUndefined();
   });
 });
 
 describe('catalog attempt after the map pin drops', () => {
-  it('still reads the Starship window at 00:10Z and does not put the pin back', async () => {
+  it('drops the Starship window when the Watch pin drops and does not put the pin back', async () => {
     const parsed = parseLaunchArtifact(structuredClone(capturedCatalog));
     if (parsed.schema_version !== 3) throw new Error('expected a catalog');
     const now = Date.parse('2026-11-14T00:10:00Z');
@@ -447,10 +550,9 @@ describe('catalog attempt after the map pin drops', () => {
       { status: 200, headers: { 'content-type': 'application/json' } },
     ));
     await store.refresh();
-    expect(store.attempt(STARSHIP_FLIGHT15_EVENT_ID, now)).toEqual({
-      startMs: Date.parse('2026-11-13T22:45:00Z'),
-      endMs: Date.parse('2026-11-14T00:00:00Z'),
-    });
+    expect(store.attempt(STARSHIP_FLIGHT15_EVENT_ID, now)).toBeNull();
+    expect(activeHazardFeatures(rawBundle(), now, store.attempt(STARSHIP_FLIGHT15_EVENT_ID, now))).toEqual([]);
+    expect(activeHazardFeatures(rawBundle(), now, ATTEMPT).length).toBeGreaterThan(0);
     const tiers = store.read(now);
     if (!tiers) throw new Error('expected a current catalog');
     expect(tiers.mapPins.some((pin) => pin.eventId === STARSHIP_FLIGHT15_EVENT_ID)).toBe(false);
@@ -468,19 +570,314 @@ describe('hazard fetch', () => {
       status: 200,
       headers: { 'content-type': 'text/html' },
     }));
-    expect(await loadPublishedHazards(html)).toBeNull();
+    expect(await loadPublishedHazards(html)).toEqual({ kind: 'withdrawn' });
     const missing = vi.fn(async () => new Response('nope', { status: 404, headers: { 'content-type': 'application/json' } }));
-    expect(await loadPublishedHazards(missing)).toBeNull();
+    expect(await loadPublishedHazards(missing)).toEqual({ kind: 'withdrawn' });
     const body = JSON.parse(readFileSync(HAZARD_FILE, 'utf8')) as { event_id: string };
     body.event_id = 'other-event';
     const wrong = vi.fn(async () => new Response(JSON.stringify(body), {
       status: 200,
       headers: { 'content-type': 'application/json' },
     }));
-    expect(await loadPublishedHazards(wrong)).toBeNull();
+    expect(await loadPublishedHazards(wrong)).toEqual({ kind: 'withdrawn' });
     expect(html).toHaveBeenCalledWith(STARSHIP_FLIGHT15_HAZARD_PATH, expect.objectContaining({
       cache: 'no-store',
       redirect: 'error',
     }));
+    const down = vi.fn(async () => new Response('down', { status: 503, headers: { 'content-type': 'application/json' } }));
+    expect(await loadPublishedHazards(down)).toEqual({ kind: 'unavailable' });
+    const offline = vi.fn(async () => {
+      throw new Error('offline');
+    });
+    expect(await loadPublishedHazards(offline)).toEqual({ kind: 'unavailable' });
+  });
+});
+
+describe('hazards and the Watch pin share one cutoff', () => {
+  it('shows both at 23:59:59Z and neither at 00:00:00Z', async () => {
+    const before = Date.parse('2026-11-13T23:59:59Z');
+    const cutoff = Date.parse('2026-11-14T00:00:00Z');
+    const store = await catalogStore(before);
+    followStore(store);
+    const { vendor } = mount();
+    setMapLaunchMode(true);
+    syncLaunchHazards(before);
+    expect(store.read(before)?.mapPins.some((pin) => pin.eventId === STARSHIP_FLIGHT15_EVENT_ID)).toBe(true);
+    expect(store.attempt(STARSHIP_FLIGHT15_EVENT_ID, before)).toEqual(ATTEMPT);
+    expect(painted(vendor)).toHaveLength(3);
+    syncLaunchHazards(cutoff);
+    expect(store.read(cutoff)?.mapPins.some((pin) => pin.eventId === STARSHIP_FLIGHT15_EVENT_ID)).toBe(false);
+    expect(store.attempt(STARSHIP_FLIGHT15_EVENT_ID, cutoff)).toBeNull();
+    expect(painted(vendor)).toEqual([]);
+    expect(activeHazardFeatures(rawBundle(), cutoff, ATTEMPT).length).toBeGreaterThan(0);
+  });
+
+  it('hides polygons when the launch is cancelled or its NET leaves the map horizon', async () => {
+    const now = Date.parse('2026-11-13T22:50:00Z');
+    const cancelled = await catalogStore(now, (item) => {
+      item.schedule.status = 'Cancelled';
+    });
+    expect(cancelled.read(now)?.mapPins.some((pin) => pin.eventId === STARSHIP_FLIGHT15_EVENT_ID)).toBe(false);
+    expect(cancelled.attempt(STARSHIP_FLIGHT15_EVENT_ID, now)).toBeNull();
+    followStore(cancelled);
+    const { vendor } = mount();
+    setMapLaunchMode(true);
+    syncLaunchHazards(now);
+    expect(painted(vendor)).toEqual([]);
+    expect(activeHazardFeatures(rawBundle(), now, ATTEMPT)).toHaveLength(3);
+
+    const slipped = await catalogStore(now, (item) => {
+      item.schedule.net = '2026-11-21T22:45:00Z';
+      item.schedule.window_start = '2026-11-21T22:45:00Z';
+      item.schedule.window_end = '2026-11-22T00:00:00Z';
+    });
+    expect(slipped.attempt(STARSHIP_FLIGHT15_EVENT_ID, now)).toBeNull();
+    followStore(slipped);
+    syncLaunchHazards(now);
+    expect(painted(vendor)).toEqual([]);
+  });
+
+  it('hides polygons while another launch is selected', () => {
+    vi.spyOn(launchCatalog, 'read').mockReturnValue({
+      mapPins: [STARSHIP_PIN, { ...STARSHIP_PIN, eventId: 'other-launch', site: { ...STARSHIP_PIN.site, lon: -80.6, lat: 28.6 } }],
+    } as unknown as TierCatalog);
+    vi.spyOn(launchCatalog, 'attempt').mockReturnValue(ATTEMPT);
+    const { vendor } = mount();
+    setMapLaunchMode(true);
+    syncLaunchHazards(Date.parse('2026-11-13T22:50:00Z'));
+    expect(painted(vendor)).toHaveLength(3);
+    expect(focusLaunchOnMap('other-launch')).toBe(true);
+    expect(painted(vendor)).toEqual([]);
+    expect(focusLaunchOnMap(STARSHIP_FLIGHT15_EVENT_ID)).toBe(true);
+    expect(painted(vendor)).toHaveLength(3);
+  });
+});
+
+describe('hazard file freshness', () => {
+  const now = Date.parse('2026-11-13T22:50:00Z');
+
+  function ready(): VendorDouble {
+    vi.spyOn(launchCatalog, 'read').mockReturnValue({
+      mapPins: [{ eventId: STARSHIP_FLIGHT15_EVENT_ID }],
+    } as unknown as TierCatalog);
+    vi.spyOn(launchCatalog, 'attempt').mockReturnValue(ATTEMPT);
+    const { vendor } = mount();
+    setMapLaunchMode(true);
+    return vendor;
+  }
+
+  it('drops a drawn bundle on 404, expiry, and a replacement, and keeps it across a 503', async () => {
+    const vendor = ready();
+    const current = hazardFile();
+    await reloadLaunchHazards(() => jsonResponse(current));
+    expect(painted(vendor)).toHaveLength(3);
+    expect(painted(vendor).map((feature) => feature.properties?.area_id).sort()).toEqual(['6/7129', 'A', 'B']);
+
+    await reloadLaunchHazards(() => jsonResponse('missing', 404));
+    expect(painted(vendor)).toEqual([]);
+    expect(activeHazardFeatures(rawBundle(), now, ATTEMPT)).toHaveLength(3);
+
+    await reloadLaunchHazards(() => jsonResponse(current));
+    expect(painted(vendor)).toHaveLength(3);
+    const expired = hazardFile();
+    expired.valid_until = '2026-11-13T22:00:00Z';
+    await reloadLaunchHazards(() => jsonResponse(expired));
+    expect(painted(vendor)).toEqual([]);
+
+    await reloadLaunchHazards(() => jsonResponse(current));
+    const replaced = hazardFile();
+    replaced.revision = 'replaced-revision';
+    replaced.notices = replaced.notices.filter((notice) => notice.area_id !== 'B');
+    replaced.geojson.features = replaced.geojson.features.filter((feature) => feature.properties.area_id !== 'B');
+    await reloadLaunchHazards(() => jsonResponse(replaced));
+    expect(painted(vendor).map((feature) => feature.properties?.area_id).sort()).toEqual(['6/7129', 'A']);
+
+    await reloadLaunchHazards(async () => new Response('down', { status: 503 }));
+    expect(painted(vendor).map((feature) => feature.properties?.area_id).sort()).toEqual(['6/7129', 'A']);
+    expect(current.checked_at).toBe('2026-11-13T10:02:00Z');
+  });
+
+  it('does not latch an initial failure, and a stale reply cannot replace a newer one', async () => {
+    const vendor = ready();
+    useHazardBundleForTest(null);
+    syncLaunchHazards(now);
+    await reloadLaunchHazards(async () => new Response('down', { status: 503 }));
+    expect(painted(vendor)).toEqual([]);
+    await reloadLaunchHazards(() => jsonResponse(hazardFile()));
+    expect(painted(vendor)).toHaveLength(3);
+
+    useHazardBundleForTest(null);
+    let releaseFirst: (response: Response) => void = () => {};
+    let releaseSecond: (response: Response) => void = () => {};
+    const first = reloadLaunchHazards(() => new Promise((resolve) => {
+      releaseFirst = resolve;
+    }));
+    const replaced = hazardFile();
+    replaced.revision = 'newer-revision';
+    replaced.notices = replaced.notices.filter((notice) => notice.area_id !== 'B');
+    replaced.geojson.features = replaced.geojson.features.filter((feature) => feature.properties.area_id !== 'B');
+    const second = reloadLaunchHazards(() => new Promise((resolve) => {
+      releaseSecond = resolve;
+    }));
+    releaseSecond(new Response(JSON.stringify(replaced), { status: 200, headers: { 'content-type': 'application/json' } }));
+    await second;
+    expect(painted(vendor).map((feature) => feature.properties?.area_id).sort()).toEqual(['6/7129', 'A']);
+    releaseFirst(new Response(JSON.stringify(hazardFile()), { status: 200, headers: { 'content-type': 'application/json' } }));
+    await first;
+    expect(painted(vendor).map((feature) => feature.properties?.area_id).sort()).toEqual(['6/7129', 'A']);
+  });
+});
+
+describe('hazard notice facts', () => {
+  it('puts the notice on the polygon and on the launch card', () => {
+    vi.spyOn(launchCatalog, 'read').mockReturnValue({
+      mapPins: [STARSHIP_PIN],
+      find: (eventId: string) => eventId === STARSHIP_FLIGHT15_EVENT_ID ? STARSHIP_PIN : { ...STARSHIP_PIN, eventId },
+    } as unknown as TierCatalog);
+    vi.spyOn(launchCatalog, 'attempt').mockReturnValue(ATTEMPT);
+    const { vendor, core } = mount();
+    bindAscentPad(core);
+    setMapLaunchMode(true);
+    syncLaunchHazards(Date.parse('2026-11-13T22:50:00Z'));
+    vendor.fireLayer('click', 'launch-hazard-fill-layer', {
+      point: { x: 4, y: 4 },
+      lngLat: [-97.1, 26],
+      features: [{
+        properties: {
+          notice_id: 'NAVAREA IV 1080/26',
+          area_id: 'B',
+          domain: 'maritime',
+          restriction_class: 'high_risk',
+          window_start: '2026-11-13T22:45:00Z',
+          window_end: '2026-11-14T00:40:00Z',
+          source_url: 'https://msi.nga.mil/Navarea',
+        },
+        geometry: { type: 'Polygon', coordinates: [] },
+      }],
+    });
+    const popup = vendor.popups.at(-1);
+    if (!popup) throw new Error('expected a popup');
+    const text = popup.content.textContent ?? '';
+    expect(text).toContain('not a flight path or navigation guidance');
+    expect(text).toContain('NAVAREA IV 1080/26 area B, maritime high_risk');
+    expect(popup.content.querySelector('a')?.getAttribute('href')).toBe('https://msi.nga.mil/Navarea');
+    const card = renderTierCard(STARSHIP_PIN, () => {});
+    expect(card.querySelector('button.btn')?.textContent).toBe('Show published hazard areas');
+    expect(card.textContent).toContain('not a flight path or navigation guidance');
+    const plain = renderTierCard({ ...STARSHIP_PIN, eventId: 'other-launch' }, () => {});
+    expect(plain.querySelector('button.btn')?.textContent).toBe('Show launch site');
+    expect(plain.textContent).not.toContain('hazard areas');
+    const showModal = HTMLDialogElement.prototype.showModal;
+    HTMLDialogElement.prototype.showModal = function open() { this.setAttribute('open', ''); };
+    openTierDetails({ ...STARSHIP_PIN, eventId: 'other-launch' });
+    expect(document.querySelector('[data-tier-track]')?.textContent).toBe('Pad only');
+    openTierDetails(STARSHIP_PIN);
+    expect(document.querySelector('[data-tier-track]')?.textContent).toContain('not a flight path or navigation guidance');
+    HTMLDialogElement.prototype.showModal = showModal;
+  });
+});
+
+describe('hazard focus', () => {
+  const when = Date.parse('2026-11-13T22:50:00Z');
+
+  function pins() {
+    vi.spyOn(launchCatalog, 'read').mockReturnValue({
+      mapPins: [STARSHIP_PIN],
+    } as unknown as TierCatalog);
+    vi.spyOn(launchCatalog, 'attempt').mockReturnValue(ATTEMPT);
+  }
+
+  it('frames hazards that arrive after the focus, once', () => {
+    pins();
+    const vendor = createVendorDouble();
+    const core = createMapCore(vendor, createClock(() => when));
+    noteLaunchCore(core);
+    bindAscentPad(core);
+    expect(focusLaunchOnMap(STARSHIP_FLIGHT15_EVENT_ID)).toBe(true);
+    expect(vendor.cameraCalls.some((call) => call.method === 'fitBounds')).toBe(false);
+    useHazardBundleForTest(rawBundle());
+    syncLaunchHazards(when);
+    const fits = vendor.cameraCalls.filter((call) => call.method === 'fitBounds');
+    expect(fits).toHaveLength(1);
+    const box = fits[0]?.args[0] as { west: number; east: number };
+    expect(box.east - box.west).toBeGreaterThan(10);
+    const before = vendor.cameraCalls.length;
+    syncLaunchHazards(when);
+    expect(vendor.cameraCalls).toHaveLength(before);
+  });
+
+  it('cancels the deferred fit after a pan, a user zoom, a mode exit, or a different launch', () => {
+    pins();
+    const vendor = createVendorDouble();
+    const core = createMapCore(vendor, createClock(() => when));
+    noteLaunchCore(core);
+    bindAscentPad(core);
+    syncMapLaunchMode();
+    expect(focusLaunchOnMap(STARSHIP_FLIGHT15_EVENT_ID)).toBe(true);
+    vendor.fire('dragstart', undefined);
+    useHazardBundleForTest(rawBundle());
+    syncLaunchHazards(when);
+    expect(vendor.cameraCalls.some((call) => call.method === 'fitBounds')).toBe(false);
+
+    resetLaunchForTest();
+    noteLaunchCore(core);
+    bindAscentPad(core);
+    focusLaunchOnMap(STARSHIP_FLIGHT15_EVENT_ID);
+    vendor.fire('zoomstart', { byUser: true });
+    useHazardBundleForTest(rawBundle());
+    syncLaunchHazards(when);
+    expect(vendor.cameraCalls.some((call) => call.method === 'fitBounds')).toBe(false);
+
+    resetLaunchForTest();
+    noteLaunchCore(core);
+    bindAscentPad(core);
+    syncMapLaunchMode();
+    setMapLaunchMode(false);
+    focusLaunchOnMap(STARSHIP_FLIGHT15_EVENT_ID);
+    setMapLaunchMode(false);
+    useHazardBundleForTest(rawBundle());
+    syncLaunchHazards(when);
+    expect(vendor.cameraCalls.some((call) => call.method === 'fitBounds')).toBe(false);
+  });
+
+  it('fits inside the chrome and holds a non-zero bearing', () => {
+    pins();
+    const pane = document.createElement('div');
+    pane.id = 'map-pane';
+    const toolbar = document.createElement('div');
+    toolbar.className = 'map-toolbar';
+    const dock = document.createElement('div');
+    dock.className = 'map-control-dock';
+    const command = document.createElement('div');
+    command.className = 'map-controls-time';
+    const card = document.createElement('div');
+    card.id = 'map-launch-coverage';
+    document.body.append(pane, toolbar, dock, command, card);
+    rect(pane, 0, 0, 874, 402);
+    rect(toolbar, 8, 8, 420, 48);
+    rect(dock, 810, 70, 64, 220);
+    rect(command, 0, 350, 874, 52);
+    rect(card, 8, 100, 640, 80);
+    const { vendor } = mount();
+    vendor.setBearing(40);
+    setMapLaunchMode(true);
+    syncLaunchHazards(when);
+    expect(focusLaunchOnMap(STARSHIP_FLIGHT15_EVENT_ID)).toBe(true);
+    const fit = vendor.cameraCalls.find((call) => call.method === 'fitBounds');
+    expect(fit?.args[1]).toEqual({
+      padding: { top: 192, right: 76, bottom: 64, left: 16 },
+      maxZoom: 5,
+      duration: 0,
+      bearing: 40,
+    });
+    rect(card, 8, 120, 280, 500);
+    vendor.setBearing(40);
+    expect(focusLaunchOnMap(STARSHIP_FLIGHT15_EVENT_ID)).toBe(true);
+    const again = vendor.cameraCalls.filter((call) => call.method === 'fitBounds').at(-1);
+    expect(again?.args[1]).toMatchObject({
+      padding: { top: 68, right: 76, bottom: 64, left: 300 },
+      duration: 0,
+      bearing: 40,
+    });
   });
 });

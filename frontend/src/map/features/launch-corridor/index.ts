@@ -5,9 +5,13 @@ import {
   activeHazardFeatures,
   HAZARD_LABEL,
   loadPublishedHazards,
+  publishHazardNotes,
   STARSHIP_FLIGHT15_EVENT_ID,
   type HazardBundle,
+  type HazardLoad,
+  type HazardNote,
 } from '../../../launch-hazards';
+import { tierWindowText } from '../../../launch-tiers';
 import { openTierDetails } from '../../../launch-tier-card';
 import type { TierLaunch } from '../../../launch-tiers';
 import { launchStore, type LaunchState } from '../../../launch-store';
@@ -17,7 +21,7 @@ import type { PassEntry } from '../../../types';
 import type { MapCore } from '../../map-core/core';
 import type { MapFeature } from '../../map-core/feature';
 import { boundsOf } from '../../map-core/geometry';
-import type { Unsubscribe } from '../../map-core/vendor-map';
+import type { FitPadding, Unsubscribe } from '../../map-core/vendor-map';
 import { buildAscentFeatures, buildLaunchMapFeatures, buildTierMapFeatures, legacyPassesInHorizon } from './geometry';
 
 export { ascentPadLayer, ascentTrajectoryLayer, launchHazardFillLayer, launchHazardOutlineLayer } from './layers';
@@ -40,9 +44,14 @@ type Runtime = {
   targets: TargetSide;
   hazardBundle: HazardBundle | null;
   hazardPending: boolean;
-  hazardFailed: boolean;
+  hazardEpoch: number;
+  hazardStarted: boolean;
   hazardSignature: string;
   hazardFeatures: GeoJSON.Feature[];
+  selectedEventId: string | null;
+  pendingFocusId: string | null;
+  clicksCore: MapCore | null;
+  focusWatch: MapCore | null;
 };
 
 const state: Runtime = {
@@ -60,9 +69,14 @@ const state: Runtime = {
   },
   hazardBundle: null,
   hazardPending: false,
-  hazardFailed: false,
+  hazardEpoch: 0,
+  hazardStarted: false,
   hazardSignature: '',
   hazardFeatures: [],
+  selectedEventId: null,
+  pendingFocusId: null,
+  clicksCore: null,
+  focusWatch: null,
 };
 
 const LAUNCH_LAYERS = [
@@ -76,8 +90,55 @@ const LAUNCH_LAYERS = [
 export function useHazardBundleForTest(bundle: HazardBundle | null): void {
   state.hazardBundle = bundle;
   state.hazardPending = false;
-  state.hazardFailed = bundle === null;
+  state.hazardEpoch += 1;
   state.hazardSignature = '';
+}
+
+function notesOf(features: readonly GeoJSON.Feature[]): HazardNote[] {
+  const notes: HazardNote[] = [];
+  for (const feature of features) {
+    const props = feature.properties;
+    if (!props) continue;
+    const noticeId = props.notice_id;
+    const areaId = props.area_id;
+    const domain = props.domain;
+    const restriction = props.restriction_class;
+    const windowStart = props.window_start;
+    const windowEnd = props.window_end;
+    const sourceUrl = props.source_url;
+    if (typeof noticeId !== 'string' || typeof areaId !== 'string') continue;
+    if (typeof domain !== 'string' || typeof restriction !== 'string') continue;
+    if (typeof windowStart !== 'string' || typeof windowEnd !== 'string') continue;
+    if (typeof sourceUrl !== 'string') continue;
+    notes.push({ noticeId, areaId, domain, restriction, windowStart, windowEnd, sourceUrl });
+  }
+  return notes;
+}
+
+function applyHazardLoad(result: HazardLoad): void {
+  if (result.kind === 'current') state.hazardBundle = result.bundle;
+  else if (result.kind === 'withdrawn') state.hazardBundle = null;
+}
+
+/** Fetch the hazard file again. A newer catalog refresh supersedes an older reply. */
+export function reloadLaunchHazards(fetcher: typeof fetch = fetch): Promise<void> {
+  const epoch = state.hazardEpoch + 1;
+  state.hazardEpoch = epoch;
+  state.hazardStarted = true;
+  state.hazardPending = true;
+  return loadPublishedHazards(fetcher).then((result) => {
+    if (epoch !== state.hazardEpoch) return;
+    applyHazardLoad(result);
+  }).catch(() => {
+    if (epoch !== state.hazardEpoch) return;
+  }).then(() => {
+    if (epoch !== state.hazardEpoch) return;
+    state.hazardPending = false;
+    const live = state.core;
+    if (!live) return;
+    paintHazards(live, live.clock.now());
+    settlePendingFocus(live);
+  });
 }
 
 function paintHazardCaption(): void {
@@ -91,30 +152,54 @@ function hazardSignature(features: readonly GeoJSON.Feature[]): string {
   return features.map((feature) => String(feature.id ?? '')).join(',');
 }
 
-/** Draw the published polygons for the wall-clock instant, not the scrubbed view. */
-export function syncLaunchHazards(now: number): void {
-  const core = state.core;
-  if (!core) return;
-  if (!state.hazardBundle && !state.hazardPending && !state.hazardFailed && import.meta.env.MODE !== 'test') {
-    state.hazardPending = true;
-    void loadPublishedHazards(fetch).then((bundle) => {
-      state.hazardBundle = bundle;
-      state.hazardFailed = bundle === null;
-    }).finally(() => {
-      state.hazardPending = false;
-      const live = state.core;
-      if (live) syncLaunchHazards(live.clock.now());
-    });
-  }
-  const attempt = state.hazardBundle ? launchCatalog.attempt(STARSHIP_FLIGHT15_EVENT_ID, now) : null;
+function eligibleAttempt(now: number): { startMs: number; endMs: number } | null {
+  const pin = launchCatalog.read(now)?.mapPins.find((launch) => launch.eventId === STARSHIP_FLIGHT15_EVENT_ID);
+  if (!pin) return null;
+  if (state.selectedEventId !== null && state.selectedEventId !== STARSHIP_FLIGHT15_EVENT_ID) return null;
+  return launchCatalog.attempt(STARSHIP_FLIGHT15_EVENT_ID, now);
+}
+
+function paintHazards(core: MapCore, now: number): void {
+  const attempt = state.hazardBundle ? eligibleAttempt(now) : null;
   const features = state.hazardBundle ? activeHazardFeatures(state.hazardBundle, now, attempt) : [];
   const signature = hazardSignature(features);
   state.hazardFeatures = features;
+  publishHazardNotes(notesOf(features));
   if (signature !== state.hazardSignature || !core.hasSource('launch-hazards')) {
     state.hazardSignature = signature;
     core.setGeoJson('launch-hazards', { type: 'FeatureCollection', features });
   }
   paintHazardCaption();
+}
+
+function settlePendingFocus(core: MapCore): void {
+  const pending = state.pendingFocusId;
+  if (!pending || pending !== STARSHIP_FLIGHT15_EVENT_ID) return;
+  if (!state.hazardFeatures.length || !getMapLaunchMode()) return;
+  if (state.selectedEventId !== pending || !getMapLaunchMode()) {
+    state.pendingFocusId = null;
+    return;
+  }
+  const now = core.clock.now();
+  const pin = launchCatalog.read(now)?.mapPins.find((launch) => launch.eventId === pending);
+  if (!pin) {
+    state.pendingFocusId = null;
+    return;
+  }
+  if (!state.hazardFeatures.length) return;
+  state.pendingFocusId = null;
+  fitLaunch(core, tierFocusPoints(pin), true);
+}
+
+/** Draw the published polygons for the wall-clock instant, not the scrubbed view. */
+export function syncLaunchHazards(now: number): void {
+  const core = state.core;
+  if (!core) return;
+  if (!state.hazardStarted && import.meta.env.MODE !== 'test') {
+    void reloadLaunchHazards(fetch);
+  }
+  paintHazards(core, now);
+  settlePendingFocus(core);
 }
 
 /** Target pins stay in their own feature. The root installs these so one
@@ -184,6 +269,7 @@ function applyLaunchVisibility(): void {
 export function syncMapLaunchMode(): void {
   if (!state.modeUnsub) {
     state.modeUnsub = subscribeMapLaunchMode((enabled) => {
+      if (!enabled) state.pendingFocusId = null;
       const core = state.core;
       core?.closePopup(enabled ? 'target' : 'launch');
       if (!core) return;
@@ -209,13 +295,95 @@ export function bindLaunchStore(): void {
   state.storeBound = true;
   subscribeLaunchSlots(() => {
     if (!state.core?.hasSource('ascent-pad')) return;
+    if (import.meta.env.MODE !== 'test') void reloadLaunchHazards(fetch);
     refreshAscentTrajectorySource();
     state.targets.refresh();
   });
 }
 
+function watchCamera(core: MapCore): void {
+  if (state.focusWatch === core) return;
+  state.focusWatch = core;
+  core.on('dragstart', () => {
+    state.pendingFocusId = null;
+  });
+  core.on('zoomstart', (event) => {
+    if (event.byUser) state.pendingFocusId = null;
+  });
+  core.on('rotatestart', (event) => {
+    if (event.byUser) state.pendingFocusId = null;
+  });
+}
+
+function hazardPopup(features: { properties: Record<string, unknown> | null }[]): HTMLElement {
+  const content = document.createElement('div');
+  const title = document.createElement('p');
+  title.textContent = 'Published hazard areas \u2014 not a flight path or navigation guidance';
+  content.append(title);
+  for (const feature of features) {
+    const props = feature.properties;
+    if (!props) continue;
+    const start = Date.parse(String(props.window_start ?? ''));
+    const end = Date.parse(String(props.window_end ?? ''));
+    const when = Number.isFinite(start) && Number.isFinite(end) ? tierWindowText(start, end) : '';
+    const fact = document.createElement('p');
+    fact.textContent = `${String(props.notice_id)} area ${String(props.area_id)}, ${String(props.domain)} ${String(props.restriction_class)}. ${when}`;
+    const link = document.createElement('a');
+    link.href = String(props.source_url ?? '');
+    link.rel = 'noopener noreferrer';
+    link.target = '_blank';
+    link.textContent = String(props.source_url ?? '');
+    content.append(fact, link);
+  }
+  return content;
+}
+
+function bindHazardClicks(host: MapCore): void {
+  if (state.clicksCore === host) return;
+  state.clicksCore = host;
+  host.onLayer('click', 'launch-hazard-fill-layer', (event) => {
+    host.openPopup({ at: event.lngLat, content: hazardPopup(event.features), owner: 'launch' });
+  });
+}
+
+function hazardFitPadding(): FitPadding {
+  const pane = document.getElementById('map-pane')?.getBoundingClientRect();
+  if (!pane || pane.width < 1 || pane.height < 1) return 50;
+  const boxOf = (selector: string): DOMRect | null => document.querySelector(selector)?.getBoundingClientRect() ?? null;
+  const toolbar = boxOf('.map-toolbar');
+  const dock = boxOf('.map-control-dock');
+  const command = boxOf('.map-controls-time');
+  const card = boxOf('#map-launch-coverage');
+  const live = (box: DOMRect | null): box is DOMRect => !!box && box.width >= 1 && box.height >= 1;
+  let top = 16;
+  let right = 16;
+  let bottom = 16;
+  let left = 16;
+  if (live(toolbar) && toolbar.bottom > pane.top) top = Math.max(top, Math.round(toolbar.bottom - pane.top) + 12);
+  if (live(command) && command.top < pane.bottom) bottom = Math.max(bottom, Math.round(pane.bottom - command.top) + 12);
+  if (live(dock) && dock.width < pane.width * 0.45) right = Math.max(right, Math.round(pane.right - dock.left) + 12);
+  if (live(card) && !cardHidden(card)) {
+    if (card.width > pane.width * 0.6) top = Math.max(top, Math.round(card.bottom - pane.top) + 12);
+    else if (card.left - pane.left < pane.width * 0.5) left = Math.max(left, Math.round(card.right - pane.left) + 12);
+    else right = Math.max(right, Math.round(pane.right - card.left) + 12);
+  }
+  return {
+    top: Math.min(top, Math.round(pane.height * 0.55)),
+    right: Math.min(right, Math.round(pane.width * 0.34)),
+    bottom: Math.min(bottom, Math.round(pane.height * 0.42)),
+    left: Math.min(left, Math.round(pane.width * 0.46)),
+  };
+}
+
+function cardHidden(box: DOMRect): boolean {
+  const node = document.getElementById('map-launch-coverage');
+  return !node || node.hidden || box.height < 1;
+}
+
 /** Pad tap opens the launch card, or the legacy popup when no artifact is loaded. */
 export function bindAscentPad(host: MapCore): void {
+  watchCamera(host);
+  bindHazardClicks(host);
   host.onLayer('click', 'ascent-pad-layer', (event) => {
     const feature = event.features[0];
     if (!feature || feature.geometry.type !== 'Point') return;
@@ -246,13 +414,23 @@ export function bindAscentPad(host: MapCore): void {
   });
 }
 
-function fitLaunch(core: MapCore, points: [number, number][]): void {
+function fitLaunch(core: MapCore, points: [number, number][], hazard: boolean): void {
   state.exitFollow();
   setMapLaunchMode(true);
   applyLaunchVisibility();
   const only = points[0];
-  if (points.length === 1 && only) core.easeTo({ center: only, zoom: 4, duration: 600 });
-  else core.fitBounds(boundsOf(points), { padding: 50, maxZoom: 5, duration: 600 });
+  if (!hazard) {
+    if (points.length === 1 && only) core.easeTo({ center: only, zoom: 4, duration: 600 });
+    else core.fitBounds(boundsOf(points), { padding: 50, maxZoom: 5, duration: 600 });
+    return;
+  }
+  const bearing = core.bearing();
+  core.fitBounds(boundsOf(points), {
+    padding: hazardFitPadding(),
+    maxZoom: 5,
+    duration: Math.abs(bearing) > 0.5 ? 0 : 600,
+    bearing,
+  });
 }
 
 function tierFocusPoints(pin: TierLaunch): [number, number][] {
@@ -288,12 +466,21 @@ export function focusLaunchOnMap(eventId: string): boolean {
   if (tiers) {
     const pin = tiers.mapPins.find((launch) => launch.eventId === eventId);
     if (!pin) return false;
-    fitLaunch(core, tierFocusPoints(pin));
+    state.selectedEventId = eventId;
+    const waiting = eventId === STARSHIP_FLIGHT15_EVENT_ID
+      && state.hazardFeatures.length === 0
+      && (state.hazardPending || state.hazardBundle === null);
+    state.pendingFocusId = waiting ? eventId : null;
+    syncLaunchHazards(now);
+    const hazard = eventId === STARSHIP_FLIGHT15_EVENT_ID && state.hazardFeatures.length > 0;
+    fitLaunch(core, tierFocusPoints(pin), hazard);
     return true;
   }
   const selection = selectLaunches(launchStore.getState(), now, 'map')
     .find(({ item }) => item.event_id === eventId);
   if (!selection) return false;
+  state.selectedEventId = eventId;
+  state.pendingFocusId = null;
   const { site, trajectory } = selection.item;
   const points: [number, number][] = [[site.lon, site.lat]];
   if (trajectory.quality !== 'unknown' && trajectory.source && trajectory.points.length >= 2) {
@@ -303,7 +490,7 @@ export function focusLaunchOnMap(eventId: string): boolean {
       points.push([longitude, point.lat]);
     }
   }
-  fitLaunch(core, points);
+  fitLaunch(core, points, false);
   return true;
 }
 
@@ -319,9 +506,13 @@ export function resetLaunchForTest(): void {
   state.styleCore = null;
   state.hazardBundle = null;
   state.hazardPending = false;
-  state.hazardFailed = false;
+  state.hazardEpoch += 1;
+  state.hazardStarted = false;
   state.hazardSignature = '';
   state.hazardFeatures = [];
+  state.selectedEventId = null;
+  state.pendingFocusId = null;
+  publishHazardNotes([]);
 }
 
 /** Ascent corridor and pad. Launch mode swaps these with the target pins. */

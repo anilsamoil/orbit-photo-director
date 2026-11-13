@@ -5033,6 +5033,26 @@ body.map-slot-launch .view-map #map-launch-coverage {
   max-height: var(--slot-launch-h);
 }
 
+#map-pane:has(#launch-hazard-caption:not([hidden])) #map-launch-coverage {
+  max-height: min(
+    var(--slot-launch-h, 22rem),
+    calc(100% - var(--slot-launch-y, calc(var(--topbar-height) + 71px)) - var(--map-command-height) - 4.75rem)
+  );
+}
+
+.view-map #map-launch-coverage [data-hazard-note] {
+  overflow-wrap: anywhere;
+}
+
+@media (max-height: 840px) and (min-width: 700px) {
+  .view-map #launch-hazard-caption:not([hidden]) {
+    z-index: 20;
+    right: calc(104px + env(safe-area-inset-right, 0px));
+    width: auto;
+    max-width: none;
+  }
+}
+
 body.map-slot-picker .view-map .satellite-picker-panel {
   left: var(--slot-picker-x);
   top: var(--slot-picker-y);

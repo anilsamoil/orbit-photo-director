@@ -65,20 +65,12 @@ export class LaunchCatalogStore {
     return tiersAt(this.held.catalog, now);
   }
 
-  /** The item's own window while both leases hold. A pin can already be gone. */
+  /** Window of one current map pin. A dropped, cancelled, or out-of-range launch has none. */
   attempt(eventId: string, now: number): { startMs: number; endMs: number } | null {
-    const held = this.held;
-    if (!held) return null;
-    if (this.seen && !samePointer(this.seen, held.pointer)) return null;
-    const generated = Date.parse(held.catalog.generated_at);
-    const schedule = Date.parse(held.catalog.schedule_valid_until);
-    const geometry = Date.parse(held.catalog.geometry_valid_until);
-    if (!(generated <= now && now < schedule && now < geometry)) return null;
-    const item = held.catalog.items.find((entry) => entry.event_id === eventId);
-    if (!item) return null;
-    const net = Date.parse(item.schedule.net);
-    const start = item.schedule.window_start === null ? net : Date.parse(item.schedule.window_start);
-    const end = item.schedule.window_end === null ? net : Date.parse(item.schedule.window_end);
+    const pin = this.read(now)?.mapPins.find((launch) => launch.eventId === eventId);
+    if (!pin) return null;
+    const start = pin.schedule.windowStartMs ?? pin.schedule.netMs;
+    const end = pin.schedule.windowEndMs ?? pin.schedule.netMs;
     if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null;
     return { startMs: start, endMs: end };
   }

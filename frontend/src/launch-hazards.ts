@@ -54,6 +54,33 @@ export type HazardBundle = {
   readonly geojson: GeoJSON.FeatureCollection;
 };
 
+export type HazardNote = {
+  readonly noticeId: string;
+  readonly areaId: string;
+  readonly domain: string;
+  readonly restriction: string;
+  readonly windowStart: string;
+  readonly windowEnd: string;
+  readonly sourceUrl: string;
+};
+
+export type HazardLoad =
+  | { readonly kind: 'current'; readonly bundle: HazardBundle }
+  | { readonly kind: 'withdrawn' }
+  | { readonly kind: 'unavailable' };
+
+const shownNotes: { notes: HazardNote[] } = { notes: [] };
+
+/** The card reads the notes the map last painted. An empty list is Pad only. */
+export function publishHazardNotes(notes: readonly HazardNote[]): void {
+  shownNotes.notes = notes.map((note) => ({ ...note }));
+}
+
+export function hazardNotesFor(eventId: string): readonly HazardNote[] {
+  if (eventId !== STARSHIP_FLIGHT15_EVENT_ID) return [];
+  return shownNotes.notes;
+}
+
 type Position = [number, number];
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -251,8 +278,8 @@ export function activeHazardFeatures(
       item.notice_id === props.notice_id && item.area_id === props.area_id
     ));
     if (!notice || feature.geometry.type !== 'Polygon') return [];
-    const open = notice.windows.some((window) => contains(window, nowMs) && overlaps(attempt, window));
-    if (!open) continue;
+    const openWindow = notice.windows.find((window) => contains(window, nowMs) && overlaps(attempt, window));
+    if (!openWindow) continue;
     const restriction = notice.restriction_class;
     features.push({
       type: 'Feature',
@@ -262,6 +289,9 @@ export function activeHazardFeatures(
         event_id: bundle.event_id,
         label: HAZARD_LABEL,
         fill_opacity: FILL_OPACITY[restriction],
+        source_url: notice.source_url,
+        window_start: openWindow.start,
+        window_end: openWindow.end,
       },
       geometry: feature.geometry,
     });
@@ -269,21 +299,26 @@ export function activeHazardFeatures(
   return features;
 }
 
-/** Same-origin hazard file. HTML, the wrong event, or a bad ring yields nothing. */
-export async function loadPublishedHazards(fetcher: typeof fetch): Promise<HazardBundle | null> {
+/** Same-origin hazard file. A 404 or a bad body is withdrawal. A 5xx is unavailable. */
+export async function loadPublishedHazards(fetcher: typeof fetch): Promise<HazardLoad> {
   try {
     const response = await fetcher(STARSHIP_FLIGHT15_HAZARD_PATH, {
       cache: 'no-store',
       credentials: 'same-origin',
       redirect: 'error',
     });
-    if (!response.ok) return null;
+    if (response.status === 404) return { kind: 'withdrawn' };
+    if (!response.ok) return { kind: 'unavailable' };
     const type = response.headers.get('content-type') ?? '';
-    if (type.includes('text/html')) return null;
+    if (type.includes('text/html')) return { kind: 'withdrawn' };
     const body = await response.text();
-    if (body.length > MAX_HAZARD_BYTES || body.trimStart().startsWith('<')) return null;
-    return parseHazardBundle(JSON.parse(body) as unknown);
+    if (body.length > MAX_HAZARD_BYTES || body.trimStart().startsWith('<')) return { kind: 'withdrawn' };
+    const parsed: unknown = JSON.parse(body);
+    const row = record(parsed);
+    if (row?.status === 'withdrawn') return { kind: 'withdrawn' };
+    const bundle = parseHazardBundle(parsed);
+    return bundle ? { kind: 'current', bundle } : { kind: 'withdrawn' };
   } catch {
-    return null;
+    return { kind: 'unavailable' };
   }
 }
