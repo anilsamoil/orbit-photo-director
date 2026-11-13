@@ -52,6 +52,11 @@ type Runtime = {
   pendingFocusId: string | null;
   clicksCore: MapCore | null;
   focusWatch: MapCore | null;
+  refreshBound: boolean;
+  hazardArmed: boolean;
+  userMoved: boolean;
+  hazardFrameKey: string;
+  inputBound: boolean;
 };
 
 const state: Runtime = {
@@ -77,6 +82,11 @@ const state: Runtime = {
   pendingFocusId: null,
   clicksCore: null,
   focusWatch: null,
+  refreshBound: false,
+  hazardArmed: false,
+  userMoved: false,
+  hazardFrameKey: '',
+  inputBound: false,
 };
 
 const LAUNCH_LAYERS = [
@@ -106,11 +116,13 @@ function notesOf(features: readonly GeoJSON.Feature[]): HazardNote[] {
     const windowStart = props.window_start;
     const windowEnd = props.window_end;
     const sourceUrl = props.source_url;
+    const checkedAt = props.checked_at;
+    const qualification = props.qualification;
     if (typeof noticeId !== 'string' || typeof areaId !== 'string') continue;
     if (typeof domain !== 'string' || typeof restriction !== 'string') continue;
     if (typeof windowStart !== 'string' || typeof windowEnd !== 'string') continue;
-    if (typeof sourceUrl !== 'string') continue;
-    notes.push({ noticeId, areaId, domain, restriction, windowStart, windowEnd, sourceUrl });
+    if (typeof sourceUrl !== 'string' || typeof checkedAt !== 'string' || typeof qualification !== 'string') continue;
+    notes.push({ noticeId, areaId, domain, restriction, windowStart, windowEnd, sourceUrl, checkedAt, qualification });
   }
   return notes;
 }
@@ -149,7 +161,12 @@ function paintHazardCaption(): void {
 }
 
 function hazardSignature(features: readonly GeoJSON.Feature[]): string {
-  return features.map((feature) => String(feature.id ?? '')).join(',');
+  return features.map((feature) => {
+    const ring = feature.geometry.type === 'Polygon' ? feature.geometry.coordinates[0] : undefined;
+    const coords = (ring ?? []).map((position) => `${position[0]},${position[1]}`).join(';');
+    const props = feature.properties;
+    return `${String(feature.id ?? '')}:${coords}:${String(props?.restriction_class ?? '')}:${String(props?.window_start ?? '')}`;
+  }).join('|');
 }
 
 function eligibleAttempt(now: number): { startMs: number; endMs: number } | null {
@@ -289,13 +306,24 @@ export function syncMapLaunchMode(): void {
 
 export { syncMapLaunchMode as _syncMapLaunchModeForTest };
 
+/** Fetch hazards again after a catalog refresh, including one that keeps the same pins. */
+export function onHazardCatalogRefresh(fetcher: typeof fetch = fetch): Promise<void> {
+  if (!state.core) return Promise.resolve();
+  return reloadLaunchHazards(fetcher);
+}
+
 /** Subscribe once to launch-artifact updates. A missing pad source skips the refresh. */
 export function bindLaunchStore(): void {
+  if (!state.refreshBound) {
+    state.refreshBound = true;
+    launchCatalog.subscribeRefresh(() => {
+      void onHazardCatalogRefresh();
+    });
+  }
   if (state.storeBound) return;
   state.storeBound = true;
   subscribeLaunchSlots(() => {
     if (!state.core?.hasSource('ascent-pad')) return;
-    if (import.meta.env.MODE !== 'test') void reloadLaunchHazards(fetch);
     refreshAscentTrajectorySource();
     state.targets.refresh();
   });
@@ -306,13 +334,46 @@ function watchCamera(core: MapCore): void {
   state.focusWatch = core;
   core.on('dragstart', () => {
     state.pendingFocusId = null;
+    state.userMoved = true;
+    state.hazardArmed = false;
   });
   core.on('zoomstart', (event) => {
-    if (event.byUser) state.pendingFocusId = null;
+    if (!event.byUser) return;
+    state.pendingFocusId = null;
+    state.userMoved = true;
+    state.hazardArmed = false;
   });
   core.on('rotatestart', (event) => {
-    if (event.byUser) state.pendingFocusId = null;
+    if (!event.byUser) return;
+    state.pendingFocusId = null;
+    state.userMoved = true;
+    state.hazardArmed = false;
   });
+  core.on('moveend', () => {
+    if (!state.hazardArmed || state.userMoved) return;
+    frameHazards(core);
+  });
+  if (state.inputBound) return;
+  state.inputBound = true;
+  const releaseAim = (): void => {
+    state.pendingFocusId = null;
+    state.userMoved = true;
+    state.hazardArmed = false;
+  };
+  window.addEventListener('keydown', (event) => {
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown' && event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    const target = event.target;
+    if (target instanceof HTMLElement && target.closest('input, textarea, select, [contenteditable="true"]')) return;
+    releaseAim();
+  });
+  window.addEventListener('wheel', (event) => {
+    const target = event.target;
+    if (!(target instanceof Node)) return;
+    const pane = document.getElementById('map-pane');
+    if (!pane || (target !== pane && !pane.contains(target))) return;
+    releaseAim();
+  }, { passive: true });
 }
 
 function hazardPopup(features: { properties: Record<string, unknown> | null }[]): HTMLElement {
@@ -327,7 +388,7 @@ function hazardPopup(features: { properties: Record<string, unknown> | null }[])
     const end = Date.parse(String(props.window_end ?? ''));
     const when = Number.isFinite(start) && Number.isFinite(end) ? tierWindowText(start, end) : '';
     const fact = document.createElement('p');
-    fact.textContent = `${String(props.notice_id)} area ${String(props.area_id)}, ${String(props.domain)} ${String(props.restriction_class)}. ${when}`;
+    fact.textContent = `${String(props.notice_id)} area ${String(props.area_id)}, ${String(props.domain)} ${String(props.restriction_class)}. ${when} Checked ${String(props.checked_at ?? '')}. ${String(props.qualification ?? '')}`;
     const link = document.createElement('a');
     link.href = String(props.source_url ?? '');
     link.rel = 'noopener noreferrer';
@@ -349,35 +410,82 @@ function bindHazardClicks(host: MapCore): void {
 function hazardFitPadding(): FitPadding {
   const pane = document.getElementById('map-pane')?.getBoundingClientRect();
   if (!pane || pane.width < 1 || pane.height < 1) return 50;
-  const boxOf = (selector: string): DOMRect | null => document.querySelector(selector)?.getBoundingClientRect() ?? null;
-  const toolbar = boxOf('.map-toolbar');
-  const dock = boxOf('.map-control-dock');
-  const command = boxOf('.map-controls-time');
-  const card = boxOf('#map-launch-coverage');
-  const live = (box: DOMRect | null): box is DOMRect => !!box && box.width >= 1 && box.height >= 1;
-  let top = 16;
-  let right = 16;
-  let bottom = 16;
-  let left = 16;
-  if (live(toolbar) && toolbar.bottom > pane.top) top = Math.max(top, Math.round(toolbar.bottom - pane.top) + 12);
-  if (live(command) && command.top < pane.bottom) bottom = Math.max(bottom, Math.round(pane.bottom - command.top) + 12);
-  if (live(dock) && dock.width < pane.width * 0.45) right = Math.max(right, Math.round(pane.right - dock.left) + 12);
-  if (live(card) && !cardHidden(card)) {
-    if (card.width > pane.width * 0.6) top = Math.max(top, Math.round(card.bottom - pane.top) + 12);
-    else if (card.left - pane.left < pane.width * 0.5) left = Math.max(left, Math.round(card.right - pane.left) + 12);
-    else right = Math.max(right, Math.round(pane.right - card.left) + 12);
+  const pad = { top: 16, right: 16, bottom: 16, left: 16 };
+  const selectors = [
+    '.map-toolbar',
+    '.map-control-dock',
+    '.map-controls-time',
+    '#map-launch-coverage',
+    '#map-legend-toggle',
+    '#map-legend-panel',
+    '#map-chrome-toggle',
+    '.maplibregl-ctrl-top-left',
+    '.maplibregl-ctrl-bottom-right',
+  ];
+  for (const selector of selectors) {
+    const node = document.querySelector(selector);
+    if (!node || (node instanceof HTMLElement && node.hidden)) continue;
+    const box = node.getBoundingClientRect();
+    if (box.width < 1 || box.height < 1) continue;
+    contributeInset(box, pane, pad);
   }
-  return {
-    top: Math.min(top, Math.round(pane.height * 0.55)),
-    right: Math.min(right, Math.round(pane.width * 0.34)),
-    bottom: Math.min(bottom, Math.round(pane.height * 0.42)),
-    left: Math.min(left, Math.round(pane.width * 0.46)),
-  };
+  return pad;
 }
 
-function cardHidden(box: DOMRect): boolean {
-  const node = document.getElementById('map-launch-coverage');
-  return !node || node.hidden || box.height < 1;
+function contributeInset(box: DOMRect, pane: DOMRect, pad: { top: number; right: number; bottom: number; left: number }): void {
+  const topGap = box.top - pane.top;
+  const bottomGap = pane.bottom - box.bottom;
+  const leftGap = box.left - pane.left;
+  const rightGap = pane.right - box.right;
+  if (topGap <= 80 && box.height <= 140 && box.width >= pane.width * 0.25) {
+    pad.top = Math.max(pad.top, Math.round(box.bottom - pane.top) + 12);
+    return;
+  }
+  if (rightGap <= 24 && box.width <= pane.width * 0.45) {
+    pad.right = Math.max(pad.right, Math.round(pane.right - box.left) + 12);
+    return;
+  }
+  if (leftGap <= 40 && box.width <= Math.min(160, pane.width * 0.25)) {
+    pad.left = Math.max(pad.left, Math.round(box.right - pane.left) + 12);
+    return;
+  }
+  if (leftGap <= 80 && box.width <= pane.width * 0.6 && box.height >= 100) {
+    pad.left = Math.max(pad.left, Math.round(box.right - pane.left) + 12);
+    return;
+  }
+  if (bottomGap <= 24) {
+    pad.bottom = Math.max(pad.bottom, Math.round(pane.bottom - box.top) + 12);
+    return;
+  }
+  const midY = box.top + box.height / 2;
+  if (midY > pane.top + pane.height * 0.55 && box.width > pane.width * 0.4) {
+    pad.bottom = Math.max(pad.bottom, Math.round(pane.bottom - box.top) + 12);
+    return;
+  }
+  if (topGap <= 160 && box.width > pane.width * 0.6) {
+    pad.top = Math.max(pad.top, Math.round(box.bottom - pane.top) + 12);
+  }
+}
+
+function frameKey(bearing: number, padding: FitPadding): string {
+  return `${bearing.toFixed(2)}:${JSON.stringify(padding)}`;
+}
+
+function frameHazards(core: MapCore): void {
+  if (!state.hazardArmed || state.userMoved || !state.hazardFeatures.length || !getMapLaunchMode()) return;
+  const pin = launchCatalog.read(core.clock.now())?.mapPins.find((launch) => launch.eventId === STARSHIP_FLIGHT15_EVENT_ID);
+  if (!pin) return;
+  const bearing = core.bearing();
+  const padding = hazardFitPadding();
+  const key = frameKey(bearing, padding);
+  if (key === state.hazardFrameKey) return;
+  state.hazardFrameKey = key;
+  core.fitBounds(boundsOf(tierFocusPoints(pin)), {
+    padding,
+    maxZoom: 6,
+    duration: 0,
+    bearing,
+  });
 }
 
 /** Pad tap opens the launch card, or the legacy popup when no artifact is loaded. */
@@ -424,13 +532,10 @@ function fitLaunch(core: MapCore, points: [number, number][], hazard: boolean): 
     else core.fitBounds(boundsOf(points), { padding: 50, maxZoom: 5, duration: 600 });
     return;
   }
-  const bearing = core.bearing();
-  core.fitBounds(boundsOf(points), {
-    padding: hazardFitPadding(),
-    maxZoom: 5,
-    duration: Math.abs(bearing) > 0.5 ? 0 : 600,
-    bearing,
-  });
+  state.hazardArmed = true;
+  state.userMoved = false;
+  state.hazardFrameKey = '';
+  frameHazards(core);
 }
 
 function tierFocusPoints(pin: TierLaunch): [number, number][] {
@@ -512,6 +617,9 @@ export function resetLaunchForTest(): void {
   state.hazardFeatures = [];
   state.selectedEventId = null;
   state.pendingFocusId = null;
+  state.hazardArmed = false;
+  state.userMoved = false;
+  state.hazardFrameKey = '';
   publishHazardNotes([]);
 }
 

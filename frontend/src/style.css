@@ -5044,13 +5044,9 @@ body.map-slot-launch .view-map #map-launch-coverage {
   overflow-wrap: anywhere;
 }
 
-@media (max-height: 840px) and (min-width: 700px) {
-  .view-map #launch-hazard-caption:not([hidden]) {
-    z-index: 20;
-    right: calc(104px + env(safe-area-inset-right, 0px));
-    width: auto;
-    max-width: none;
-  }
+.view-map #launch-hazard-caption:not([hidden]) {
+  width: max-content;
+  max-width: min(22rem, calc(100% - 128px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)));
 }
 
 body.map-slot-picker .view-map .satellite-picker-panel {

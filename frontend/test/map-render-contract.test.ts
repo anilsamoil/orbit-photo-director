@@ -177,6 +177,7 @@ describe('renderMap bring-up', () => {
       'dragstart:*',
       'zoomstart:*',
       'rotatestart:*',
+      'moveend:*',
       'click:launch-hazard-fill-layer',
       'click:ascent-pad-layer',
       'mouseenter:ascent-pad-layer',

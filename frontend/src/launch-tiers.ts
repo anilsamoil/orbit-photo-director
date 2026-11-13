@@ -271,7 +271,9 @@ function passesSchedule(launch: TierLaunch, now: number, horizon: number): boole
   if (!SCHEDULE_PRECISION.has(precision)) return false;
   const net = launch.schedule.netMs;
   if (!Number.isFinite(net) || net > now + horizon) return false;
+  const start = launch.schedule.windowStartMs;
   const end = launch.schedule.windowEndMs ?? net;
+  if (start !== null && launch.schedule.windowEndMs !== null && (net < start || net > end)) return false;
   return end > now;
 }
 

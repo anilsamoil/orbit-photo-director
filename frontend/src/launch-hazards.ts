@@ -6,6 +6,21 @@ export const STARSHIP_FLIGHT15_HAZARD_PATH = '/hazards/v1/0f867f0c-5422-4d44-93b
 
 export const HAZARD_LABEL = 'Published hazard areas \u2014 not a flight path';
 
+/** A checked file stays paintable for two days. The notice cancel date is separate. */
+export const REVIEW_MAX_MS = 48 * 60 * 60 * 1000;
+
+export const MARITIME_WINDOW_NOTE = 'Mariners should avoid waters within the defined hazard areas during the scheduled launch window.';
+
+export const HIGH_RISK_LEAD_NOTE = 'The high risk hazard area should be avoided three hours prior to the earliest launch to ensure range clearance.';
+
+export const FAA_AIRSPACE_NOTE = 'SFC-UNL. Excluding airspace over international waters.';
+
+export function hazardQualification(domain: string, restriction: string): string {
+  if (domain === 'airspace') return FAA_AIRSPACE_NOTE;
+  if (restriction === 'high_risk') return `${MARITIME_WINDOW_NOTE} ${HIGH_RISK_LEAD_NOTE}`;
+  return MARITIME_WINDOW_NOTE;
+}
+
 const MAX_HAZARD_BYTES = 64 * 1024;
 
 const FILL_OPACITY = {
@@ -62,6 +77,8 @@ export type HazardNote = {
   readonly windowStart: string;
   readonly windowEnd: string;
   readonly sourceUrl: string;
+  readonly checkedAt: string;
+  readonly qualification: string;
 };
 
 export type HazardLoad =
@@ -69,11 +86,36 @@ export type HazardLoad =
   | { readonly kind: 'withdrawn' }
   | { readonly kind: 'unavailable' };
 
-const shownNotes: { notes: HazardNote[] } = { notes: [] };
+const shownNotes: { notes: HazardNote[]; listeners: Set<() => void> } = { notes: [], listeners: new Set() };
+
+function sameNotes(left: readonly HazardNote[], right: readonly HazardNote[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((note, index) => {
+    const other = right[index];
+    return !!other
+      && note.noticeId === other.noticeId
+      && note.areaId === other.areaId
+      && note.domain === other.domain
+      && note.restriction === other.restriction
+      && note.windowStart === other.windowStart
+      && note.windowEnd === other.windowEnd
+      && note.sourceUrl === other.sourceUrl
+      && note.checkedAt === other.checkedAt
+      && note.qualification === other.qualification;
+  });
+}
 
 /** The card reads the notes the map last painted. An empty list is Pad only. */
 export function publishHazardNotes(notes: readonly HazardNote[]): void {
-  shownNotes.notes = notes.map((note) => ({ ...note }));
+  const next = notes.map((note) => ({ ...note }));
+  if (sameNotes(shownNotes.notes, next)) return;
+  shownNotes.notes = next;
+  for (const listener of [...shownNotes.listeners]) listener();
+}
+
+export function subscribeHazardNotes(listener: () => void): () => void {
+  shownNotes.listeners.add(listener);
+  return () => { shownNotes.listeners.delete(listener); };
 }
 
 export function hazardNotesFor(eventId: string): readonly HazardNote[] {
@@ -270,6 +312,7 @@ export function activeHazardFeatures(
   attempt: HazardAttempt | null,
 ): GeoJSON.Feature[] {
   if (!attempt || nowMs >= bundle.validUntilMs) return [];
+  if (nowMs >= Date.parse(bundle.checked_at) + REVIEW_MAX_MS) return [];
   const features: GeoJSON.Feature[] = [];
   for (const feature of bundle.geojson.features) {
     const props = feature.properties;
@@ -292,6 +335,8 @@ export function activeHazardFeatures(
         source_url: notice.source_url,
         window_start: openWindow.start,
         window_end: openWindow.end,
+        checked_at: bundle.checked_at,
+        qualification: hazardQualification(notice.domain, notice.restriction_class),
       },
       geometry: feature.geometry,
     });

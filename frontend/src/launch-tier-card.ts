@@ -1,5 +1,5 @@
 import { launchCatalog } from './launch-catalog';
-import { hazardNotesFor, type HazardNote } from './launch-hazards';
+import { hazardNotesFor, subscribeHazardNotes, type HazardNote } from './launch-hazards';
 import { tierScheduleFacts, tierWindowText, tierWord, type TierLaunch } from './launch-tiers';
 
 function row(container: HTMLElement, label: string, value: string): void {
@@ -73,12 +73,12 @@ function hazardFact(note: HazardNote): HTMLParagraphElement {
   const when = Number.isFinite(start) && Number.isFinite(end)
     ? tierWindowText(start, end)
     : `${note.windowStart} to ${note.windowEnd}`;
-  line.textContent = `${note.noticeId} area ${note.areaId}, ${note.domain} ${note.restriction}. ${when}. `;
+  line.textContent = `${note.noticeId} area ${note.areaId}, ${note.domain} ${note.restriction}. ${when} Checked ${note.checkedAt}. ${note.qualification} `;
   const link = document.createElement('a');
   link.href = note.sourceUrl;
   link.target = '_blank';
   link.rel = 'noopener noreferrer';
-  link.textContent = 'Source notice';
+  link.textContent = note.sourceUrl;
   line.append(link);
   return line;
 }
@@ -136,9 +136,23 @@ export function openTierDetails(launch: TierLaunch): void {
     content.append(why, track);
     if (note) content.append(note);
   };
-  const unsubscribe = launchCatalog.subscribe(paint);
+  const unsubscribe = launchCatalog.subscribe(() => {
+    if (!dialog.isConnected) {
+      unsubscribe();
+      return;
+    }
+    paint();
+  });
+  const unsubscribeNotes = subscribeHazardNotes(() => {
+    if (!dialog.isConnected) {
+      unsubscribeNotes();
+      return;
+    }
+    paint();
+  });
   dialog.addEventListener('close', () => {
     unsubscribe();
+    unsubscribeNotes();
     dialog.remove();
   }, { once: true });
   dialog.append(heading, content, close);
