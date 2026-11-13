@@ -58,10 +58,13 @@ import {
   bindExitFollow,
   bindLaunchStore,
   bindLaunchTargets,
+  launchHazardFillLayer,
+  launchHazardOutlineLayer,
   noteLaunchCore,
   refreshAscentTrajectorySource,
   resetLaunchForTest,
   setLaunchPasses,
+  syncLaunchHazards,
   syncMapLaunchMode,
 } from './features/launch-corridor';
 import {
@@ -417,6 +420,9 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   core.ensureLayer(SUBSOLAR_LAYER);
 
   refreshAscentTrajectorySource();
+  syncLaunchHazards(core.clock.now());
+  core.ensureLayer(launchHazardFillLayer());
+  core.ensureLayer(launchHazardOutlineLayer());
   core.ensureLayer(ascentTrajectoryLayer());
   if (!core.hasLayer('ascent-pad-layer')) {
     core.ensureLayer(ascentPadLayer());
@@ -429,6 +435,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
 
   if (isFirstInit) {
     clock.every(1000, (nowMs) => {
+      syncLaunchHazards(nowMs);
       if (!core || !hasIssMarker() || !scrubTrack()) return;
       if (maybeSnapToLive(nowMs)) return;
       tickIssMarker(nowMs);

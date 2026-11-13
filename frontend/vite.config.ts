@@ -109,7 +109,7 @@ export default defineConfig({
 
         // Don't precache the source-map files — they're huge and only useful
         // when the dev tools are open.
-        globIgnores: ['**/*.map', 'sw-shell.js', 'registerSW.js'],
+        globIgnores: ['**/*.map', 'sw-shell.js', 'registerSW.js', '**/hazards/**'],
 
         // Runtime cache routing per the locked V2 plan.
         runtimeCaching: [

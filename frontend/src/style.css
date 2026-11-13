@@ -1215,6 +1215,22 @@ body:not(.shotlist-bar-visible):has(> #view.view-map) > #status-banner:has(.bann
   border-radius: 0;
   z-index: 0;
 }
+.view-map .launch-hazard-caption {
+  position: absolute;
+  z-index: 4;
+  left: calc(12px + env(safe-area-inset-left, 0px));
+  bottom: calc(var(--map-command-height) + 12px);
+  max-width: min(22rem, calc(100% - 24px - env(safe-area-inset-left, 0px)));
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(7, 10, 13, 0.82);
+  color: #ffd45c;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  pointer-events: none;
+}
+.view-map .launch-hazard-caption[hidden] { display: none; }
 .view-map .map-toolbar {
   position: absolute;
   top: calc(var(--topbar-height) + 5px);

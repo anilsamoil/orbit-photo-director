@@ -1,6 +1,13 @@
 import { wrapLon } from '../../../geo';
 import { openLaunchDetails, renderLegacyLaunchCard } from '../../../launch-card';
 import { launchCatalog, subscribeLaunchSlots } from '../../../launch-catalog';
+import {
+  activeHazardFeatures,
+  HAZARD_LABEL,
+  loadPublishedHazards,
+  STARSHIP_FLIGHT15_EVENT_ID,
+  type HazardBundle,
+} from '../../../launch-hazards';
 import { openTierDetails } from '../../../launch-tier-card';
 import type { TierLaunch } from '../../../launch-tiers';
 import { launchStore, type LaunchState } from '../../../launch-store';
@@ -13,7 +20,7 @@ import { boundsOf } from '../../map-core/geometry';
 import type { Unsubscribe } from '../../map-core/vendor-map';
 import { buildAscentFeatures, buildLaunchMapFeatures, buildTierMapFeatures, legacyPassesInHorizon } from './geometry';
 
-export { ascentPadLayer, ascentTrajectoryLayer } from './layers';
+export { ascentPadLayer, ascentTrajectoryLayer, launchHazardFillLayer, launchHazardOutlineLayer } from './layers';
 export { buildAscentFeatures, buildLaunchMapFeatures, buildTierMapFeatures } from './geometry';
 
 type TargetSide = {
@@ -31,6 +38,11 @@ type Runtime = {
   storeBound: boolean;
   exitFollow: () => void;
   targets: TargetSide;
+  hazardBundle: HazardBundle | null;
+  hazardPending: boolean;
+  hazardFailed: boolean;
+  hazardSignature: string;
+  hazardFeatures: GeoJSON.Feature[];
 };
 
 const state: Runtime = {
@@ -46,7 +58,64 @@ const state: Runtime = {
     refresh() {},
     applyVisibility() {},
   },
+  hazardBundle: null,
+  hazardPending: false,
+  hazardFailed: false,
+  hazardSignature: '',
+  hazardFeatures: [],
 };
+
+const LAUNCH_LAYERS = [
+  'launch-hazard-fill-layer',
+  'launch-hazard-outline-layer',
+  'ascent-trajectory-layer',
+  'ascent-pad-layer',
+] as const;
+
+/** Tests install the published file without a network fetch. */
+export function useHazardBundleForTest(bundle: HazardBundle | null): void {
+  state.hazardBundle = bundle;
+  state.hazardPending = false;
+  state.hazardFailed = bundle === null;
+  state.hazardSignature = '';
+}
+
+function paintHazardCaption(): void {
+  const node = document.getElementById('launch-hazard-caption');
+  if (!node) return;
+  if (node.textContent !== HAZARD_LABEL) node.textContent = HAZARD_LABEL;
+  node.hidden = !(getMapLaunchMode() && state.hazardFeatures.length > 0);
+}
+
+function hazardSignature(features: readonly GeoJSON.Feature[]): string {
+  return features.map((feature) => String(feature.id ?? '')).join(',');
+}
+
+/** Draw the published polygons for the wall-clock instant, not the scrubbed view. */
+export function syncLaunchHazards(now: number): void {
+  const core = state.core;
+  if (!core) return;
+  if (!state.hazardBundle && !state.hazardPending && !state.hazardFailed && import.meta.env.MODE !== 'test') {
+    state.hazardPending = true;
+    void loadPublishedHazards(fetch).then((bundle) => {
+      state.hazardBundle = bundle;
+      state.hazardFailed = bundle === null;
+    }).finally(() => {
+      state.hazardPending = false;
+      const live = state.core;
+      if (live) syncLaunchHazards(live.clock.now());
+    });
+  }
+  const attempt = state.hazardBundle ? launchCatalog.attempt(STARSHIP_FLIGHT15_EVENT_ID, now) : null;
+  const features = state.hazardBundle ? activeHazardFeatures(state.hazardBundle, now, attempt) : [];
+  const signature = hazardSignature(features);
+  state.hazardFeatures = features;
+  if (signature !== state.hazardSignature || !core.hasSource('launch-hazards')) {
+    state.hazardSignature = signature;
+    core.setGeoJson('launch-hazards', { type: 'FeatureCollection', features });
+  }
+  paintHazardCaption();
+}
 
 /** Target pins stay in their own feature. The root installs these so one
  *  launch-mode subscription can still refresh both sides. */
@@ -87,6 +156,7 @@ export function refreshAscentTrajectorySource(): void {
       : buildAscentFeatures(legacyPassesInHorizon(state.passes, now));
   core.setGeoJson('ascent-trajectory', { type: 'FeatureCollection', features: lines });
   core.setGeoJson('ascent-pad', { type: 'FeatureCollection', features: pads });
+  syncLaunchHazards(now);
 }
 
 /** Show the corridor and hide it when launch mode is off. */
@@ -95,12 +165,13 @@ export function applyAscentLaunchVisibility(): void {
   if (!core) return;
   const enabled = getMapLaunchMode();
   try {
-    for (const layer of ['ascent-trajectory-layer', 'ascent-pad-layer'] as const) {
+    for (const layer of LAUNCH_LAYERS) {
       const visibility = enabled ? 'visible' : 'none';
       if (core.hasLayer(layer) && core.visibilityOf(layer) !== visibility) {
         core.setVisibility(layer, visibility);
       }
     }
+    paintHazardCaption();
   } catch {}
 }
 
@@ -186,6 +257,19 @@ function fitLaunch(core: MapCore, points: [number, number][]): void {
 
 function tierFocusPoints(pin: TierLaunch): [number, number][] {
   const points: [number, number][] = [[pin.site.lon, pin.site.lat]];
+  if (pin.eventId === STARSHIP_FLIGHT15_EVENT_ID) {
+    for (const feature of state.hazardFeatures) {
+      if (feature.geometry.type !== 'Polygon') continue;
+      const ring = feature.geometry.coordinates[0];
+      if (!ring) continue;
+      for (const position of ring) {
+        const lon = position[0];
+        const lat = position[1];
+        if (typeof lon !== 'number' || typeof lat !== 'number') continue;
+        points.push([lon, lat]);
+      }
+    }
+  }
   if (!pin.corridor) return points;
   let longitude = pin.site.lon;
   for (const point of pin.corridor.points) {
@@ -233,6 +317,11 @@ export function resetLaunchForTest(): void {
   state.styleUnsub?.();
   state.styleUnsub = null;
   state.styleCore = null;
+  state.hazardBundle = null;
+  state.hazardPending = false;
+  state.hazardFailed = false;
+  state.hazardSignature = '';
+  state.hazardFeatures = [];
 }
 
 /** Ascent corridor and pad. Launch mode swaps these with the target pins. */

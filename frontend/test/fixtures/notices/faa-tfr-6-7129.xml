@@ -1,0 +1,786 @@
+﻿<XNOTAM-Update xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" version="0.1" origin="" created="2026-11-11T10:55:30">
+  <Group>
+    <Add>
+      <Not>
+        <NotUid>
+          <txtNameAcctFac>FDC</txtNameAcctFac>
+          <dateIndexYear>2026</dateIndexYear>
+          <noSeqNo>7129</noSeqNo>
+          <dateIssued>2026-11-11T16:50:16</dateIssued>
+          <txtLocalName>261113 SpaceX Launch Starship 15</txtLocalName>
+          <codeGUID>ef596c21-4379-4933-83d1-42f9c009d081</codeGUID>
+          <noUSNSWorkNo>TFR24b92958705a</noUSNSWorkNo>
+        </NotUid>
+        <codeDailyOper>false</codeDailyOper>
+        <dateEffective>2026-11-13T22:30:00</dateEffective>
+        <dateExpire>2026-11-14T00:40:00</dateExpire>
+        <codeTimeZone>CST</codeTimeZone>
+        <codeExpirationTimeZone>CST</codeExpirationTimeZone>
+        <AffLocGroup>
+          <txtNameCity>STARBASE</txtNameCity>
+          <txtNameUSState>TEXAS</txtNameUSState>
+        </AffLocGroup>
+        <codeFacility>ZHU</codeFacility>
+        <TfrNot>
+          <codeType>91.143</codeType>
+          <TFRAreaGroup>
+            <aseTFRArea>
+              <AseUid>
+                <codeType>RAS</codeType>
+                <codeId>3533</codeId>
+              </AseUid>
+              <txtName>Area A</txtName>
+              <codeDistVerUpper>ALT</codeDistVerUpper>
+              <valDistVerUpper>999</valDistVerUpper>
+              <uomDistVerUpper>FL</uomDistVerUpper>
+              <codeDistVerLower>HEI</codeDistVerLower>
+              <valDistVerLower>0</valDistVerLower>
+              <uomDistVerLower>FT</uomDistVerLower>
+              <Att>
+                <codeWorkHr>NOTAM</codeWorkHr>
+              </Att>
+              <codeExclVerUpper>INCLUDE</codeExclVerUpper>
+              <codeExclVerLower>INCLUDE</codeExclVerLower>
+              <isScheduledTfrArea>FALSE</isScheduledTfrArea>
+              <ScheduleGroup>
+                <isTimeSeparate>FALSE</isTimeSeparate>
+                <dateEffective>2026-11-13T22:30:00</dateEffective>
+                <dateExpire>2026-11-14T00:40:00</dateExpire>
+              </ScheduleGroup>
+            </aseTFRArea>
+            <Aac>
+              <AacUid>
+                <AseUidChi>
+                  <codeType>RAS</codeType>
+                  <codeId>3533</codeId>
+                </AseUidChi>
+                <AseUidPar>
+                  <codeType>PART</codeType>
+                  <codeId>3534</codeId>
+                </AseUidPar>
+              </AacUid>
+              <codeType>BOM</codeType>
+              <codeOpr>BASE</codeOpr>
+            </Aac>
+            <abdMergedArea>
+              <AbdUid>
+                <AseUid>
+                  <codeType>RAS</codeType>
+                  <codeId>3533</codeId>
+                </AseUid>
+              </AbdUid>
+              <txtRmk>3533</txtRmk>
+              <Avx>
+                <codeDatum>WGE</codeDatum>
+                <codeType>GRC</codeType>
+                <geoLat>25.93333333N</geoLat>
+                <geoLong>097.16666667W</geoLong>
+              </Avx>
+              <Avx>
+                <codeDatum>WGE</codeDatum>
+                <codeType>GRC</codeType>
+                <geoLat>26.01666667N</geoLat>
+                <geoLong>097.2W</geoLong>
+              </Avx>
+              <Avx>
+                <codeDatum>WGE</codeDatum>
+                <codeType>GRC</codeType>
+                <geoLat>26.06666667N</geoLat>
+                <geoLong>097.11666667W</geoLong>
+              </Avx>
+              <Avx>
+                <codeDatum>WGE</codeDatum>
+                <codeType>GRC</codeType>
+                <geoLat>26.1N</geoLat>
+                <geoLong>096.91666667W</geoLong>
+              </Avx>
+              <Avx>
+                <codeDatum>WGE</codeDatum>
+                <codeType>GRC</codeType>
+                <geoLat>26.0N</geoLat>
+                <geoLong>096.91666667W</geoLong>
+              </Avx>
+              <Avx>
+                <codeDatum>WGE</codeDatum>
+                <codeType>GRC</codeType>
+                <geoLat>26.0N</geoLat>
+                <geoLong>097.0W</geoLong>
+              </Avx>
+              <Avx>
+                <codeDatum>WGE</codeDatum>
+                <codeType>GRC</codeType>
+                <geoLat>25.93333333N</geoLat>
+                <geoLong>097.16666667W</geoLong>
+              </Avx>
+            </abdMergedArea>
+            <aseShapes>
+              <AseUid>
+                <codeType>PART</codeType>
+                <codeId>3534</codeId>
+              </AseUid>
+              <Att>
+                <codeWorkHr>NOTAM</codeWorkHr>
+              </Att>
+              <Abd>
+                <AbdUid>
+                  <AseUid>
+                    <codeType>PART</codeType>
+                    <codeId>3534</codeId>
+                  </AseUid>
+                </AbdUid>
+                <txtRmk>3534</txtRmk>
+                <valPredefinedAirspace>false</valPredefinedAirspace>
+                <Avx>
+                  <codeDatum>WGE</codeDatum>
+                  <codeType>GRC</codeType>
+                  <geoLat>25.93333333N</geoLat>
+                  <geoLong>097.16666667W</geoLong>
+                  <Frd>
+                    <FrdUid>
+                      <DpnUid>
+                        <codeId>BRO11</codeId>
+                        <geoLat>25.93333333N</geoLat>
+                        <geoLong>097.16666667W</geoLong>
+                      </DpnUid>
+                    </FrdUid>
+                    <Ain>
+                      <VorUid>
+                        <codeId>BRO</codeId>
+                        <geoLat>25.93333333N</geoLat>
+                        <geoLong>097.16666667W</geoLong>
+                      </VorUid>
+                      <valAngleBrg>078.0</valAngleBrg>
+                    </Ain>
+                    <Din>
+                      <TcnUid>
+                        <codeId>BRO</codeId>
+                        <geoLat>25.93333333N</geoLat>
+                        <geoLong>097.16666667W</geoLong>
+                      </TcnUid>
+                      <valDist>11.3</valDist>
+                      <uomDist>NM</uomDist>
+                    </Din>
+                    <txtRmk>BROWNSVILLE</txtRmk>
+                  </Frd>
+                </Avx>
+                <Avx>
+                  <codeDatum>WGE</codeDatum>
+                  <codeType>GRC</codeType>
+                  <geoLat>26.01666667N</geoLat>
+                  <geoLong>097.2W</geoLong>
+                  <Frd>
+                    <FrdUid>
+                      <DpnUid>
+                        <codeId>BRO11</codeId>
+                        <geoLat>26.01666667N</geoLat>
+                        <geoLong>097.2W</geoLong>
+                      </DpnUid>
+                    </FrdUid>
+                    <Ain>
+                      <VorUid>
+                        <codeId>BRO</codeId>
+                        <geoLat>26.01666667N</geoLat>
+                        <geoLong>097.2W</geoLong>
+                      </VorUid>
+                      <valAngleBrg>051.0</valAngleBrg>
+                    </Ain>
+                    <Din>
+                      <TcnUid>
+                        <codeId>BRO</codeId>
+                        <geoLat>26.01666667N</geoLat>
+                        <geoLong>097.2W</geoLong>
+                      </TcnUid>
+                      <valDist>11.0</valDist>
+                      <uomDist>NM</uomDist>
+                    </Din>
+                    <txtRmk>BROWNSVILLE</txtRmk>
+                  </Frd>
+                </Avx>
+                <Avx>
+                  <codeDatum>WGE</codeDatum>
+                  <codeType>GRC</codeType>
+                  <geoLat>26.06666667N</geoLat>
+                  <geoLong>097.11666667W</geoLong>
+                  <Frd>
+                    <FrdUid>
+                      <DpnUid>
+                        <codeId>BRO16</codeId>
+                        <geoLat>26.06666667N</geoLat>
+                        <geoLong>097.11666667W</geoLong>
+                      </DpnUid>
+                    </FrdUid>
+                    <Ain>
+                      <VorUid>
+                        <codeId>BRO</codeId>
+                        <geoLat>26.06666667N</geoLat>
+                        <geoLong>097.11666667W</geoLong>
+                      </VorUid>
+                      <valAngleBrg>050.0</valAngleBrg>
+                    </Ain>
+                    <Din>
+                      <TcnUid>
+                        <codeId>BRO</codeId>
+                        <geoLat>26.06666667N</geoLat>
+                        <geoLong>097.11666667W</geoLong>
+                      </TcnUid>
+                      <valDist>16.4</valDist>
+                      <uomDist>NM</uomDist>
+                    </Din>
+                    <txtRmk>BROWNSVILLE</txtRmk>
+                  </Frd>
+                </Avx>
+                <Avx>
+                  <codeDatum>WGE</codeDatum>
+                  <codeType>GRC</codeType>
+                  <geoLat>26.1N</geoLat>
+                  <geoLong>096.91666667W</geoLong>
+                  <Frd>
+                    <FrdUid>
+                      <DpnUid>
+                        <codeId>BRO26</codeId>
+                        <geoLat>26.1N</geoLat>
+                        <geoLong>096.91666667W</geoLong>
+                      </DpnUid>
+                    </FrdUid>
+                    <Ain>
+                      <VorUid>
+                        <codeId>BRO</codeId>
+                        <geoLat>26.1N</geoLat>
+                        <geoLong>096.91666667W</geoLong>
+                      </VorUid>
+                      <valAngleBrg>058.0</valAngleBrg>
+                    </Ain>
+                    <Din>
+                      <TcnUid>
+                        <codeId>BRO</codeId>
+                        <geoLat>26.1N</geoLat>
+                        <geoLong>096.91666667W</geoLong>
+                      </TcnUid>
+                      <valDist>26.9</valDist>
+                      <uomDist>NM</uomDist>
+                    </Din>
+                    <txtRmk>BROWNSVILLE</txtRmk>
+                  </Frd>
+                </Avx>
+                <Avx>
+                  <codeDatum>WGE</codeDatum>
+                  <codeType>GRC</codeType>
+                  <geoLat>26.0N</geoLat>
+                  <geoLong>096.91666667W</geoLong>
+                  <Frd>
+                    <FrdUid>
+                      <DpnUid>
+                        <codeId>BRO25</codeId>
+                        <geoLat>26.0N</geoLat>
+                        <geoLong>096.91666667W</geoLong>
+                      </DpnUid>
+                    </FrdUid>
+                    <Ain>
+                      <VorUid>
+                        <codeId>BRO</codeId>
+                        <geoLat>26.0N</geoLat>
+                        <geoLong>096.91666667W</geoLong>
+                      </VorUid>
+                      <valAngleBrg>071.0</valAngleBrg>
+                    </Ain>
+                    <Din>
+                      <TcnUid>
+                        <codeId>BRO</codeId>
+                        <geoLat>26.0N</geoLat>
+                        <geoLong>096.91666667W</geoLong>
+                      </TcnUid>
+                      <valDist>25.2</valDist>
+                      <uomDist>NM</uomDist>
+                    </Din>
+                    <txtRmk>BROWNSVILLE</txtRmk>
+                  </Frd>
+                </Avx>
+                <Avx>
+                  <codeDatum>WGE</codeDatum>
+                  <codeType>GRC</codeType>
+                  <geoLat>26.0N</geoLat>
+                  <geoLong>097.0W</geoLong>
+                  <Frd>
+                    <FrdUid>
+                      <DpnUid>
+                        <codeId>BRO20</codeId>
+                        <geoLat>26.0N</geoLat>
+                        <geoLong>097.0W</geoLong>
+                      </DpnUid>
+                    </FrdUid>
+                    <Ain>
+                      <VorUid>
+                        <codeId>BRO</codeId>
+                        <geoLat>26.0N</geoLat>
+                        <geoLong>097.0W</geoLong>
+                      </VorUid>
+                      <valAngleBrg>068.0</valAngleBrg>
+                    </Ain>
+                    <Din>
+                      <TcnUid>
+                        <codeId>BRO</codeId>
+                        <geoLat>26.0N</geoLat>
+                        <geoLong>097.0W</geoLong>
+                      </TcnUid>
+                      <valDist>20.8</valDist>
+                      <uomDist>NM</uomDist>
+                    </Din>
+                    <txtRmk>BROWNSVILLE</txtRmk>
+                  </Frd>
+                </Avx>
+                <Avx>
+                  <codeDatum>WGE</codeDatum>
+                  <codeType>GRC</codeType>
+                  <geoLat>25.93333333N</geoLat>
+                  <geoLong>097.16666667W</geoLong>
+                  <Frd>
+                    <FrdUid>
+                      <DpnUid>
+                        <codeId>BRO11</codeId>
+                        <geoLat>25.93333333N</geoLat>
+                        <geoLong>097.16666667W</geoLong>
+                      </DpnUid>
+                    </FrdUid>
+                    <Ain>
+                      <VorUid>
+                        <codeId>BRO</codeId>
+                        <geoLat>25.93333333N</geoLat>
+                        <geoLong>097.16666667W</geoLong>
+                      </VorUid>
+                      <valAngleBrg>078.0</valAngleBrg>
+                    </Ain>
+                    <Din>
+                      <TcnUid>
+                        <codeId>BRO</codeId>
+                        <geoLat>25.93333333N</geoLat>
+                        <geoLong>097.16666667W</geoLong>
+                      </TcnUid>
+                      <valDist>11.3</valDist>
+                      <uomDist>NM</uomDist>
+                    </Din>
+                    <txtRmk>BROWNSVILLE</txtRmk>
+                  </Frd>
+                </Avx>
+              </Abd>
+            </aseShapes>
+            <InstructionsGroup>
+              <txtInstr>SPACE OPS AREA: ACFT OPS ARE PROHIBITIED. EXCLUDING AIRSPACE OVER INTERNATIONAL WATERS. 
+
+UAS OPR WHO DO NOT COMPLY WITH APPLICABLE AIRSPACE RESTRICTIONS ARE WARNED THAT PURSUANT TO 10 U.S.C.SECTION 130I AND 6 U.S.C.SECTION 124N, THE DEPARTMENT OF DEFENSE (DOD), THE DEPARTMENT OF HOMELAND SECURITY (DHS) OR THE DEPARTMENT OF JUSTICE (DOJ) MAY TAKE SECURITY ACTION THAT RESULTS IN THE INTERFERENCE, DISRUPTION, SEIZURE, DAMAGING, OR DESTRUCTION OF UNMANNED ACFT DEEMED TO POSE A CREDIBLE SAFETY OR SECURITY THREAT TO PROTECTED PERSONNEL, FAC, OR ASSETS. </txtInstr>
+            </InstructionsGroup>
+            <codeIncFRD>TRUE</codeIncFRD>
+            <codeShpPrt>COMPOSITE</codeShpPrt>
+            <codeLclTime>TRUE</codeLclTime>
+            <codeAuthATC>FALSE</codeAuthATC>
+          </TFRAreaGroup>
+          <TemplateType>BigThreatLanguage</TemplateType>
+          <codeCtrlFacilityType>ARTCC</codeCtrlFacilityType>
+        </TfrNot>
+        <txtNameCoordFacility>HOUSTON</txtNameCoordFacility>
+        <codeCoordFacility>ZHU</codeCoordFacility>
+        <codeCoordFacilityType>ARTCC</codeCoordFacilityType>
+        <txtAddrCoordPhone>281-230-5560</txtAddrCoordPhone>
+        <txtDescrUSNS>!FDC 6/7129 ZHU TX..AIRSPACE STARBASE, TX..TEMPORARY FLIGHT RESTRICTIONS. PURSUANT TO 14 CFR SECTION 91.143, SPACE OPS AREA, ACFT OPS ARE PROHIBITED WI AN AREA DEFINED AS 255600N0971000W (BRO078011.3) TO 260100N0971200W (BRO051011) TO 260400N0970700W (BRO050016.4) TO 260600N0965500W (BRO058026.9) TO 260000N0965500W (BRO071025.2) TO 260000N0970000W (BRO068020.8) TO POINT OF ORIGIN SFC-UNL EFFECTIVE 2611132230 UTC (1630 LOCAL 11/13/26) UNTIL 2611140040 UTC (1840 LOCAL 11/13/26). SPACE OPS AREA: ACFT OPS ARE PROHIBITIED. EXCLUDING AIRSPACE OVER INTERNATIONAL WATERS. UAS OPR WHO DO NOT COMPLY WITH APPLICABLE AIRSPACE RESTRICTIONS ARE WARNED THAT PURSUANT TO 10 U.S.C.SECTION 130I AND 6 U.S.C.SECTION 124N, THE DEPARTMENT OF DEFENSE (DOD), THE DEPARTMENT OF HOMELAND SECURITY (DHS) OR THE DEPARTMENT OF JUSTICE (DOJ) MAY TAKE SECURITY ACTION THAT RESULTS IN THE INTERFERENCE, DISRUPTION, SEIZURE, DAMAGING, OR DESTRUCTION OF UNMANNED ACFT DEEMED TO POSE A CREDIBLE SAFETY OR SECURITY THREAT TO PROTECTED PERSONNEL, FAC, OR ASSETS. THE HOUSTON /ZHU/ ARTCC, TEL 281-230-5560, IS THE CDN FAC. 2611132230-2611140040</txtDescrUSNS>
+        <txtDescrTraditional>!FDC 6/7129 ZHU TX..AIRSPACE STARBASE, TX..TEMPORARY FLIGHT RESTRICTION. PURSUANT TO 14 CFR SECTION 91.143, SPACE OPS AREA, ACFT OPS ARE PROHIBITED WI AN AREA DEFINED AS 255600N0971000W (BRO078011.3) TO 260100N0971200W (BRO051011) TO 260400N0970700W (BRO050016.4) TO 260600N0965500W (BRO058026.9) TO 260000N0965500W (BRO071025.2) TO 260000N0970000W (BRO068020.8) TO THE POINT OF ORIGIN SFC-UNL EFFECTIVE 2611132230 UTC (1630 LOCAL 11/13/26) UNTIL 2611140040 UTC (1840 LOCAL 11/13/26). SPACE OPS AREA: ACFT OPS ARE PROHIBITIED. EXCLUDING AIRSPACE OVER INTERNATIONAL WATERS. 
+
+UAS OPR WHO DO NOT COMPLY WITH APPLICABLE AIRSPACE RESTRICTIONS ARE WARNED THAT PURSUANT TO 10 U.S.C.SECTION 130I AND 6 U.S.C.SECTION 124N, THE DEPARTMENT OF DEFENSE (DOD), THE DEPARTMENT OF HOMELAND SECURITY (DHS) OR THE DEPARTMENT OF JUSTICE (DOJ) MAY TAKE SECURITY ACTION THAT RESULTS IN THE INTERFERENCE, DISRUPTION, SEIZURE, DAMAGING, OR DESTRUCTION OF UNMANNED ACFT DEEMED TO POSE A CREDIBLE SAFETY OR SECURITY THREAT TO PROTECTED PERSONNEL, FAC, OR ASSETS. THE HOUSTON /ZHU/ ARTCC, TEL 281-230-5560, IS THE CDN FAC. 2611132230-2611140040</txtDescrTraditional>
+        <txtDescrModern>&lt;html&gt;
+  &lt;span style="Arial" valign="Top"&gt;
+    &lt;Body&gt;
+      &lt;Table cellpadding="1" cellspacing="0"&gt;
+        &lt;TR bgcolor="#1E90FF"&gt;
+          &lt;TD colspan="3" align="left" valign="bottom" width="250"&gt;
+            &lt;b&gt;
+              &lt;font color="#FFFFFF" size="3" face="Arial"&gt;NOTAM Number     :&lt;/font&gt;
+            &lt;/b&gt;
+          &lt;/TD&gt;
+          &lt;TD valign="bottom" align="left" width="320"&gt;
+            &lt;b&gt;
+              &lt;font color="#FFFFFF" size="3" face="Arial"&gt;FDC 6/7129&lt;/font&gt;
+            &lt;/b&gt;
+          &lt;/TD&gt;
+        &lt;/TR&gt;
+        &lt;TR&gt;
+          &lt;TD colspan="3" align="left" valign="top"&gt;
+            &lt;font face="Arial" size="2"&gt;Issue Date     :&lt;/font&gt;
+          &lt;/TD&gt;
+          &lt;TD valign="top"&gt;
+            &lt;font face="Arial" size="2"&gt;November 11, 2026 at 1650 UTC&lt;/font&gt;
+          &lt;/TD&gt;
+        &lt;/TR&gt;
+        &lt;TR&gt;
+          &lt;TD colspan="3" align="left" valign="top"&gt;
+            &lt;font face="Arial" size="2"&gt;Location     :&lt;/font&gt;
+          &lt;/TD&gt;
+          &lt;TD&gt;
+            &lt;font face="Arial" size="2"&gt;STARBASE, Texas&lt;/font&gt;
+          &lt;/TD&gt;
+        &lt;/TR&gt;
+        &lt;TR&gt;
+          &lt;TD colspan="3" align="left" valign="top"&gt;
+            &lt;font face="Arial" size="2"&gt;Beginning Date and Time     :&lt;/font&gt;
+          &lt;/TD&gt;
+          &lt;TD&gt;
+            &lt;font face="Arial" size="2"&gt;November 13, 2026 at 2230 UTC&lt;/font&gt;
+          &lt;/TD&gt;
+        &lt;/TR&gt;
+        &lt;TR&gt;
+          &lt;TD colspan="3" align="left" valign="top"&gt;
+            &lt;font face="Arial" size="2"&gt;Ending Date and Time     :&lt;/font&gt;
+          &lt;/TD&gt;
+          &lt;TD&gt;
+            &lt;font face="Arial" size="2"&gt;November 14, 2026 at 0040 UTC&lt;/font&gt;
+          &lt;/TD&gt;
+        &lt;/TR&gt;
+        &lt;TR&gt;
+          &lt;TD colspan="3" align="left" valign="top"&gt;
+            &lt;font face="Arial" size="2"&gt;Reason for NOTAM     :&lt;/font&gt;
+          &lt;/TD&gt;
+          &lt;TD&gt;
+            &lt;font face="Arial" size="2"&gt;Space Operations Area&lt;/font&gt;
+          &lt;/TD&gt;
+        &lt;/TR&gt;
+        &lt;TR&gt;
+          &lt;TD colspan="3" align="left" valign="top"&gt;
+            &lt;font face="Arial" size="2"&gt;Type     :&lt;/font&gt;
+          &lt;/TD&gt;
+          &lt;TD&gt;
+            &lt;font face="Arial" size="2"&gt;Space Operations&lt;/font&gt;
+          &lt;/TD&gt;
+        &lt;/TR&gt;
+        &lt;TR&gt;
+          &lt;TD colspan="3" align="left" valign="top"&gt;
+            &lt;font face="Arial" size="2"&gt;Replaced NOTAM(s)     :&lt;/font&gt;
+          &lt;/TD&gt;
+          &lt;TD&gt;
+            &lt;font face="Arial" size="2"&gt;N/A&lt;/font&gt;
+          &lt;/TD&gt;
+        &lt;/TR&gt;
+        &lt;TR&gt;
+          &lt;TD colspan="3" align="left" valign="top"&gt;
+            &lt;font face="Arial" size="2"&gt;Pilots May Contact     :&lt;/font&gt;
+          &lt;/TD&gt;
+          &lt;TD&gt;
+            &lt;font face="Arial" size="2"&gt;HOUSTON (ZHU) ARTCC, 281-230-5560&lt;/font&gt;
+          &lt;/TD&gt;
+        &lt;/TR&gt;
+        &lt;TR&gt;
+          &lt;TD colspan="2" height="20"&gt;  &lt;/TD&gt;
+        &lt;/TR&gt;
+        &lt;TR&gt;
+          &lt;TD colspan="3" align="right" valign="top"&gt;
+            &lt;font face="Arial" size="2"&gt;
+              &lt;b&gt;Jump To: &amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;&lt;/b&gt;
+            &lt;/font&gt;
+          &lt;/TD&gt;
+          &lt;TD&gt;
+            &lt;font face="Arial" size="2"&gt;
+              &lt;b&gt;
+                &lt;a href="#areas" class="internal"&gt; Affected Areas &lt;/a&gt;&lt;br/&gt;&lt;a href="#restrictions" class="internal"&gt; Operating Restrictions and Requirements &lt;/a&gt;&lt;br/&gt;&lt;a href="#other" class="internal"&gt; Other Information &lt;/a&gt;&lt;br/&gt;&lt;/b&gt;
+            &lt;/font&gt;
+          &lt;/TD&gt;
+        &lt;/TR&gt;
+        &lt;TR&gt;
+          &lt;TD colspan="2" height="20"&gt;  &lt;/TD&gt;
+        &lt;/TR&gt;
+      &lt;/Table&gt;
+      &lt;Table cellpadding="1" cellspacing="0"&gt;
+        &lt;TR bgcolor="#1E90FF"&gt;
+          &lt;TD colspan="5"&gt;
+            &lt;a name="areas"&gt;
+              &lt;b&gt;
+                &lt;font color="#FFFFFF" size="3" face="Arial"&gt;Affected Area(s)&lt;/font&gt;
+              &lt;/b&gt;
+            &lt;/a&gt;
+          &lt;/TD&gt;
+          &lt;TD colspan="1" align="right"&gt;
+            &lt;a href="#"&gt;
+              &lt;font color="#FFFFFF" face="Arial"&gt;
+                &lt;b&gt;Top&lt;/b&gt;
+              &lt;/font&gt;
+            &lt;/a&gt;
+          &lt;/TD&gt;
+        &lt;/TR&gt;
+        &lt;TR&gt;
+          &lt;TD colspan="2" height="10"&gt;  &lt;/TD&gt;
+        &lt;/TR&gt;
+        &lt;TR&gt;
+          &lt;TD colspan="3" width="200"&gt;
+            &lt;font face="Arial" size="2"&gt;
+              &lt;b&gt;Airspace Definition:&lt;/b&gt;
+            &lt;/font&gt;
+          &lt;/TD&gt;
+        &lt;/TR&gt;
+        &lt;TR&gt;
+          &lt;TD&gt; &lt;/TD&gt;
+          &lt;TD&gt; &lt;/TD&gt;
+          &lt;td colspan="3"&gt;
+            &lt;font face="Arial" size="2"&gt;Region bounded by:&lt;/font&gt;
+          &lt;/td&gt;
+        &lt;/TR&gt;
+        &lt;tr&gt;
+          &lt;td&gt;   &lt;/td&gt;
+          &lt;td&gt;   &lt;/td&gt;
+          &lt;td colspan="2"&gt;
+            &lt;table valign="top" border="0"&gt;
+              &lt;tr&gt;
+                &lt;td width="20" /&gt;
+                &lt;td width="140" /&gt;
+                &lt;td colspan="1" width="300"&gt;
+                  &lt;font face="Arial" size="2"&gt;
+                    &lt;u&gt; &lt;/u&gt;
+                  &lt;/font&gt;
+                &lt;/td&gt;
+                &lt;td colspan="1" width="200"&gt;
+                  &lt;font face="Arial" size="2"&gt;
+                    &lt;u&gt;Latitude:&lt;/u&gt;
+                  &lt;/font&gt;
+                &lt;/td&gt;
+                &lt;td colspan="1" width="200"&gt;
+                  &lt;font face="Arial" size="2"&gt;
+                    &lt;u&gt;Longitude:&lt;/u&gt;
+                  &lt;/font&gt;
+                &lt;/td&gt;
+                &lt;td colspan="3" width="200"&gt;
+                  &lt;font face="Arial" size="2"&gt;
+                    &lt;u&gt;FRD:&lt;/u&gt;
+                  &lt;/font&gt;
+                &lt;/td&gt;
+              &lt;/tr&gt;
+              &lt;TR&gt;
+                &lt;td width="20" /&gt;
+                &lt;td width="140" /&gt;
+                &lt;TD colspan="1" width="300"&gt;
+                  &lt;font face="Arial" size="2"&gt;From: &lt;/font&gt;
+                &lt;/TD&gt;
+                &lt;TD colspan="1" width="200"&gt;
+                  &lt;font face="Arial" size="2"&gt;25&amp;#xBA;56'00"N&lt;/font&gt;
+                &lt;/TD&gt;
+                &lt;TD colspan="1" width="200"&gt;
+                  &lt;font face="Arial" size="2"&gt;97&amp;#xBA;10'00"W&lt;/font&gt;
+                &lt;/TD&gt;
+                &lt;TD colspan="1" width="200"&gt;
+                  &lt;font face="Arial" size="2"&gt;BRO078011.3&lt;/font&gt;
+                &lt;/TD&gt;
+              &lt;/TR&gt;
+              &lt;TR&gt;
+                &lt;td width="20" /&gt;
+                &lt;td width="140" /&gt;
+                &lt;TD colspan="1" width="300"&gt;
+                  &lt;font face="Arial" size="2"&gt;To: &lt;/font&gt;
+                &lt;/TD&gt;
+                &lt;TD colspan="1" width="200"&gt;
+                  &lt;font face="Arial" size="2"&gt;26&amp;#xBA;01'00"N&lt;/font&gt;
+                &lt;/TD&gt;
+                &lt;TD colspan="1" width="200"&gt;
+                  &lt;font face="Arial" size="2"&gt;97&amp;#xBA;12'00"W&lt;/font&gt;
+                &lt;/TD&gt;
+                &lt;TD colspan="1" width="200"&gt;
+                  &lt;font face="Arial" size="2"&gt;BRO051011&lt;/font&gt;
+                &lt;/TD&gt;
+              &lt;/TR&gt;
+              &lt;TR&gt;
+                &lt;td width="20" /&gt;
+                &lt;td width="140" /&gt;
+                &lt;TD colspan="1" width="300"&gt;
+                  &lt;font face="Arial" size="2"&gt;To: &lt;/font&gt;
+                &lt;/TD&gt;
+                &lt;TD colspan="1" width="200"&gt;
+                  &lt;font face="Arial" size="2"&gt;26&amp;#xBA;04'00"N&lt;/font&gt;
+                &lt;/TD&gt;
+                &lt;TD colspan="1" width="200"&gt;
+                  &lt;font face="Arial" size="2"&gt;97&amp;#xBA;07'00"W&lt;/font&gt;
+                &lt;/TD&gt;
+                &lt;TD colspan="1" width="200"&gt;
+                  &lt;font face="Arial" size="2"&gt;BRO050016.4&lt;/font&gt;
+                &lt;/TD&gt;
+              &lt;/TR&gt;
+              &lt;TR&gt;
+                &lt;td width="20" /&gt;
+                &lt;td width="140" /&gt;
+                &lt;TD colspan="1" width="300"&gt;
+                  &lt;font face="Arial" size="2"&gt;To: &lt;/font&gt;
+                &lt;/TD&gt;
+                &lt;TD colspan="1" width="200"&gt;
+                  &lt;font face="Arial" size="2"&gt;26&amp;#xBA;06'00"N&lt;/font&gt;
+                &lt;/TD&gt;
+                &lt;TD colspan="1" width="200"&gt;
+                  &lt;font face="Arial" size="2"&gt;96&amp;#xBA;55'00"W&lt;/font&gt;
+                &lt;/TD&gt;
+                &lt;TD colspan="1" width="200"&gt;
+                  &lt;font face="Arial" size="2"&gt;BRO058026.9&lt;/font&gt;
+                &lt;/TD&gt;
+              &lt;/TR&gt;
+              &lt;TR&gt;
+                &lt;td width="20" /&gt;
+                &lt;td width="140" /&gt;
+                &lt;TD colspan="1" width="300"&gt;
+                  &lt;font face="Arial" size="2"&gt;To: &lt;/font&gt;
+                &lt;/TD&gt;
+                &lt;TD colspan="1" width="200"&gt;
+                  &lt;font face="Arial" size="2"&gt;26&amp;#xBA;00'00"N&lt;/font&gt;
+                &lt;/TD&gt;
+                &lt;TD colspan="1" width="200"&gt;
+                  &lt;font face="Arial" size="2"&gt;96&amp;#xBA;55'00"W&lt;/font&gt;
+                &lt;/TD&gt;
+                &lt;TD colspan="1" width="200"&gt;
+                  &lt;font face="Arial" size="2"&gt;BRO071025.2&lt;/font&gt;
+                &lt;/TD&gt;
+              &lt;/TR&gt;
+              &lt;TR&gt;
+                &lt;td width="20" /&gt;
+                &lt;td width="140" /&gt;
+                &lt;TD colspan="1" width="300"&gt;
+                  &lt;font face="Arial" size="2"&gt;To: &lt;/font&gt;
+                &lt;/TD&gt;
+                &lt;TD colspan="1" width="200"&gt;
+                  &lt;font face="Arial" size="2"&gt;26&amp;#xBA;00'00"N&lt;/font&gt;
+                &lt;/TD&gt;
+                &lt;TD colspan="1" width="200"&gt;
+                  &lt;font face="Arial" size="2"&gt;97&amp;#xBA;00'00"W&lt;/font&gt;
+                &lt;/TD&gt;
+                &lt;TD colspan="1" width="200"&gt;
+                  &lt;font face="Arial" size="2"&gt;BRO068020.8&lt;/font&gt;
+                &lt;/TD&gt;
+              &lt;/TR&gt;
+              &lt;TR&gt;
+                &lt;td width="20" /&gt;
+                &lt;td width="140" /&gt;
+                &lt;TD colspan="1" width="300"&gt;
+                  &lt;font face="Arial" size="2"&gt;To: &lt;/font&gt;
+                &lt;/TD&gt;
+                &lt;TD colspan="1" width="200"&gt;
+                  &lt;font face="Arial" size="2"&gt;25&amp;#xBA;56'00"N&lt;/font&gt;
+                &lt;/TD&gt;
+                &lt;TD colspan="1" width="200"&gt;
+                  &lt;font face="Arial" size="2"&gt;97&amp;#xBA;10'00"W&lt;/font&gt;
+                &lt;/TD&gt;
+                &lt;TD colspan="1" width="200"&gt;
+                  &lt;font face="Arial" size="2"&gt;BRO078011.3&lt;/font&gt;
+                &lt;/TD&gt;
+              &lt;/TR&gt;
+            &lt;/table&gt;
+          &lt;/td&gt;
+        &lt;/tr&gt;
+        &lt;tr&gt;
+          &lt;td&gt; &lt;/td&gt;
+          &lt;td&gt; &lt;/td&gt;
+          &lt;td colspan="3"&gt;
+            &lt;font face="Arial" size="2"&gt;Altitude: From the surface  up to Unlimited  &lt;/font&gt;
+          &lt;/td&gt;
+        &lt;/tr&gt;
+        &lt;TR&gt;
+          &lt;TD colspan="5"&gt;
+            &lt;font face="Arial" size="2"&gt;
+              &lt;b&gt;Effective Date(s):&lt;/b&gt;
+            &lt;/font&gt;
+          &lt;/TD&gt;
+        &lt;/TR&gt;
+        &lt;TR&gt;
+          &lt;TD&gt; &lt;/TD&gt;
+          &lt;TD&gt; &lt;/TD&gt;
+          &lt;TD colspan="5" valign="top"&gt;
+            &lt;font face="Arial" size="2"&gt;From November 13, 2026 at 2230 UTC (November 13, 2026 at 1630 CST)&lt;/font&gt;
+          &lt;/TD&gt;
+        &lt;/TR&gt;
+        &lt;TR&gt;
+          &lt;TD&gt; &lt;/TD&gt;
+          &lt;TD&gt; &lt;/TD&gt;
+          &lt;TD colspan="5" valign="top"&gt;
+            &lt;font face="Arial" size="2"&gt;To November 14, 2026 at 0040 UTC (November 13, 2026 at 1840 CST)&lt;/font&gt;
+          &lt;/TD&gt;
+        &lt;/TR&gt;
+        &lt;TR&gt;
+          &lt;TD colspan="2" height="20"&gt;  &lt;/TD&gt;
+        &lt;/TR&gt;
+      &lt;/Table&gt;
+      &lt;b&gt;ENDSECTION1&lt;/b&gt;
+      &lt;Table cellpadding="1" cellspacing="0"&gt;
+        &lt;TR bgcolor="#1E90FF"&gt;
+          &lt;TD colspan="3"&gt;
+            &lt;a name="restrictions"&gt;
+              &lt;b&gt;
+                &lt;font color="#FFFFFF" face="Arial" size="3"&gt;Operating Restrictions and Requirements&lt;/font&gt;
+              &lt;/b&gt;
+            &lt;/a&gt;
+          &lt;/TD&gt;
+          &lt;TD colspan="1" align="right"&gt;
+            &lt;a href="#"&gt;
+              &lt;font color="#FFFFFF" face="Arial"&gt;
+                &lt;b&gt;Top&lt;/b&gt;
+              &lt;/font&gt;
+            &lt;/a&gt;
+          &lt;/TD&gt;
+        &lt;/TR&gt;
+        &lt;TR&gt;
+          &lt;TD colspan="2" height="20"&gt;  &lt;/TD&gt;
+        &lt;/TR&gt;
+        &lt;TR&gt;
+          &lt;TD colspan="3"&gt;
+            &lt;font face="Arial" size="2"&gt;No pilots may operate an aircraft in the areas covered by this NOTAM (except as described).&lt;/font&gt;
+          &lt;/TD&gt;
+        &lt;/TR&gt;
+        &lt;TR&gt;
+          &lt;TD colspan="2" height="20"&gt;  &lt;/TD&gt;
+        &lt;/TR&gt;
+        &lt;TR&gt;
+          &lt;TD&gt;
+            &lt;font face="Arial" size="2"&gt;
+              &lt;DL&gt;
+                &lt;DT&gt;SPACE OPS AREA: ACFT OPS ARE PROHIBITIED. EXCLUDING AIRSPACE OVER INTERNATIONAL WATERS. 
+
+UAS OPR WHO DO NOT COMPLY WITH APPLICABLE AIRSPACE RESTRICTIONS ARE WARNED THAT PURSUANT TO 10 U.S.C.SECTION 130I AND 6 U.S.C.SECTION 124N, THE DEPARTMENT OF DEFENSE (DOD), THE DEPARTMENT OF HOMELAND SECURITY (DHS) OR THE DEPARTMENT OF JUSTICE (DOJ) MAY TAKE SECURITY ACTION THAT RESULTS IN THE INTERFERENCE, DISRUPTION, SEIZURE, DAMAGING, OR DESTRUCTION OF UNMANNED ACFT DEEMED TO POSE A CREDIBLE SAFETY OR SECURITY THREAT TO PROTECTED PERSONNEL, FAC, OR ASSETS. &lt;/DT&gt;&lt;br/&gt;&lt;/DL&gt;
+            &lt;/font&gt;
+          &lt;/TD&gt;
+        &lt;/TR&gt;
+        &lt;TR&gt;
+          &lt;TD colspan="2" height="10"&gt;  &lt;/TD&gt;
+        &lt;/TR&gt;
+      &lt;/Table&gt;
+      &lt;Table cellpadding="1" cellspacing="0"&gt;
+        &lt;TR bgcolor="#1E90FF"&gt;
+          &lt;TD colspan="3"&gt;
+            &lt;a name="other"&gt;
+              &lt;b&gt;
+                &lt;font color="#FFFFFF" face="Arial" size="3"&gt;Other Information:&lt;/font&gt;
+              &lt;/b&gt;
+            &lt;/a&gt;
+          &lt;/TD&gt;
+          &lt;TD colspan="1" align="right"&gt;
+            &lt;a href="#"&gt;
+              &lt;font color="#FFFFFF" face="Arial"&gt;
+                &lt;b&gt;Top&lt;/b&gt;
+              &lt;/font&gt;
+            &lt;/a&gt;
+          &lt;/TD&gt;
+        &lt;/TR&gt;
+        &lt;TR&gt;
+          &lt;TD colspan="2"&gt;
+            &lt;font face="Arial" size="2"&gt;ARTCC:&lt;/font&gt;
+          &lt;/TD&gt;
+          &lt;TD&gt;
+            &lt;font face="Arial" size="2"&gt;ZHU - Houston Center&lt;/font&gt;
+          &lt;/TD&gt;
+        &lt;/TR&gt;
+        &lt;TR&gt;
+          &lt;TD colspan="2"&gt;
+            &lt;font face="Arial" size="2"&gt;Authority:&lt;/font&gt;
+          &lt;/TD&gt;
+          &lt;TD&gt;
+            &lt;font face="Arial" size="2"&gt;Title 14 CFR section 91.143&lt;/font&gt;
+          &lt;/TD&gt;
+        &lt;/TR&gt;
+        &lt;TR&gt;
+          &lt;TD Width="40" /&gt;
+          &lt;TD Width="152" /&gt;
+          &lt;TD Width="318" /&gt;
+        &lt;/TR&gt;
+      &lt;/Table&gt;
+    &lt;/Body&gt;
+  &lt;/span&gt;
+&lt;/html&gt;</txtDescrModern>
+        <codeFreeformText>false</codeFreeformText>
+      </Not>
+    </Add>
+  </Group>
+</XNOTAM-Update>

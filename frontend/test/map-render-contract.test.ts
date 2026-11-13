@@ -37,7 +37,7 @@ afterEach(() => {
 });
 
 describe('renderMap bring-up', () => {
-  it('stacks seventeen layers bottom-first, basemap under overlays under labels', async () => {
+  it('stacks nineteen layers bottom-first, basemap under overlays under labels', async () => {
     await mapModule.renderMap(MANIFEST_FIXTURE);
     expect(renderedMap().layerOrder).toEqual([
       'esri-imagery-layer',
@@ -54,6 +54,8 @@ describe('renderMap bring-up', () => {
       'targets-layer',
       'terminator-line-layer',
       'subsolar-point-layer',
+      'launch-hazard-fill-layer',
+      'launch-hazard-outline-layer',
       'ascent-trajectory-layer',
       'ascent-pad-layer',
       'esri-labels-reference-layer',
@@ -84,6 +86,8 @@ describe('renderMap bring-up', () => {
       'viirs-night-lights-layer',
       'terminator-line-layer',
       'subsolar-point-layer',
+      'launch-hazard-fill-layer',
+      'launch-hazard-outline-layer',
       'ascent-trajectory-layer',
       'ascent-pad-layer',
       'esri-labels-reference-layer',
@@ -109,6 +113,8 @@ describe('renderMap bring-up', () => {
       ['targets-layer', 'targets'],
       ['terminator-line-layer', 'terminator-line'],
       ['subsolar-point-layer', 'subsolar-point'],
+      ['launch-hazard-fill-layer', 'launch-hazards'],
+      ['launch-hazard-outline-layer', 'launch-hazards'],
       ['ascent-trajectory-layer', 'ascent-trajectory'],
       ['ascent-pad-layer', 'ascent-pad'],
       ['esri-labels-reference-layer', 'esri-labels-reference'],
@@ -127,6 +133,8 @@ describe('renderMap bring-up', () => {
       'geo-ir-layer',
       'night-lights-global-dim-layer',
       'viirs-night-lights-layer',
+      'launch-hazard-fill-layer',
+      'launch-hazard-outline-layer',
       'ascent-trajectory-layer',
       'ascent-pad-layer',
     ]);

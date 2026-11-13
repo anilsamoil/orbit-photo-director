@@ -1,0 +1,395 @@
+{
+  "schema_version": 1,
+  "revision": "7403d47b0340fae6",
+  "event_id": "0f867f0c-5422-4d44-93b8-d7faaae7019b",
+  "label": "Published hazard areas \u2014 not a flight path",
+  "checked_at": "2026-11-13T10:02:00Z",
+  "valid_until": "2026-11-20T01:40:00Z",
+  "notices": [
+    {
+      "authority": "NGA",
+      "notice_id": "NAVAREA IV 1080/26",
+      "area_id": "A",
+      "phase": "ascent",
+      "domain": "maritime",
+      "restriction_class": "hazard",
+      "windows": [
+        {
+          "start": "2026-11-13T22:45:00Z",
+          "end": "2026-11-14T00:40:00Z"
+        },
+        {
+          "start": "2026-11-14T22:45:00Z",
+          "end": "2026-11-15T00:40:00Z"
+        },
+        {
+          "start": "2026-11-15T22:45:00Z",
+          "end": "2026-11-16T00:40:00Z"
+        },
+        {
+          "start": "2026-11-16T22:45:00Z",
+          "end": "2026-11-17T00:40:00Z"
+        },
+        {
+          "start": "2026-11-17T22:45:00Z",
+          "end": "2026-11-18T00:40:00Z"
+        },
+        {
+          "start": "2026-11-18T22:45:00Z",
+          "end": "2026-11-19T00:40:00Z"
+        },
+        {
+          "start": "2026-11-19T22:45:00Z",
+          "end": "2026-11-20T00:40:00Z"
+        }
+      ],
+      "source_url": "https://space-notices.com/notice/nav-warning-NAVAREA%20IV%201080%2F26",
+      "retrieved_from": "https://www.sealagom.com/navarea/4/message/25625/1080-26-caribbean-sea/",
+      "cross_check_url": "https://www.sealagom.com/coastal/174/message/54261/",
+      "source_sha256": "6d1e3acdd8be8ac684a2bf8cad886e389b382faf1d3ddfab2acc54369ed4772b",
+      "cross_check_sha256": "a90555164add45ee0de1ec00d3ff0b990883de13feb463e6569282a18d628025"
+    },
+    {
+      "authority": "NGA",
+      "notice_id": "NAVAREA IV 1080/26",
+      "area_id": "B",
+      "phase": "ascent",
+      "domain": "maritime",
+      "restriction_class": "high_risk",
+      "windows": [
+        {
+          "start": "2026-11-13T22:45:00Z",
+          "end": "2026-11-14T00:40:00Z"
+        },
+        {
+          "start": "2026-11-14T22:45:00Z",
+          "end": "2026-11-15T00:40:00Z"
+        },
+        {
+          "start": "2026-11-15T22:45:00Z",
+          "end": "2026-11-16T00:40:00Z"
+        },
+        {
+          "start": "2026-11-16T22:45:00Z",
+          "end": "2026-11-17T00:40:00Z"
+        },
+        {
+          "start": "2026-11-17T22:45:00Z",
+          "end": "2026-11-18T00:40:00Z"
+        },
+        {
+          "start": "2026-11-18T22:45:00Z",
+          "end": "2026-11-19T00:40:00Z"
+        },
+        {
+          "start": "2026-11-19T22:45:00Z",
+          "end": "2026-11-20T00:40:00Z"
+        }
+      ],
+      "source_url": "https://space-notices.com/notice/nav-warning-NAVAREA%20IV%201080%2F26",
+      "retrieved_from": "https://www.sealagom.com/navarea/4/message/25625/1080-26-caribbean-sea/",
+      "cross_check_url": "https://www.sealagom.com/coastal/174/message/54261/",
+      "source_sha256": "6d1e3acdd8be8ac684a2bf8cad886e389b382faf1d3ddfab2acc54369ed4772b",
+      "cross_check_sha256": "a90555164add45ee0de1ec00d3ff0b990883de13feb463e6569282a18d628025"
+    },
+    {
+      "authority": "FAA",
+      "notice_id": "TFR 6/7129",
+      "area_id": "6/7129",
+      "phase": "pad",
+      "domain": "airspace",
+      "restriction_class": "restricted_airspace",
+      "windows": [
+        {
+          "start": "2026-11-13T22:30:00Z",
+          "end": "2026-11-14T00:40:00Z"
+        }
+      ],
+      "source_url": "https://tfr.faa.gov/download/detail_6_7129.xml",
+      "retrieved_from": "https://tfr.faa.gov/download/detail_6_7129.xml",
+      "source_sha256": "4e6afeafe02df5dbe396b5d37fe7a814e6658c167cc3d511190be82a2dc495d0"
+    }
+  ],
+  "geojson": {
+    "type": "FeatureCollection",
+    "features": [
+      {
+        "type": "Feature",
+        "id": "navarea-iv-1080-26-a",
+        "properties": {
+          "notice_id": "NAVAREA IV 1080/26",
+          "area_id": "A",
+          "name": "NAVAREA IV 1080/26 area A",
+          "phase": "ascent",
+          "domain": "maritime",
+          "restriction_class": "hazard"
+        },
+        "geometry": {
+          "type": "Polygon",
+          "coordinates": [
+            [
+              [
+                -97.08333,
+                25.8
+              ],
+              [
+                -96.81667,
+                25.63333
+              ],
+              [
+                -95.31667,
+                24.6
+              ],
+              [
+                -93.48333,
+                23.26667
+              ],
+              [
+                -91.15,
+                22.26667
+              ],
+              [
+                -89.73333,
+                22.26667
+              ],
+              [
+                -89.31667,
+                22.26667
+              ],
+              [
+                -87.43333,
+                21.98333
+              ],
+              [
+                -86.7,
+                21.71667
+              ],
+              [
+                -84.9,
+                21.1
+              ],
+              [
+                -83.23333,
+                20.6
+              ],
+              [
+                -81.21667,
+                20.2
+              ],
+              [
+                -81.05,
+                20.51667
+              ],
+              [
+                -81.7,
+                20.71667
+              ],
+              [
+                -82.63333,
+                20.98333
+              ],
+              [
+                -83.81667,
+                21.43333
+              ],
+              [
+                -84.53333,
+                21.55
+              ],
+              [
+                -84.98333,
+                21.63333
+              ],
+              [
+                -85.11667,
+                21.68333
+              ],
+              [
+                -86.48333,
+                22.51667
+              ],
+              [
+                -88.48333,
+                23.35
+              ],
+              [
+                -88.86667,
+                23.53333
+              ],
+              [
+                -91.98333,
+                25.18333
+              ],
+              [
+                -93.48333,
+                25.68333
+              ],
+              [
+                -95.2,
+                26.01667
+              ],
+              [
+                -96.81667,
+                26.1
+              ],
+              [
+                -97.06667,
+                26.1
+              ],
+              [
+                -97.16667,
+                26.06667
+              ],
+              [
+                -97.21667,
+                26.03333
+              ],
+              [
+                -97.21667,
+                25.96667
+              ],
+              [
+                -97.08333,
+                25.8
+              ]
+            ]
+          ]
+        }
+      },
+      {
+        "type": "Feature",
+        "id": "navarea-iv-1080-26-b",
+        "properties": {
+          "notice_id": "NAVAREA IV 1080/26",
+          "area_id": "B",
+          "name": "NAVAREA IV 1080/26 area B",
+          "phase": "ascent",
+          "domain": "maritime",
+          "restriction_class": "high_risk"
+        },
+        "geometry": {
+          "type": "Polygon",
+          "coordinates": [
+            [
+              [
+                -92.96667,
+                25.2
+              ],
+              [
+                -93.86667,
+                25.51667
+              ],
+              [
+                -95.4,
+                25.7
+              ],
+              [
+                -96.53333,
+                26.03333
+              ],
+              [
+                -96.81667,
+                26.06667
+              ],
+              [
+                -97.06667,
+                26.06667
+              ],
+              [
+                -97.16667,
+                26.06667
+              ],
+              [
+                -97.21667,
+                26.03333
+              ],
+              [
+                -97.21667,
+                25.96667
+              ],
+              [
+                -97.08333,
+                25.8
+              ],
+              [
+                -96.78333,
+                25.68333
+              ],
+              [
+                -95.08333,
+                25.03333
+              ],
+              [
+                -94.13333,
+                24.48333
+              ],
+              [
+                -93.53333,
+                24.33333
+              ],
+              [
+                -92.86667,
+                24.41667
+              ],
+              [
+                -92.71667,
+                24.75
+              ],
+              [
+                -92.96667,
+                25.2
+              ]
+            ]
+          ]
+        }
+      },
+      {
+        "type": "Feature",
+        "id": "faa-tfr-6-7129",
+        "properties": {
+          "notice_id": "TFR 6/7129",
+          "area_id": "6/7129",
+          "name": "FAA TFR 6/7129",
+          "phase": "pad",
+          "domain": "airspace",
+          "restriction_class": "restricted_airspace"
+        },
+        "geometry": {
+          "type": "Polygon",
+          "coordinates": [
+            [
+              [
+                -97.0,
+                26.0
+              ],
+              [
+                -96.91666667,
+                26.0
+              ],
+              [
+                -96.91666667,
+                26.1
+              ],
+              [
+                -97.11666667,
+                26.06666667
+              ],
+              [
+                -97.2,
+                26.01666667
+              ],
+              [
+                -97.16666667,
+                25.93333333
+              ],
+              [
+                -97.0,
+                26.0
+              ]
+            ]
+          ]
+        }
+      }
+    ]
+  }
+}
