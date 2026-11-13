@@ -23,6 +23,7 @@ import { createClock } from '../src/map/map-core/clock';
 import { createMapCore } from '../src/map/map-core/core';
 import {
   bindAscentPad,
+  bindLaunchStore,
   focusLaunchOnMap,
   onHazardCatalogRefresh,
   launchHazardFillLayer,
@@ -810,6 +811,56 @@ describe('hazard file freshness', () => {
     });
     expect(lons.some((lon) => Math.abs(lon - (oldLon + 0.25)) < 1e-6)).toBe(true);
   });
+
+  it('shows the new checked time on the polygon popup when only the review time changes', async () => {
+    vi.spyOn(launchCatalog, 'read').mockReturnValue({
+      mapPins: [{ eventId: STARSHIP_FLIGHT15_EVENT_ID }],
+    } as unknown as TierCatalog);
+    vi.spyOn(launchCatalog, 'attempt').mockReturnValue(ATTEMPT);
+    const { vendor, core } = mount();
+    bindAscentPad(core);
+    setMapLaunchMode(true);
+    const show = async (body: ReturnType<typeof hazardFile>) => {
+      await reloadLaunchHazards(() => jsonResponse(body));
+      const feature = painted(vendor).find((item) => item.properties?.area_id === '6/7129');
+      if (!feature) throw new Error('missing painted TFR');
+      vendor.fireLayer('click', 'launch-hazard-fill-layer', {
+        point: { x: 2, y: 2 },
+        lngLat: [-97.1, 26],
+        features: [{ properties: feature.properties, geometry: feature.geometry }],
+      });
+      return vendor.popups.at(-1)?.content.textContent ?? '';
+    };
+    const first = await show(hazardFile());
+    expect(first).toContain('Checked 2026-11-13T10:02:00Z');
+    expect(first).toContain('SFC-UNL');
+    expect(first).toContain('international waters');
+    const amended = hazardFile();
+    amended.checked_at = '2026-11-13T23:00:00Z';
+    const second = await show(amended);
+    expect(second).toContain('Checked 2026-11-13T23:00:00Z');
+    expect(second).not.toContain('Checked 2026-11-13T10:02:00Z');
+  });
+
+  it('paints the polygons when a catalog refresh finishes', async () => {
+    vi.spyOn(launchCatalog, 'read').mockReturnValue({
+      mapPins: [{ eventId: STARSHIP_FLIGHT15_EVENT_ID }],
+    } as unknown as TierCatalog);
+    vi.spyOn(launchCatalog, 'attempt').mockReturnValue(ATTEMPT);
+    const vendor = createVendorDouble();
+    noteLaunchCore(createMapCore(vendor, createClock(() => Date.parse('2026-11-13T22:50:00Z'))));
+    setMapLaunchMode(true);
+    vi.stubGlobal('fetch', (input: RequestInfo) => (
+      String(input).includes('/hazards/')
+        ? jsonResponse(hazardFile())
+        : Promise.reject(new Error('catalog miss'))
+    ));
+    bindLaunchStore();
+    await launchCatalog.refresh();
+    await vi.waitFor(() => {
+      expect(painted(vendor).map((feature) => feature.properties?.area_id).sort()).toEqual(['6/7129', 'A', 'B']);
+    });
+  });
 });
 
 describe('hazard notice facts', () => {
@@ -953,7 +1004,7 @@ describe('hazard focus', () => {
     expect(vendor.cameraCalls.some((call) => call.method === 'fitBounds')).toBe(false);
   });
 
-  it('cancels a deferred fit after a wheel zoom or an arrow key', () => {
+  it('leaves the camera where the user put it when hazards arrive after a wheel zoom or an arrow key', () => {
     pins();
     const pane = document.createElement('div');
     pane.id = 'map-pane';
@@ -961,23 +1012,41 @@ describe('hazard focus', () => {
     pane.append(surface);
     document.body.append(pane);
     const vendor = createVendorDouble();
+    const recorded = vendor.fitBounds.bind(vendor);
+    vendor.fitBounds = (box, options) => {
+      recorded(box, options);
+      const span = Math.max(box.east - box.west, box.north - box.south, 1e-9);
+      vendor.easeTo({
+        center: [(box.west + box.east) / 2, (box.south + box.north) / 2],
+        zoom: Math.min(options.maxZoom, Math.log2(360 / span)),
+        duration: 0,
+      });
+    };
     const core = createMapCore(vendor, createClock(() => when));
     noteLaunchCore(core);
     bindAscentPad(core);
+    const held = (before: { lng: number; lat: number; zoom: number }) => {
+      const [lng, lat] = vendor.center();
+      expect(lng).toBeCloseTo(before.lng, 8);
+      expect(lat).toBeCloseTo(before.lat, 8);
+      expect(vendor.zoom()).toBeCloseTo(before.zoom, 8);
+    };
     expect(focusLaunchOnMap(STARSHIP_FLIGHT15_EVENT_ID)).toBe(true);
+    const beforeWheel = { lng: vendor.center()[0], lat: vendor.center()[1], zoom: vendor.zoom() };
     surface.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true }));
     useHazardBundleForTest(rawBundle());
     syncLaunchHazards(when);
-    expect(vendor.cameraCalls.some((call) => call.method === 'fitBounds')).toBe(false);
+    held(beforeWheel);
 
     resetLaunchForTest();
     noteLaunchCore(core);
     bindAscentPad(core);
     expect(focusLaunchOnMap(STARSHIP_FLIGHT15_EVENT_ID)).toBe(true);
+    const beforeArrow = { lng: vendor.center()[0], lat: vendor.center()[1], zoom: vendor.zoom() };
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
     useHazardBundleForTest(rawBundle());
     syncLaunchHazards(when);
-    expect(vendor.cameraCalls.some((call) => call.method === 'fitBounds')).toBe(false);
+    held(beforeArrow);
   });
 
   it('fits inside the chrome and holds a non-zero bearing', () => {
@@ -1019,5 +1088,24 @@ describe('hazard focus', () => {
       duration: 0,
       bearing: 40,
     });
+  });
+
+  it('keeps the pad clear of an expanded card that is wider than 46 percent of the map', () => {
+    pins();
+    const pane = document.createElement('div');
+    pane.id = 'map-pane';
+    const card = document.createElement('div');
+    card.id = 'map-launch-coverage';
+    document.body.append(pane, card);
+    rect(pane, 0, 0, 1024, 768);
+    rect(card, 8, 120, 500, 520);
+    const { vendor } = mount();
+    vendor.setBearing(0);
+    setMapLaunchMode(true);
+    syncLaunchHazards(when);
+    expect(focusLaunchOnMap(STARSHIP_FLIGHT15_EVENT_ID)).toBe(true);
+    const fit = vendor.cameraCalls.find((call) => call.method === 'fitBounds');
+    const padding = fit?.args[1] as { padding: { left: number } };
+    expect(padding.padding.left).toBeGreaterThanOrEqual(520);
   });
 });

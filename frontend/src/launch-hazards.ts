@@ -4,7 +4,7 @@ export const STARSHIP_FLIGHT15_EVENT_ID = '0f867f0c-5422-4d44-93b8-d7faaae7019b'
 
 export const STARSHIP_FLIGHT15_HAZARD_PATH = '/hazards/v1/0f867f0c-5422-4d44-93b8-d7faaae7019b.json';
 
-export const HAZARD_LABEL = 'Published hazard areas \u2014 not a flight path';
+export const HAZARD_LABEL = 'Published hazard areas \u2014 not a flight path or navigation guidance';
 
 /** A checked file stays paintable for two days. The notice cancel date is separate. */
 export const REVIEW_MAX_MS = 48 * 60 * 60 * 1000;

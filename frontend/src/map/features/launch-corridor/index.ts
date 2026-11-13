@@ -165,7 +165,16 @@ function hazardSignature(features: readonly GeoJSON.Feature[]): string {
     const ring = feature.geometry.type === 'Polygon' ? feature.geometry.coordinates[0] : undefined;
     const coords = (ring ?? []).map((position) => `${position[0]},${position[1]}`).join(';');
     const props = feature.properties;
-    return `${String(feature.id ?? '')}:${coords}:${String(props?.restriction_class ?? '')}:${String(props?.window_start ?? '')}`;
+    return [
+      String(feature.id ?? ''),
+      coords,
+      String(props?.restriction_class ?? ''),
+      String(props?.checked_at ?? ''),
+      String(props?.qualification ?? ''),
+      String(props?.source_url ?? ''),
+      String(props?.window_start ?? ''),
+      String(props?.window_end ?? ''),
+    ].join(':');
   }).join('|');
 }
 

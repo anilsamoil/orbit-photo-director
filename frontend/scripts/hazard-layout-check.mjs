@@ -5,7 +5,7 @@ import { chromium, webkit } from 'playwright';
 const ORIGIN = process.env.HAZARD_ORIGIN ?? 'http://127.0.0.1:5199';
 const OUT = '/opt/cursor/artifacts';
 const CATALOG_PATH = new URL('../test/fixtures/starship-catalog-2026-11-10.json', import.meta.url);
-const LABEL = 'Published hazard areas \u2014 not a flight path';
+const LABEL = 'Published hazard areas \u2014 not a flight path or navigation guidance';
 const INSIDE = Date.parse('2026-11-13T22:50:00Z');
 const CONTROLS = [
   '#map-launch-coverage',
@@ -187,8 +187,12 @@ function polygonProbe() {
     ));
     areas[feature.properties.area_id] = clear.length;
   }
+  const pad = map.project([-97.15799, 25.99677]);
+  const card = document.getElementById('map-launch-coverage');
+  const cardBox = card && !card.hidden ? card.getBoundingClientRect() : null;
+  const padInside = !!(cardBox && cardBox.width > 1 && pad.x > cardBox.left && pad.x < cardBox.right && pad.y > cardBox.top && pad.y < cardBox.bottom);
   const center = map.getCenter();
-  return { areas, bearing: map.getBearing(), zoom: map.getZoom(), lng: center.lng, lat: center.lat };
+  return { areas, padInside, bearing: map.getBearing(), zoom: map.getZoom(), lng: center.lng, lat: center.lat };
 }
 
 function cardProbe() {
@@ -219,7 +223,11 @@ for (const [name, browserType] of engines) {
       await openLaunches(page);
       const follow = page.locator('#toggle-follow-iss');
       if ((await follow.getAttribute('class'))?.includes('active')) await follow.click();
-      await page.evaluate(() => window.__opdMap.setBearing(143.26));
+      await page.evaluate(() => {
+        const details = document.querySelector('#map-launch-coverage .map-launch-primary');
+        if (details) details.open = true;
+        window.__opdMap.setBearing(143.26);
+      });
       const show = page.locator('#map-launch-coverage .launch-brief-actions .btn');
       if (await show.count()) await show.click();
       await page.waitForTimeout(2200);
@@ -300,11 +308,11 @@ const failed = report.filter((row) => {
   if (errors.length) return true;
   if (row.size === 'catalog-refresh-after-404') return row.clearedFetches <= row.before || row.restoredFetches <= row.clearedFetches;
   const caption = row.caption;
-  const polygons = row.polygons.areas ?? {};
+  const areas = row.polygons.areas ?? {};
   const card = row.card.text ?? '';
   return caption.text !== LABEL || caption.hidden || caption.rangeText !== LABEL
     || caption.hits.length > 0 || caption.outside.length > 0 || !caption.legend
-    || polygons.A < 1 || polygons.B < 1 || polygons['6/7129'] < 1
+    || areas.A < 1 || areas.B < 1 || areas['6/7129'] < 1 || row.polygons.padInside
     || !card.includes('NAVAREA IV 1080/26') || !card.includes('area A') || !card.includes('maritime')
     || !card.includes('UTC') || !/CST|CDT/.test(card) || !card.includes('Checked 2026-11-13T10:02:00Z')
     || !card.includes('three hours prior to the earliest launch') || !card.includes('SFC-UNL')

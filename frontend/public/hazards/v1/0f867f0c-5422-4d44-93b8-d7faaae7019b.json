@@ -2,7 +2,7 @@
   "schema_version": 1,
   "revision": "7403d47b0340fae6",
   "event_id": "0f867f0c-5422-4d44-93b8-d7faaae7019b",
-  "label": "Published hazard areas \u2014 not a flight path",
+  "label": "Published hazard areas \u2014 not a flight path or navigation guidance",
   "checked_at": "2026-11-13T10:02:00Z",
   "valid_until": "2026-11-20T01:40:00Z",
   "notices": [

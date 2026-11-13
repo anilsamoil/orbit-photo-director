@@ -13,7 +13,7 @@ NAVAREA = ROOT / "frontend/test/fixtures/notices/navarea-iv-1080-26.txt"
 LNM = ROOT / "frontend/test/fixtures/notices/uscg-lnm-45-2026-starship-flight15.txt"
 TFR = ROOT / "frontend/test/fixtures/notices/faa-tfr-6-7129.xml"
 EVENT = "0f867f0c-5422-4d44-93b8-d7faaae7019b"
-LABEL = "Published hazard areas \u2014 not a flight path"
+LABEL = "Published hazard areas \u2014 not a flight path or navigation guidance"
 PAIR = re.compile(r"(\d{2,3}-\d{2}\.\d{2}[NS])\s+(\d{2,3}-\d{2}\.\d{2}[EW])")
 
 
