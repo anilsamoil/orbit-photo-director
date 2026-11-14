@@ -171,6 +171,26 @@ def test_one_bad_vertex_rejects_the_whole_notice_geometry(old: str, new: str):
     assert notice.problems == ("GEOMETRY_UNPARSED:A", "GEOMETRY_UNPARSED:B")
 
 
+def test_a_bad_vertex_in_one_area_also_withholds_the_readable_area():
+    notice = _reparse("navarea-iv-1080-26.txt", "NAVAREA IV 1080/26", "26-06.00N 097-04.00W", "26-66.00N 097-04.00W")
+    assert notice.problems == ("GEOMETRY_UNPARSED:A",)
+    assert notice.areas == ()
+    assert len(notice.cancels) == 0 and notice.valid_until is not None
+
+
+def test_a_time_group_with_a_digit_too_many_or_no_zone_letter_is_not_read_as_another():
+    name, notice_id = "navarea-iv-1099-26.txt", "NAVAREA IV 1099/26"
+    long_start = _reparse(name, notice_id, "1616550Z TO 161828,", "1616550Z TO 161828Z,")
+    assert long_start.problems == ("WINDOW_UNPARSED:1616550Z TO 161828Z",)
+    assert all(window.start.day != 16 for window in long_start.areas[0].windows)
+    no_zone = _reparse(name, notice_id, "151711Z TO 151850Z,", "151711 TO 151850Z,")
+    assert "WINDOW_UNPARSED:151711 TO 151850Z" in no_zone.problems
+    assert all(window.start.day != 15 for window in no_zone.areas[0].windows)
+    long_end = _reparse(name, notice_id, "171628Z TO 171807Z,", "171628Z TO 1718070Z,")
+    assert "WINDOW_UNPARSED:171628Z TO 1718070Z" in long_end.problems
+    assert all(window.start.day != 17 for window in long_end.areas[0].windows)
+
+
 def test_time_groups_resolve_month_and_year_from_the_notice_itself():
     issued = datetime(2026, 12, 28, 9, 0, tzinfo=UTC)
 

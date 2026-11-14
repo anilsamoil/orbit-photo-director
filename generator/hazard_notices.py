@@ -184,7 +184,7 @@ _TIME_GROUP = re.compile(
     rf" TO (?P<end_day>\d{{2}})?(?P<end_time>\d{{4}})Z(?: (?P<end_month>{_MON}))?"
     rf")(?![\dA-Z])"
 )
-_BETWEEN_GROUPS = re.compile(r"\b(?:AND|ALTERNATE)\b|[\s,.:]")
+_BETWEEN_GROUPS = re.compile(r",|\b(?:AND|ALTERNATE)\b")
 
 
 def _year_for(issued: datetime, month: int, day: int, hhmm: str) -> datetime:
@@ -198,13 +198,14 @@ def _year_for(issued: datetime, month: int, day: int, hhmm: str) -> datetime:
 def _broadcast_windows(text: str, issued: datetime) -> tuple[list[Window], list[str]]:
     """Time groups of one schedule. A month applies to the groups written before it.
 
-    Text between groups that is not a separator is returned as it stands.
+    Text between groups that is not a separator is returned as it stands, piece by piece.
     """
     flat = " ".join(text.upper().split())
     groups = list(_TIME_GROUP.finditer(flat))
     edges = [0, *(edge for group in groups for edge in group.span()), len(flat)]
     gaps = [flat[edges[index] : edges[index + 1]] for index in range(0, len(edges), 2)]
-    unparsed = [gap.strip(" ,.:") for gap in gaps if _BETWEEN_GROUPS.sub("", gap)]
+    pieces = [piece.strip(" .:") for gap in gaps for piece in _BETWEEN_GROUPS.split(gap)]
+    unparsed = [piece for piece in pieces if piece]
     windows: list[Window] = []
     month_after: str | None = None
     for group in reversed(groups):
