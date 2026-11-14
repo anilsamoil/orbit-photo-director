@@ -9,7 +9,6 @@ import { satellites } from './satellites';
 import { terminator } from './terminator';
 import { followIss } from './follow-iss';
 import { issMarker } from './iss-marker';
-import { tracked } from './tracked';
 import { launchCorridor } from './launch-corridor';
 import { targets } from './targets';
 import { timeScrub } from './time-scrub';
@@ -24,7 +23,6 @@ export const FEATURES: readonly MapFeature[] = [
   terminator,
   groundTrack,
   issMarker,
-  tracked,
   targets,
   launchCorridor,
   timeScrub,

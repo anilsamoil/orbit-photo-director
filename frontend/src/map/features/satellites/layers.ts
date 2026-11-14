@@ -1,6 +1,6 @@
-import { ISS_ORBIT_PERIOD_SECONDS } from '../../../iss';
 import { liveIssPositionSGP4 } from '../../../iss-sgp4';
 import type { SatelliteMeta, TLEPair } from '../../../satellites';
+import { orbitPeriodSeconds } from '../../../tracked';
 import type { Track } from '../../../types';
 import { satTrackLayerId, satTrackSourceId } from '../../map-core/catalog';
 import type { LngLat } from '../../map-core/geometry';
@@ -26,35 +26,56 @@ export function subPointAt(tle: TLEPair, atMs: number): LngLat | null {
   return pos ? [pos.lon, pos.lat] : null;
 }
 
-/** One orbit of 30 s samples starting at `fromMs`. */
+/** One orbit of this satellite, by its own period, in 30 s samples from
+ *  `fromMs`. No line when the mean motion does not read. */
 export function orbitTrackFeatures(tle: TLEPair, fromMs: number): GeoJSON.Feature[] {
+  const period = orbitPeriodSeconds(tle.line2);
+  if (period === null) return [];
   const orbit = orbitOf(tle);
   const samples: [number, number][] = [];
-  for (let t = 0; t <= ISS_ORBIT_PERIOD_SECONDS; t += SAMPLE_SECONDS) {
+  for (let t = 0; t <= period; t += SAMPLE_SECONDS) {
     const pos = liveIssPositionSGP4(orbit, fromMs + t * 1000);
     if (pos) samples.push([pos.lat, pos.lon]);
   }
   return buildLineFeatures(samples);
 }
 
-export function trackLayer(key: string, color: string): LineLayer {
+/** A published vehicle keeps the heavier dotted line it has always had. */
+export function trackLayer(meta: SatelliteMeta, key: string): LineLayer {
+  const published = meta.resolution.kind === 'published';
   return {
     id: satTrackLayerId(key),
     type: 'line',
     source: satTrackSourceId(key),
     paint: {
-      'line-color': color,
-      'line-width': 1.6,
-      'line-opacity': 0.7,
-      'line-dasharray': [3, 2],
+      'line-color': meta.track_color,
+      'line-width': published ? 2.2 : 1.6,
+      'line-opacity': published ? 0.9 : 0.7,
+      'line-dasharray': published ? [1, 1.4] : [3, 2],
     },
   };
 }
 
-export function markerElement(meta: SatelliteMeta): HTMLElement {
+export function markerTitle(meta: SatelliteMeta, tle: TLEPair): string {
+  return meta.resolution.kind === 'published' ? `${meta.name}: ${tle.name}` : `${meta.icon} ${meta.name}`;
+}
+
+/** A dot for a satellite. A labelled diamond for a published vehicle. */
+export function markerElement(meta: SatelliteMeta, tle: TLEPair): HTMLElement {
   const el = document.createElement('div');
-  el.className = 'sat-marker';
-  el.style.background = meta.track_color;
-  el.title = `${meta.icon} ${meta.name}`;
+  el.title = markerTitle(meta, tle);
+  if (meta.resolution.kind !== 'published') {
+    el.className = 'sat-marker';
+    el.style.background = meta.track_color;
+    return el;
+  }
+  el.className = 'tracked-marker';
+  el.style.setProperty('--tracked-color', meta.track_color);
+  const dot = document.createElement('span');
+  dot.className = 'tracked-marker-dot';
+  const label = document.createElement('span');
+  label.className = 'tracked-marker-label';
+  label.textContent = meta.name;
+  el.append(dot, label);
   return el;
 }

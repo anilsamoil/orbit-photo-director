@@ -2,19 +2,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createVendorDouble, type VendorDouble } from '../../../../test/vendor-map-double';
 import { liveIssPositionSGP4 } from '../../../iss-sgp4';
-import { fetchSatelliteTLE, type SatelliteMeta } from '../../../satellites';
+import { issSightWindows, sightText } from '../../../orbit-sight';
+import { resolveOrbit, type OrbitLookup, type SatelliteMeta } from '../../../satellites';
+import { UNPUBLISHED_TRACKED, UNREAD_TRACKED, type TrackedElements, type TrackedRecord, type TrackedUnavailable } from '../../../tracked';
 import type { Track } from '../../../types';
 import { createClock } from '../../map-core/clock';
 import { createMapCore, type MapCore } from '../../map-core/core';
 import type { LngLat } from '../../map-core/geometry';
 import { PREF_KEYS } from '../../map-core/prefs';
-import { satellites } from './index';
+import { applyPublishedOrbits, satellites } from './index';
 import { orbitTrackFeatures } from './layers';
 
 vi.mock('../../../satellites', async (importActual) => ({
   ...(await importActual<typeof import('../../../satellites')>()),
-  fetchSatelliteTLE: vi.fn(),
+  resolveOrbit: vi.fn(),
 }));
+
+const real = await vi.importActual<typeof import('../../../satellites')>('../../../satellites');
 
 const NOW = Date.parse('2026-05-04T12:10:00Z');
 
@@ -32,14 +36,43 @@ const NOAA20 = {
 };
 const TLE_BY_CATNR: Record<number, typeof TIANGONG> = { 48274: TIANGONG, 43013: NOAA20 };
 
-function subPointAt(lines: { line1: string; line2: string }, atMs: number): LngLat {
-  const track = {
+/** Epoch 26124.5 like the others. Sixteen revolutions a day is a 5,400 s orbit. */
+const SHIP = {
+  line1: '1 67001U 26210A   26124.50000000  .00000000  00000-0  00000-0 0  9990',
+  line2: '2 67001  26.5000 270.0000 0003000  90.0000 270.0000 16.00000000    10',
+  name: 'STARSHIP S41',
+};
+const STARSHIP_KEY = 'tracked:starship';
+const FAILED_ROW = UNPUBLISHED_TRACKED[0] as TrackedUnavailable;
+const NO_ORBIT_ROW: TrackedUnavailable = { ...FAILED_ROW, reason: 'no_public_orbit' };
+const ELEMENTS_ROW: TrackedElements = {
+  state: 'elements',
+  id: 'starship',
+  label: 'Starship',
+  color: '#ff5c5c',
+  lookup: FAILED_ROW.lookup,
+  source: 'supgp',
+  name: SHIP.name,
+  norad: 67001,
+  intldes: '26210A',
+  line1: SHIP.line1,
+  line2: SHIP.line2,
+  epoch: '2026-05-04T12:00:00Z',
+  age_hours: 0.17,
+};
+
+function orbit(lines: { line1: string; line2: string }): Track {
+  return {
     tle: { line1: lines.line1, line2: lines.line2 },
     tle_epoch: '',
     tle_age_hours: 0,
     tle_freshness_factor: 1,
     iss_polynomial: { start: '', duration_seconds: 0, lat_coeffs: [], lon_coeffs: [], polynomial_order: 0 },
   } as Track;
+}
+
+function subPointAt(lines: { line1: string; line2: string }, atMs: number): LngLat {
+  const track = orbit(lines);
   const pos = liveIssPositionSGP4(track, atMs);
   if (!pos) throw new Error('fixture TLE does not propagate');
   return [pos.lon, pos.lat];
@@ -56,11 +89,60 @@ function pickerDom(): void {
     </div>`;
 }
 
-function checkboxFor(name: string): HTMLInputElement {
-  const row = [...document.querySelectorAll('#satellite-picker-list label')]
+function rowFor(name: string): HTMLLabelElement {
+  const row = [...document.querySelectorAll<HTMLLabelElement>('#satellite-picker-list label')]
     .find((label) => label.textContent?.includes(name));
   if (!row) throw new Error(`no picker row for ${name}`);
-  return row.querySelector('input')!;
+  return row;
+}
+
+function checkboxFor(name: string): HTMLInputElement {
+  return rowFor(name).querySelector('input')!;
+}
+
+function noteFor(name: string): Element | null {
+  return [...document.querySelectorAll('#satellite-picker-notes .sat-row-note')]
+    .find((note) => note.textContent?.startsWith(`${name}:`)) ?? null;
+}
+
+function rowNames(): string[] {
+  return [...document.querySelectorAll('#satellite-picker-list label')].map((label) => label.textContent ?? '');
+}
+
+function openPicker(): void {
+  document.getElementById('toggle-satellite-picker')!.click();
+}
+
+function statusLine(): HTMLElement {
+  return document.getElementById('satellite-picker-status')!;
+}
+
+/** What the test's CelesTrak answers to every request: a body, a refusal,
+ *  or nothing until `release` is called. */
+const feed: { answer: string | 'unreachable' | 'held'; held: (() => void)[] } = { answer: 'unreachable', held: [] };
+
+function release(body: string): void {
+  feed.answer = body;
+  for (const go of feed.held.splice(0)) go();
+}
+
+function askedCelestrak(): string[] {
+  return vi.mocked(fetch).mock.calls.map(([url]) => String(url));
+}
+
+function lookedUp(): string[] {
+  return vi.mocked(resolveOrbit).mock.calls
+    .filter(([meta]) => meta.resolution.kind !== 'published')
+    .map(([meta]) => meta.name);
+}
+
+async function publish(...records: TrackedRecord[]): Promise<void> {
+  applyPublishedOrbits(records);
+  await settle();
+}
+
+function diamond(vendor: VendorDouble) {
+  return vendor.markers.filter((marker) => marker.element.classList.contains('tracked-marker')).at(-1);
 }
 
 async function settle(): Promise<void> {
@@ -106,15 +188,27 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
   pickerDom();
-  vi.mocked(fetchSatelliteTLE).mockImplementation(async (meta: SatelliteMeta) => {
+  feed.answer = 'unreachable';
+  feed.held = [];
+  vi.stubGlobal('fetch', vi.fn(async () => {
+    if (feed.answer === 'held') await new Promise<void>((go) => feed.held.push(go));
+    if (feed.answer === 'unreachable') throw new TypeError('Failed to fetch');
+    return new Response(feed.answer, { status: 200 });
+  }));
+  vi.mocked(resolveOrbit).mockImplementation(async (meta: SatelliteMeta, published, mode, nowMs): Promise<OrbitLookup> => {
+    if (meta.resolution.kind === 'published') return real.resolveOrbit(meta, published, mode, nowMs);
     const tle = meta.resolution.kind === 'catnr' ? TLE_BY_CATNR[meta.resolution.catnr] : undefined;
-    return tle ? { tle, match_count: 1, stale: false } : null;
+    return tle
+      ? { state: 'elements', tle, match_count: 1, origin: 'gp', stale: false }
+      : { state: 'failed', cause: 'network' };
   });
+  applyPublishedOrbits(UNPUBLISHED_TRACKED);
 });
 
 afterEach(() => {
   vi.useRealTimers();
-  vi.mocked(fetchSatelliteTLE).mockReset();
+  vi.unstubAllGlobals();
+  vi.mocked(resolveOrbit).mockReset();
   localStorage.clear();
 });
 
@@ -122,7 +216,7 @@ describe('restoring a selection', () => {
   it('fetches each persisted satellite and paints its track above the labels, in the persisted order', async () => {
     const { vendor } = await mountedWith('48274', '43013');
 
-    expect(vi.mocked(fetchSatelliteTLE).mock.calls.map(([meta]) => meta.name)).toEqual(['Tiangong (CSS)', 'NORAD 43013']);
+    expect(lookedUp()).toEqual(['Tiangong (CSS)', 'NORAD 43013']);
     expect(vendor.paintedLayers()).toEqual(['esri-labels-reference-layer', 'sat-track-layer-48274', 'sat-track-layer-43013']);
     expect(trackStart(vendor, '48274')).toEqual(subPointAt(TIANGONG, NOW));
     expect(markerFor(vendor, '🛰 NORAD 43013')?.at).toEqual(subPointAt(NOAA20, NOW));
@@ -141,13 +235,24 @@ describe('restoring a selection', () => {
     ]);
   });
 
-  it('drops a persisted key it cannot resolve and a satellite whose TLE cannot be fetched', async () => {
+  it('drops a persisted key it cannot resolve, and keeps wanting a satellite whose lookup failed without drawing it', async () => {
     const { vendor, core } = await mountedWith('not-a-key', '99999', '48274');
+    openPicker();
 
-    expect(vi.mocked(fetchSatelliteTLE).mock.calls.map(([meta]) => meta.name)).toEqual(['NORAD 99999', 'Tiangong (CSS)']);
+    expect(lookedUp()).toEqual(['NORAD 99999', 'Tiangong (CSS)']);
     expect(vendor.paintedLayers()).toEqual(['esri-labels-reference-layer', 'sat-track-layer-48274']);
     expect(core.view().satellites.map((sat) => sat.name)).toEqual(['Tiangong (CSS)']);
-    expect(localStorage.getItem(PREF_KEYS.selectedSatellites)).toBe('["48274"]');
+    expect(checkboxFor('NORAD 99999').checked).toBe(true);
+    expect(noteFor('NORAD 99999')?.textContent)
+      .toBe('NORAD 99999: orbit lookup failed, CelesTrak could not be reached from this browser. No orbit is drawn.');
+    expect(localStorage.getItem(PREF_KEYS.selectedSatellites)).toBe('["not-a-key","99999","48274"]');
+  });
+
+  it('forgets the name search Starship used before it was published', async () => {
+    await mountedWith('name:STARSHIP');
+
+    expect(lookedUp()).toEqual([]);
+    expect(askedCelestrak()).toEqual([]);
   });
 });
 
@@ -169,6 +274,18 @@ describe('the picker', () => {
     expect(localStorage.getItem(PREF_KEYS.selectedSatellites)).toBe('[]');
   });
 
+  it('a checked row keeps its place in the list', async () => {
+    mounted();
+    openPicker();
+    const before = rowNames().map((name) => name.replace('no orbit', ''));
+
+    await toggle('Tiangong');
+    await toggle('Hubble');
+
+    expect(rowNames().map((name) => name.replace('no orbit', ''))).toEqual(before);
+    expect(before).toEqual(['🇨🇳Tiangong (CSS)', '🔭Hubble (HST)', '🪐X-37B', '🚀Starship']);
+  });
+
   it('typing the NORAD number of a satellite already tracked says so without fetching again', async () => {
     const { core } = await mountedWith('48274');
     document.getElementById('toggle-satellite-picker')!.click();
@@ -179,8 +296,385 @@ describe('the picker', () => {
     await settle();
 
     expect(document.getElementById('satellite-picker-status')!.textContent).toBe('Already tracking');
-    expect(fetchSatelliteTLE).toHaveBeenCalledTimes(1);
+    expect(lookedUp()).toEqual(['Tiangong (CSS)']);
     expect(core.view().satellites).toHaveLength(1);
+  });
+});
+
+describe('a published vehicle', () => {
+  it('is drawn from the publisher element set without a tap: diamond, dotted one-orbit track, and a place in the shared view', async () => {
+    const { vendor, core } = mounted();
+    await publish(ELEMENTS_ROW);
+
+    expect(vendor.paintedLayers()).toEqual(['esri-labels-reference-layer', `sat-track-layer-${STARSHIP_KEY}`]);
+    expect(vendor.layers.find((layer) => layer.id === `sat-track-layer-${STARSHIP_KEY}`)?.paint).toMatchObject({
+      'line-color': '#ff5c5c',
+      'line-dasharray': [1, 1.4],
+    });
+    expect(diamond(vendor)?.at).toEqual(subPointAt(SHIP, NOW));
+    expect(diamond(vendor)?.element.title).toBe('Starship: STARSHIP S41');
+    expect(diamond(vendor)?.element.querySelector('.tracked-marker-label')?.textContent).toBe('Starship');
+    expect(trackStart(vendor, STARSHIP_KEY)).toEqual(subPointAt(SHIP, NOW));
+    expect(core.view().satellites).toEqual([
+      { name: 'Starship', label: 'SS', color: '#ff5c5c', track: expect.objectContaining({ tle: { line1: SHIP.line1, line2: SHIP.line2 } }) },
+    ]);
+    expect(askedCelestrak()).toEqual([]);
+  });
+
+  it('with no public orbit draws nothing, stays checked, and says so beside the row', async () => {
+    const { vendor, core } = mounted();
+    await publish(NO_ORBIT_ROW);
+    openPicker();
+
+    expect(vendor.markers).toEqual([]);
+    expect(vendor.sources.has(`sat-track-${STARSHIP_KEY}`)).toBe(false);
+    expect(core.view().satellites).toEqual([]);
+    expect(checkboxFor('Starship').checked).toBe(true);
+    expect(rowFor('Starship').querySelector('.sat-stale')?.textContent).toBe('no orbit');
+    expect(noteFor('Starship')?.textContent)
+      .toBe('Starship: no public orbit yet. CelesTrak GP and Supplemental GP list no element set for it.');
+    expect(askedCelestrak()).toEqual([]);
+  });
+
+  it('with a failed publisher lookup says failed, not missing, and still does not ask CelesTrak on its own', async () => {
+    mounted();
+    await publish(FAILED_ROW);
+    openPicker();
+
+    expect(noteFor('Starship')?.textContent)
+      .toBe('Starship: orbit lookup failed, the publisher could not reach CelesTrak. No orbit is drawn.');
+    expect(noteFor('Starship')?.className).toBe('sat-row-note error');
+    expect(askedCelestrak()).toEqual([]);
+  });
+
+  it('a tap asks CelesTrak, and a refused connection leaves the box checked with the cause shown', async () => {
+    const { vendor } = mounted();
+    await publish(FAILED_ROW);
+    openPicker();
+    await toggle('Starship');
+    await toggle('Starship');
+
+    expect(askedCelestrak()).toHaveLength(4);
+    expect(checkboxFor('Starship').checked).toBe(true);
+    const failed = 'Starship: orbit lookup failed, CelesTrak could not be reached from this browser. No orbit is drawn.';
+    expect(statusLine().textContent).toBe(failed);
+    expect(statusLine().className).toBe('satellite-picker-status error');
+    expect(noteFor('Starship')?.textContent).toBe(failed);
+    expect(vendor.markers).toEqual([]);
+  });
+
+  it('a tap that CelesTrak answers with no element set reads as no public orbit, not as a failure', async () => {
+    mounted();
+    await publish(FAILED_ROW);
+    openPicker();
+    await toggle('Starship');
+    feed.answer = 'No GP data found';
+    await toggle('Starship');
+
+    expect(statusLine().textContent)
+      .toBe('Starship: no public orbit yet. CelesTrak GP and Supplemental GP list no element set for it.');
+    expect(checkboxFor('Starship').checked).toBe(true);
+  });
+
+  it('a tap that finds the ship in CelesTrak draws it, and the next failed publisher run keeps it as the last good orbit', async () => {
+    const { vendor } = mounted();
+    await publish(FAILED_ROW);
+    openPicker();
+    await toggle('Starship');
+    feed.answer = `SHIP 41\n${SHIP.line1}\n${SHIP.line2}\n`;
+    await toggle('Starship');
+
+    expect(statusLine().textContent).toBe('Starship: drawing SHIP 41');
+    expect(statusLine().className).toBe('satellite-picker-status success');
+    expect(diamond(vendor)?.element.title).toBe('Starship: SHIP 41');
+
+    await publish(FAILED_ROW);
+    expect(diamond(vendor)?.removed).toBe(false);
+    expect(rowFor('Starship').querySelector('.sat-stale')?.textContent).toBe('last good');
+  });
+
+  it('a publisher run leaves the map alone while the panel is closed', async () => {
+    const { core } = mounted();
+    const resize = vi.spyOn(core, 'resize');
+    await publish(ELEMENTS_ROW);
+    vi.advanceTimersByTime(60_000);
+    await settle();
+    vi.advanceTimersByTime(100);
+
+    expect(resize).not.toHaveBeenCalled();
+    expect(document.querySelectorAll('#satellite-picker-list label')).toHaveLength(0);
+  });
+
+  it('before any artifact is read, blames this browser and not the publisher', async () => {
+    mounted();
+    await publish(...UNREAD_TRACKED);
+    openPicker();
+
+    expect(noteFor('Starship')?.textContent)
+      .toBe('Starship: orbit lookup failed, this browser could not load the published orbit list. No orbit is drawn.');
+  });
+
+  it('in an open map is labelled stale once its element set passes 12 h, and stops being drawn past 72 h, with no new publisher run', async () => {
+    const { vendor, core } = mounted();
+    await publish(ELEMENTS_ROW);
+    openPicker();
+    expect(diamond(vendor)?.removed).toBe(false);
+
+    vi.setSystemTime(NOW + 11 * 3_600_000);
+    vi.advanceTimersByTime(60_000);
+    await settle();
+    expect(diamond(vendor)?.removed).toBe(false);
+    expect(rowFor('Starship').querySelector('.sat-stale')).toBeNull();
+
+    vi.setSystemTime(NOW + 12 * 3_600_000);
+    vi.advanceTimersByTime(60_000);
+    await settle();
+    expect(diamond(vendor)?.removed).toBe(false);
+    expect(rowFor('Starship').querySelector('.sat-stale')?.textContent).toBe('stale orbit');
+    expect(noteFor('Starship')?.textContent).toContain('Starship: stale orbit, epoch 12 h old');
+
+    vi.setSystemTime(NOW + 72 * 3_600_000);
+    vi.advanceTimersByTime(60_000);
+    await settle();
+
+    expect(diamond(vendor)?.removed).toBe(true);
+    expect(vendor.sources.has(`sat-track-${STARSHIP_KEY}`)).toBe(false);
+    expect(core.view().satellites).toEqual([]);
+    expect(noteFor('Starship')?.textContent).toBe('Starship: the last public orbit is too old to draw.');
+    expect(askedCelestrak()).toEqual([]);
+  });
+
+  it('a publisher run that lands while a tap is still asking CelesTrak does not throw the tap away', async () => {
+    const { vendor } = mounted();
+    await publish(FAILED_ROW);
+    openPicker();
+    await toggle('Starship');
+    feed.answer = 'held';
+    await toggle('Starship');
+    expect(feed.held).toHaveLength(4);
+
+    await publish(FAILED_ROW);
+    vi.advanceTimersByTime(60_000);
+    await settle();
+    release(`SHIP 41\n${SHIP.line1}\n${SHIP.line2}\n`);
+    await settle();
+
+    expect(diamond(vendor)?.element.title).toBe('Starship: SHIP 41');
+    expect(statusLine().textContent).toBe('Starship: drawing SHIP 41');
+  });
+
+  it('unchecking says the vehicle is hidden and how to bring it back', async () => {
+    mounted();
+    await publish(FAILED_ROW);
+    openPicker();
+    await toggle('Starship');
+
+    expect(statusLine().textContent).toBe('Starship is hidden. Check it to look for its orbit again.');
+    expect(checkboxFor('Starship').checked).toBe(false);
+    expect(noteFor('Starship')).toBeNull();
+  });
+
+  it('typing its catalog number selects the published vehicle instead of drawing it a second time', async () => {
+    const { vendor, core } = mounted();
+    await publish(ELEMENTS_ROW);
+    openPicker();
+    document.querySelector<HTMLInputElement>('#satellite-picker-input')!.value = '67001';
+    document.getElementById('satellite-picker-add')!.click();
+    await settle();
+
+    expect(statusLine().textContent).toBe('Already tracking');
+    expect(vendor.markers.filter((marker) => !marker.removed)).toHaveLength(1);
+    expect(core.view().satellites.map((sat) => sat.name)).toEqual(['Starship']);
+    expect(rowNames().some((name) => name.includes('67001'))).toBe(false);
+  });
+
+  it('is erased once the publisher says the orbit aged out and the last good set is past its limit', async () => {
+    const { vendor, core } = mounted();
+    await publish(ELEMENTS_ROW);
+    await publish({ ...FAILED_ROW, reason: 'aged_out' });
+    expect(diamond(vendor)?.removed).toBe(false);
+
+    vi.setSystemTime(NOW + 72 * 3_600_000);
+    await publish({ ...FAILED_ROW, reason: 'aged_out' });
+
+    expect(diamond(vendor)?.removed).toBe(true);
+    expect(vendor.sources.has(`sat-track-${STARSHIP_KEY}`)).toBe(false);
+    expect(vendor.paintedLayers()).toEqual(['esri-labels-reference-layer']);
+    expect(core.view().satellites).toEqual([]);
+  });
+
+  it('with several objects in orbit draws one and names the others beside the row', async () => {
+    const { vendor, core } = mounted();
+    const { state: _s, id: _i, label: _l, color: _c, lookup: _k, ...ship } = ELEMENTS_ROW;
+    const body = { ...ship, name: 'STARSHIP S41 R/B', norad: 67002, line1: SHIP.line1.replace('67001U 26210A', '67002U 26210B') };
+    await publish({ ...ELEMENTS_ROW, also: [body] });
+    openPicker();
+
+    expect(noteFor('Starship')?.textContent).toBe('Starship: Also in orbit: STARSHIP S41 R/B (NORAD 67002)');
+    expect(noteFor('Starship')?.className).toBe('sat-row-note');
+    expect(rowFor('Starship').querySelector('.sat-multi-match')?.textContent).toBe('1 of 2');
+    expect(vendor.markers.filter((marker) => !marker.removed)).toHaveLength(1);
+    expect(diamond(vendor)?.element.title).toBe('Starship: STARSHIP S41');
+    expect(vendor.paintedLayers()).toEqual(['esri-labels-reference-layer', `sat-track-layer-${STARSHIP_KEY}`]);
+    expect(core.view().satellites).toHaveLength(1);
+  });
+
+  it('draws another live object of the row once its own passes 72 h in an open map', async () => {
+    const { vendor } = mounted();
+    const { state: _s, id: _i, label: _l, color: _c, lookup: _k, ...older } = ELEMENTS_ROW;
+    await publish({
+      ...ELEMENTS_ROW,
+      name: 'STARSHIP S42',
+      norad: 67003,
+      intldes: '26211A',
+      line1: SHIP.line1.replace('67001U 26210A   26124.50000000', '67003U 26211A   26121.60000000'),
+      also: [older],
+    });
+    openPicker();
+    expect(diamond(vendor)?.element.title).toBe('Starship: STARSHIP S42');
+    expect(noteFor('Starship')?.textContent).toBe('Starship: stale orbit, epoch 69 h old. Also in orbit: STARSHIP S41 (NORAD 67001)');
+
+    vi.setSystemTime(NOW + 3 * 3_600_000);
+    vi.advanceTimersByTime(60_000);
+    await settle();
+
+    expect(diamond(vendor)?.element.title).toBe('Starship: STARSHIP S41');
+    expect(vendor.markers.filter((marker) => !marker.removed)).toHaveLength(1);
+    expect(noteFor('Starship')).toBeNull();
+    expect(askedCelestrak()).toEqual([]);
+  });
+
+  it('a newer published element set replaces the marker title and the track', async () => {
+    const { vendor } = mounted();
+    await publish(ELEMENTS_ROW);
+    await publish({ ...ELEMENTS_ROW, name: 'STARSHIP S41 R2', line2: NOAA20.line2.replace('43013', '67001') });
+
+    expect(diamond(vendor)?.element.title).toBe('Starship: STARSHIP S41 R2');
+    expect(vendor.markers.filter((marker) => !marker.removed)).toHaveLength(1);
+  });
+
+  it('unchecked, it stays off through later publisher runs and the next visit, until checked again', async () => {
+    const { vendor } = mounted();
+    await publish(ELEMENTS_ROW);
+    openPicker();
+    await toggle('Starship');
+
+    expect(diamond(vendor)?.removed).toBe(true);
+    expect(localStorage.getItem(PREF_KEYS.hiddenPublishedSatellites)).toBe(`["${STARSHIP_KEY}"]`);
+    await publish(ELEMENTS_ROW);
+    expect(vendor.markers.filter((marker) => !marker.removed)).toEqual([]);
+
+    const next = mounted();
+    await settle();
+    expect(next.vendor.markers).toEqual([]);
+
+    openPicker();
+    await toggle('Starship');
+    expect(diamond(next.vendor)?.at).toEqual(subPointAt(SHIP, NOW));
+    expect(localStorage.getItem(PREF_KEYS.hiddenPublishedSatellites)).toBe('[]');
+  });
+
+  it('never enters the persisted selection, so the selection list means what it meant', async () => {
+    mounted();
+    await publish(ELEMENTS_ROW);
+    openPicker();
+    await toggle('Tiangong');
+
+    expect(localStorage.getItem(PREF_KEYS.selectedSatellites)).toBe('["48274"]');
+  });
+
+  it('an object the operator added to the publisher gets its own row and orbit, and leaves with its row', async () => {
+    const { vendor, core } = mounted();
+    const added: TrackedElements = { ...ELEMENTS_ROW, id: 'ship-40', label: 'Ship 40', color: '#33ddaa', name: 'OBJECT A' };
+    await publish(NO_ORBIT_ROW, added);
+    openPicker();
+
+    expect(rowNames()).toEqual(['🇨🇳Tiangong (CSS)', '🔭Hubble (HST)', '🪐X-37B', '🚀Starshipno orbit', '🚀Ship 40']);
+    expect(checkboxFor('Ship 40').checked).toBe(true);
+    expect(diamond(vendor)?.element.title).toBe('Ship 40: OBJECT A');
+    expect(vendor.layers.find((layer) => layer.id === 'sat-track-layer-tracked:ship-40')?.paint).toMatchObject({ 'line-color': '#33ddaa' });
+
+    await publish(NO_ORBIT_ROW);
+    expect(diamond(vendor)?.removed).toBe(true);
+    expect(vendor.sources.has('sat-track-tracked:ship-40')).toBe(false);
+    expect(core.view().satellites).toEqual([]);
+    expect(rowNames()).not.toContain('🚀Ship 40');
+  });
+
+  it('a publisher row for a curated satellite feeds that row instead of adding a second one', async () => {
+    mounted();
+    await publish(NO_ORBIT_ROW, { ...ELEMENTS_ROW, id: 'tiangong', label: 'Tiangong', norad: 48274 });
+    openPicker();
+
+    expect(rowNames().filter((name) => name.includes('Tiangong'))).toEqual(['🇨🇳Tiangong (CSS)']);
+  });
+});
+
+describe('the row note', () => {
+  it('says when the ISS has a line of sight to a drawn satellite', async () => {
+    const { core } = mounted();
+    const iss = orbit(TIANGONG);
+    core.setTrack(iss);
+    await publish(ELEMENTS_ROW);
+    openPicker();
+
+    const want = sightText(issSightWindows(iss, orbit(SHIP), NOW), NOW);
+    expect(want).toMatch(/ISS line of sight/);
+    expect(noteFor('Starship')?.textContent).toBe(`Starship: ${want}`);
+    expect(noteFor('Starship')?.className).toBe('sat-row-note');
+  });
+
+  it('is absent for a drawn satellite when the ISS track is not loaded', async () => {
+    mounted();
+    await publish(ELEMENTS_ROW);
+    openPicker();
+
+    expect(noteFor('Starship')).toBeNull();
+  });
+});
+
+describe('a typed satellite', () => {
+  async function typeAndAdd(query: string): Promise<void> {
+    document.querySelector<HTMLInputElement>('#satellite-picker-input')!.value = query;
+    document.getElementById('satellite-picker-add')!.click();
+    await settle();
+  }
+
+  it('that cannot be looked up is reported and not kept', async () => {
+    const { core } = mounted();
+    openPicker();
+    await typeAndAdd('99999');
+
+    expect(statusLine().textContent)
+      .toBe('NORAD 99999: orbit lookup failed, CelesTrak could not be reached from this browser. No orbit is drawn.');
+    expect(statusLine().className).toBe('satellite-picker-status error');
+    expect(rowNames().some((name) => name.includes('99999'))).toBe(false);
+    expect(core.view().satellites).toEqual([]);
+    expect(localStorage.getItem(PREF_KEYS.selectedSatellites)).toBe('[]');
+  });
+
+  it('that fails for a curated row already checked leaves that row checked', async () => {
+    mounted();
+    openPicker();
+    await toggle('Hubble');
+    expect(checkboxFor('Hubble').checked).toBe(true);
+
+    await typeAndAdd('20580');
+
+    expect(checkboxFor('Hubble').checked).toBe(true);
+    expect(localStorage.getItem(PREF_KEYS.selectedSatellites)).toBe('["20580"]');
+  });
+
+  it('that resolves gets a row it can be unchecked from', async () => {
+    const { vendor } = mounted();
+    openPicker();
+    await typeAndAdd('43013');
+    expect(checkboxFor('NORAD 43013').checked).toBe(true);
+
+    await toggle('NORAD 43013');
+
+    expect(vendor.sources.has('sat-track-43013')).toBe(false);
+    expect(rowNames().some((name) => name.includes('43013'))).toBe(false);
   });
 });
 
@@ -236,6 +730,20 @@ describe('orbitTrackFeatures', () => {
   it('is a pure function of the TLE and the window start', () => {
     expect(orbitTrackFeatures(TIANGONG, NOW)).toEqual(orbitTrackFeatures(TIANGONG, NOW));
     expect(first(orbitTrackFeatures(TIANGONG, NOW))).toEqual(subPointAt(TIANGONG, NOW));
+  });
+
+  it('covers one orbit of that satellite, by its own period, in 30 s samples', () => {
+    const points = (tle: typeof SHIP): number =>
+      orbitTrackFeatures(tle, NOW)
+        .filter((_feature, index) => index % 3 === 0)
+        .reduce((sum, feature) => sum + (feature.geometry as GeoJSON.LineString).coordinates.length, 0);
+
+    expect(points(SHIP)).toBe(5_400 / 30 + 1);
+    expect(points(NOAA20)).toBe(Math.floor(86_400 / 14.195 / 30) + 1);
+  });
+
+  it('draws no line when the mean motion does not read', () => {
+    expect(orbitTrackFeatures({ ...SHIP, line2: '2 67001 short' }, NOW)).toEqual([]);
   });
 
   it('starts the window at the instant asked for, not the wall clock', () => {

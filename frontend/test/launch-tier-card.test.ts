@@ -85,7 +85,7 @@ describe('tier schedule lines', () => {
     const card = renderTierCard(pin(shotItem()));
     expect(fact(card, 'NET')).toBe('7 Sep 2026, 12:10:00 UTC · 7 Sep 2026, 07:10:00 CDT');
     expect(fact(card, 'Launch window')).toBe('7 Sep 2026, 12:10:00–12:20:00 UTC · 7 Sep 2026, 07:10:00–07:20:00 CDT');
-    expect(fact(card, 'Best time')).toBe('7 Sep 2026, 12:11:00 UTC · 7 Sep 2026, 07:11:00 CDT');
+    expect(fact(card, 'Best time')).toBe('7 Sep 2026, 12:11:00 UTC · 7 Sep 2026, 07:11:00 CDT · 1 min after liftoff');
     expect(fact(card, 'NET')).not.toContain('12:11:00');
     expect(fact(card, 'NET')).not.toContain('12:20:00');
     expect(fact(card, 'Best time')).not.toContain('12:20:00');
@@ -104,7 +104,7 @@ describe('tier schedule lines', () => {
     }), { geometry_valid_until: iso(24 * 60), schedule_valid_until: iso(24 * 60) }));
     expect(fact(card, 'Launch window')).toBe('7 Sep 2026, 23:30:00 UTC – 8 Sep 2026, 00:30:00 UTC · 7 Sep 2026, 18:30:00–19:30:00 CDT');
     expect(fact(card, 'NET')).toBe('7 Sep 2026, 23:30:00 UTC · 7 Sep 2026, 18:30:00 CDT');
-    expect(fact(card, 'Best time')).toBe('7 Sep 2026, 12:11:00 UTC · 7 Sep 2026, 07:11:00 CDT');
+    expect(fact(card, 'Best time')).toBe('7 Sep 2026, 12:11:00 UTC · 7 Sep 2026, 07:11:00 CDT · 1 min after liftoff');
   });
 
   it.each([

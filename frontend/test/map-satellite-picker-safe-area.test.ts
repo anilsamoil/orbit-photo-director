@@ -43,10 +43,12 @@ async function emulateInsets(page: Page, insets: Insets): Promise<void> {
 const expanded = process.env.OPD_PICKER_MATRIX === '1';
 const sizes = expanded ? [[402, 874], [874, 402], [834, 1210], [1210, 834], [768, 1024], [1024, 768], [719, 521], [720, 500], [800, 600], [1440, 900]] : [[800, 600]];
 const insetSets: Insets[] = expanded ? [{ top: 0, right: 0, bottom: 0, left: 0 }, { top: 24, right: 0, bottom: 34, left: 47 }, { top: 24, right: 0, bottom: 20, left: 47 }] : [{ top: 24, right: 0, bottom: 20, left: 47 }];
+/** The fixture feed names its one element set LOCAL FIXTURE, so Starship,
+ *  which is matched by name, is wanted and checked but has no orbit. */
 const actions = [
-  { name: 'typed NORAD Add', key: '48274', selector: '#satellite-picker-add', query: 'CATNR=48274' },
-  { name: 'X-37B label', key: 'name:USA', selector: '#satellite-picker-list label:nth-child(3)', query: 'NAME=USA' },
-  { name: 'Starship label', key: 'name:STARSHIP', selector: '#satellite-picker-list label:nth-child(4)', query: 'NAME=STARSHIP' },
+  { name: 'typed NORAD Add', key: '48274', selector: '#satellite-picker-add', query: 'CATNR=48274', requests: 1, selected: '["48274"]', status: 'Tracking added' },
+  { name: 'X-37B label', key: 'name:USA', selector: '#satellite-picker-list label:nth-child(3)', query: 'NAME=USA', requests: 1, selected: '["name:USA"]', status: 'Tracking added' },
+  { name: 'Starship label', key: 'tracked:starship', selector: '#satellite-picker-list label:nth-child(4)', query: 'NAME=STARSHIP', requests: 4, selected: '[]', status: 'Starship: no public orbit yet. CelesTrak GP and Supplemental GP list no element set for it.' },
 ];
 
 const cases = sizes.flatMap(([width, height]) => insetSets.flatMap((insets) => actions.map((action) => {
@@ -93,7 +95,7 @@ for (const engine of [
   }, 60_000);
   afterAll(async () => { await closeBrowser(session, `satellite picker ${engine.name}`); }, 30_000);
 
-  it.each(cases)('keeps $name reachable by native input', async ({ name, key, selector, query, width, height, insets }) => {
+  it.each(cases)('keeps $name reachable by native input', async ({ name, key, selector, query, requests: wantRequests, selected, status, width, height, insets }) => {
     const context = await session.browser.newContext({ viewport: { width, height }, serviceWorkers: 'block' });
     try {
       const page = await context.newPage();
@@ -124,6 +126,7 @@ for (const engine of [
       });
       await page.addInitScript((start) => {
         localStorage.setItem('opd-map-chrome', 'shown');
+        localStorage.setItem('opd-hidden-published-satellites', '["tracked:starship"]');
         const at = new Date(Date.parse(start) + 60 * 60 * 1000).toISOString();
         const shot = JSON.stringify([{ key: `picker|${at}`, target_id: 'picker', target_name: 'Picker fixture', closest_approach: at }]);
         localStorage.setItem('opd_shotlist_v1:repin', shot);
@@ -237,11 +240,11 @@ for (const engine of [
       expect.soft(before.selected).toBeNull();
       expect.soft(target.fullyVisible, JSON.stringify(target)).toBe(true);
       expect.soft(target.points.map((point) => point.owns), JSON.stringify(evidence)).toEqual([true, true, true, true, true]);
-      expect.soft(requests).toHaveLength(1);
+      expect.soft(requests).toHaveLength(wantRequests);
       expect.soft(requests[0]).toContain(query);
-      expect.soft(after.selected).toBe(JSON.stringify([key]));
+      expect.soft(after.selected).toBe(selected);
       expect.soft(after.hidden).toBe(false);
-      expect.soft(after.status).toBe('Tracking added');
+      expect.soft(after.status).toBe(status);
       expect.soft(after.time).toBe(before.time);
       expect.soft(after.events.every((event) => event.trusted)).toBe(true);
       expect.soft(after.events.filter((event) => event.type === 'click').length).toBeGreaterThanOrEqual(key === '48274' ? 3 : 2);
