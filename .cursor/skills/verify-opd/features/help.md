@@ -27,6 +27,7 @@ Desktop Chrome runs first. WebKit iPhone 13, iPhone 17 Pro, and iPad Pro 11 run 
 
 ## Gotchas
 
+- The Map legend section still says Starship is not a legend row. It also says the Starship checkbox under the satellite button starts checked, that an orbit older than 12 h is drawn for up to 72 h and marked stale with its age, and that checking the box again asks CelesTrak. iPhone and iPad use the same dialog.
 - Escape also closes the dialog. The script uses the close button so the proof names a control.
 - A non-empty shot list hides the ? button. `drive all` presses Remind on Queue first, so the script clears that list before it checks the button.
 - The signed-in drive has no Sign in or Reload in the footer, so the Queue check stays within 24px of the corner. The denied WebKit pass does not measure the ? button.
