@@ -86,6 +86,7 @@
   "test/launch-map-schedule.test.ts": 0.035,
   "test/launch-review-regressions.test.ts": 0.444,
   "test/launch-selectors.test.ts": 0.468,
+  "test/launch-shot-plan.test.ts": 0.4,
   "test/launch-store.test.ts": 0.53,
   "test/launch-tier-card.test.ts": 0.659,
   "test/launch-tiers.test.ts": 0.5,
