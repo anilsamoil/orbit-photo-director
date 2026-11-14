@@ -1,0 +1,540 @@
+{
+  "schema_version": 3,
+  "generated_at": "2026-11-13T23:10:00Z",
+  "schedule_valid_until": "2026-11-14T00:25:00Z",
+  "geometry_valid_until": "2026-11-13T23:25:00Z",
+  "tle": {
+    "epoch": "2026-11-13T12:00:00Z",
+    "sha256": "6b759457ec9e42920650c6ed28cc34428b6c83e061f5c4ae049f2e3767e8240b",
+    "source": "iss.tle"
+  },
+  "coverage": {
+    "from": "2026-11-13T23:10:00Z",
+    "until": "2026-11-27T23:10:00Z",
+    "schedule_fetched_at": "2026-11-13T23:06:24Z",
+    "pages": 1,
+    "received": 13,
+    "listed": 13,
+    "evaluated": 13,
+    "tier_counts": {
+      "shot": 0,
+      "likely": 0,
+      "watch": 11,
+      "unassessed": 2,
+      "none": 0
+    },
+    "complete": true,
+    "reasons": []
+  },
+  "items": [
+    {
+      "event_id": "bff2fc91-eddd-4dfc-af26-ac0674cfab4d",
+      "name": "Soyuz 2.1b/Fregat-M | MKA Kinosputnik, KOEN and others",
+      "rocket": "Soyuz 2.1b Fregat-M",
+      "site": {
+        "name": "Vostochny Cosmodrome, Siberia, Russian Federation",
+        "lat": 51.884395,
+        "lon": 128.333932,
+        "pad": "Cosmodrome Site 1S"
+      },
+      "schedule": {
+        "net": "2026-11-14T01:16:00Z",
+        "window_start": "2026-11-14T00:50:00Z",
+        "window_end": "2026-11-14T01:50:00Z",
+        "precision": "Minute",
+        "status": "Go",
+        "destination": null
+      },
+      "direction": {
+        "kind": "none",
+        "azimuth_deg": null,
+        "source": null,
+        "off_plane_deg": null
+      },
+      "tier": "watch",
+      "why": "The view is not confirmed.",
+      "reasons": [
+        "TIMING_UNCONFIRMED",
+        "TRAJECTORY_UNVERIFIED"
+      ],
+      "shots": [],
+      "revision": "45789cdc8db6e1298004ca23"
+    },
+    {
+      "event_id": "db3500ac-965b-4ad8-b417-cb8d8d005586",
+      "name": "Electron | The Mountain God Rises (iQPS Launch 10)",
+      "rocket": "Electron",
+      "site": {
+        "name": "Rocket Lab Launch Complex 1, Mahia Peninsula, New Zealand",
+        "lat": -39.262833,
+        "lon": 177.864469,
+        "pad": "Rocket Lab Launch Complex 1A"
+      },
+      "schedule": {
+        "net": "2026-11-14T05:30:00Z",
+        "window_start": "2026-11-14T05:30:00Z",
+        "window_end": "2026-11-14T05:30:00Z",
+        "precision": "Minute",
+        "status": "Go",
+        "destination": null
+      },
+      "direction": {
+        "kind": "none",
+        "azimuth_deg": null,
+        "source": null,
+        "off_plane_deg": null
+      },
+      "tier": "watch",
+      "why": "The view is not confirmed.",
+      "reasons": [
+        "TRAJECTORY_UNVERIFIED",
+        "VIEW_UNCONFIRMED"
+      ],
+      "shots": [],
+      "revision": "46c0c7ba3514b90e17c06918"
+    },
+    {
+      "event_id": "ef9850ad-1096-425b-9d27-f7bbd186e61a",
+      "name": "Vulcan VC6L | Amazon Leo (LV-01)",
+      "rocket": "Vulcan VC6L",
+      "site": {
+        "name": "Cape Canaveral SFS, FL, USA",
+        "lat": 28.58341025,
+        "lon": -80.58303644,
+        "pad": "Space Launch Complex 41"
+      },
+      "schedule": {
+        "net": "2026-11-14T17:32:30Z",
+        "window_start": "2026-11-14T17:32:00Z",
+        "window_end": "2026-11-14T18:01:00Z",
+        "precision": "Second",
+        "status": "Go",
+        "destination": null
+      },
+      "direction": {
+        "kind": "none",
+        "azimuth_deg": null,
+        "source": null,
+        "off_plane_deg": null
+      },
+      "tier": "watch",
+      "why": "The ISS orbit is too old to confirm or rule out a view.",
+      "reasons": [
+        "TLE_AGE_OVER_24H",
+        "TRAJECTORY_UNVERIFIED"
+      ],
+      "shots": [],
+      "revision": "77b6c80be8a6f078d4455e77"
+    },
+    {
+      "event_id": "76617033-4dc0-4448-b50c-e5b0d5a18539",
+      "name": "Falcon 9 Block 5 | USSF-317",
+      "rocket": "Falcon 9 Block 5",
+      "site": {
+        "name": "Vandenberg SFB, CA, USA",
+        "lat": 34.632,
+        "lon": -120.611,
+        "pad": "Space Launch Complex 4E"
+      },
+      "schedule": {
+        "net": "2026-11-18T03:14:00Z",
+        "window_start": "2026-11-18T03:14:00Z",
+        "window_end": "2026-11-18T07:14:00Z",
+        "precision": "Minute",
+        "status": "Go",
+        "destination": null
+      },
+      "direction": {
+        "kind": "none",
+        "azimuth_deg": null,
+        "source": null,
+        "off_plane_deg": null
+      },
+      "tier": "watch",
+      "why": "The ISS orbit is too old to confirm or rule out a view.",
+      "reasons": [
+        "TLE_AGE_OVER_24H",
+        "TLE_AGE_OVER_48H",
+        "TRAJECTORY_UNVERIFIED"
+      ],
+      "shots": [],
+      "revision": "6ffffdad966f37b4482207b4"
+    },
+    {
+      "event_id": "e0a11eb1-0bda-4872-b36b-140247fd5c60",
+      "name": "Long March 2D | Unknown Payload",
+      "rocket": "Long March 2D",
+      "site": {
+        "name": "Taiyuan Satellite Launch Center, People's Republic of China",
+        "lat": 38.863128,
+        "lon": 111.589567,
+        "pad": "Launch Complex 9"
+      },
+      "schedule": {
+        "net": "2026-11-18T22:50:00Z",
+        "window_start": "2026-11-18T22:43:00Z",
+        "window_end": "2026-11-18T23:05:00Z",
+        "precision": "Hour",
+        "status": "Go",
+        "destination": null
+      },
+      "direction": {
+        "kind": "none",
+        "azimuth_deg": null,
+        "source": null,
+        "off_plane_deg": null
+      },
+      "tier": "watch",
+      "why": "The ISS orbit is too old to confirm or rule out a view.",
+      "reasons": [
+        "TIME_PRECISION_COARSE",
+        "TLE_AGE_OVER_24H",
+        "TLE_AGE_OVER_48H",
+        "TRAJECTORY_UNVERIFIED"
+      ],
+      "shots": [],
+      "revision": "1fbcd625176bdba24bf5c372"
+    },
+    {
+      "event_id": "a2975167-7c6f-4403-99e1-b40df17c8140",
+      "name": "Long March 8A | SatNet LEO Group TBD?",
+      "rocket": "Long March 8A",
+      "site": {
+        "name": "Wenchang Space Launch Site, People's Republic of China",
+        "lat": 19.597275,
+        "lon": 110.930753,
+        "pad": "Commercial LC-1"
+      },
+      "schedule": {
+        "net": "2026-11-20T11:00:00Z",
+        "window_start": "2026-11-20T11:00:00Z",
+        "window_end": "2026-11-20T14:00:00Z",
+        "precision": "Hour",
+        "status": "TBC",
+        "destination": null
+      },
+      "direction": {
+        "kind": "none",
+        "azimuth_deg": null,
+        "source": null,
+        "off_plane_deg": null
+      },
+      "tier": "watch",
+      "why": "Night pad 2228 km left, W1, 4 min before liftoff.",
+      "reasons": [
+        "TIME_PRECISION_COARSE",
+        "TLE_AGE_OVER_24H",
+        "TLE_AGE_OVER_48H",
+        "TRAJECTORY_UNVERIFIED"
+      ],
+      "shots": [
+        {
+          "subject": "pad",
+          "liftoff": "2026-11-20T14:00:00Z",
+          "evaluated_at": "2026-11-20T14:00:00Z",
+          "direction": {
+            "kind": "none",
+            "azimuth_deg": null,
+            "source": null,
+            "off_plane_deg": null
+          },
+          "start": "2026-11-20T13:55:00Z",
+          "best": "2026-11-20T13:56:05Z",
+          "end": "2026-11-20T13:57:40Z",
+          "best_offset_s": -235,
+          "look": {
+            "frame": "orbital-lvlh",
+            "azimuth_deg": 267.545,
+            "off_nadir_deg": 69.966
+          },
+          "window": "W1",
+          "slant_km": 2228.1,
+          "limb_margin_deg": -0.018,
+          "plume_mrad": null,
+          "light": "pad_night",
+          "lens": "telephoto",
+          "lens_reason": "Pad is a small target.",
+          "track": [],
+          "score": {
+            "low": 32.6,
+            "high": 45.1,
+            "terms": {
+              "A": [
+                0.0428,
+                0.0428
+              ],
+              "C": [
+                0.3,
+                0.8
+              ],
+              "D": [
+                1.0,
+                1.0
+              ],
+              "M": [
+                0.0,
+                0.0
+              ],
+              "R": [
+                0.386,
+                0.386
+              ]
+            }
+          },
+          "confidence": {
+            "tle_age_h": 170.0,
+            "along_track_sigma_km": 38.704,
+            "timing_sigma_s": 5.053,
+            "robust": true
+          }
+        }
+      ],
+      "revision": "c7d59f5ae790ef33a5ac5b95"
+    },
+    {
+      "event_id": "951a341f-236b-42fe-a667-4ab2fcf36eac",
+      "name": "Falcon 9 Block 5 | NROL-136",
+      "rocket": "Falcon 9 Block 5",
+      "site": {
+        "name": "Vandenberg SFB, CA, USA",
+        "lat": 34.632,
+        "lon": -120.611,
+        "pad": "Space Launch Complex 4E"
+      },
+      "schedule": {
+        "net": "2026-11-21T12:30:00Z",
+        "window_start": "2026-11-21T12:30:00Z",
+        "window_end": "2026-11-21T13:00:00Z",
+        "precision": "Minute",
+        "status": "Go",
+        "destination": null
+      },
+      "direction": {
+        "kind": "none",
+        "azimuth_deg": null,
+        "source": null,
+        "off_plane_deg": null
+      },
+      "tier": "watch",
+      "why": "The ISS orbit is too old to confirm or rule out a view.",
+      "reasons": [
+        "TLE_AGE_OVER_24H",
+        "TLE_AGE_OVER_48H",
+        "TRAJECTORY_UNVERIFIED"
+      ],
+      "shots": [],
+      "revision": "3d140b91b972f6dfe6ab7136"
+    },
+    {
+      "event_id": "7bdc412b-c965-4517-a131-f57a01189803",
+      "name": "Ariane 64 Block 2 | Amazon Leo (LE-04)",
+      "rocket": "Ariane 64 Block 2",
+      "site": {
+        "name": "Guiana Space Centre, French Guiana",
+        "lat": 5.256319,
+        "lon": -52.786838,
+        "pad": "Ariane Launch Area 4"
+      },
+      "schedule": {
+        "net": "2026-11-23T00:00:00Z",
+        "window_start": "2026-11-23T00:00:00Z",
+        "window_end": "2026-11-23T00:00:00Z",
+        "precision": "Day",
+        "status": "TBD",
+        "destination": null
+      },
+      "direction": {
+        "kind": "none",
+        "azimuth_deg": null,
+        "source": null,
+        "off_plane_deg": null
+      },
+      "tier": "unassessed",
+      "why": "Schedule is too loose to plan a window.",
+      "reasons": [
+        "LAUNCH_UNCONFIRMED",
+        "TIME_PRECISION_COARSE",
+        "TLE_AGE_OVER_24H",
+        "TLE_AGE_OVER_48H",
+        "TRAJECTORY_UNVERIFIED"
+      ],
+      "shots": [],
+      "revision": "35b0d6961aa66dbafe4e7c41"
+    },
+    {
+      "event_id": "460d9db7-eaf6-4cd9-b095-cff433534c09",
+      "name": "Falcon 9 Block 5 | USSF-266",
+      "rocket": "Falcon 9 Block 5",
+      "site": {
+        "name": "Vandenberg SFB, CA, USA",
+        "lat": 34.632,
+        "lon": -120.611,
+        "pad": "Space Launch Complex 4E"
+      },
+      "schedule": {
+        "net": "2026-11-23T16:04:00Z",
+        "window_start": "2026-11-23T16:04:00Z",
+        "window_end": "2026-11-23T20:04:00Z",
+        "precision": "Minute",
+        "status": "Go",
+        "destination": null
+      },
+      "direction": {
+        "kind": "none",
+        "azimuth_deg": null,
+        "source": null,
+        "off_plane_deg": null
+      },
+      "tier": "watch",
+      "why": "The ISS orbit is too old to confirm or rule out a view.",
+      "reasons": [
+        "TLE_AGE_OVER_24H",
+        "TLE_AGE_OVER_48H",
+        "TRAJECTORY_UNVERIFIED"
+      ],
+      "shots": [],
+      "revision": "872a3c797996910f95542055"
+    },
+    {
+      "event_id": "8dd5de11-831b-445f-86f0-bffefe0550d9",
+      "name": "Soyuz 2.1b | Progress MS-36 (97P)",
+      "rocket": "Soyuz 2.1b",
+      "site": {
+        "name": "Baikonur Cosmodrome, Republic of Kazakhstan",
+        "lat": 45.996034,
+        "lon": 63.564003,
+        "pad": "31/6"
+      },
+      "schedule": {
+        "net": "2026-11-24T05:03:00Z",
+        "window_start": "2026-11-24T05:03:00Z",
+        "window_end": "2026-11-24T05:03:00Z",
+        "precision": "Minute",
+        "status": "TBC",
+        "destination": null
+      },
+      "direction": {
+        "kind": "none",
+        "azimuth_deg": null,
+        "source": null,
+        "off_plane_deg": null
+      },
+      "tier": "watch",
+      "why": "The ISS orbit is too old to confirm or rule out a view.",
+      "reasons": [
+        "TLE_AGE_OVER_24H",
+        "TLE_AGE_OVER_48H",
+        "TRAJECTORY_UNVERIFIED"
+      ],
+      "shots": [],
+      "revision": "87280639ddc9c6edefcaa736"
+    },
+    {
+      "event_id": "5ce59e3a-c343-430f-ae4e-e608ba536754",
+      "name": "Long March 12 | SatNet LEO Group TBD?",
+      "rocket": "Long March 12",
+      "site": {
+        "name": "Wenchang Space Launch Site, People's Republic of China",
+        "lat": 19.59755,
+        "lon": 110.936481,
+        "pad": "Commercial LC-2"
+      },
+      "schedule": {
+        "net": "2026-11-24T07:00:00Z",
+        "window_start": "2026-11-24T07:00:00Z",
+        "window_end": "2026-11-24T10:00:00Z",
+        "precision": "Hour",
+        "status": "TBC",
+        "destination": null
+      },
+      "direction": {
+        "kind": "none",
+        "azimuth_deg": null,
+        "source": null,
+        "off_plane_deg": null
+      },
+      "tier": "watch",
+      "why": "The ISS orbit is too old to confirm or rule out a view.",
+      "reasons": [
+        "TIME_PRECISION_COARSE",
+        "TLE_AGE_OVER_24H",
+        "TLE_AGE_OVER_48H",
+        "TRAJECTORY_UNVERIFIED"
+      ],
+      "shots": [],
+      "revision": "57251d3023571386b04191e1"
+    },
+    {
+      "event_id": "c9605b67-8a53-4239-a8ae-577fe3b79799",
+      "name": "Long March 2F/G | Shenzhou 24",
+      "rocket": "Long March 2F/G",
+      "site": {
+        "name": "Jiuquan Satellite Launch Center, People's Republic of China",
+        "lat": 40.957893,
+        "lon": 100.290944,
+        "pad": "Launch Area 91 (SLS-1 / 921)"
+      },
+      "schedule": {
+        "net": "2026-11-25T00:00:00Z",
+        "window_start": "2026-11-25T00:00:00Z",
+        "window_end": "2026-11-25T00:00:00Z",
+        "precision": "Day",
+        "status": "TBD",
+        "destination": null
+      },
+      "direction": {
+        "kind": "none",
+        "azimuth_deg": null,
+        "source": null,
+        "off_plane_deg": null
+      },
+      "tier": "unassessed",
+      "why": "Schedule is too loose to plan a window.",
+      "reasons": [
+        "LAUNCH_UNCONFIRMED",
+        "TIME_PRECISION_COARSE",
+        "TLE_AGE_OVER_24H",
+        "TLE_AGE_OVER_48H",
+        "TRAJECTORY_UNVERIFIED"
+      ],
+      "shots": [],
+      "revision": "18f87a8293ab1c83bb0b43a9"
+    },
+    {
+      "event_id": "dff42a2e-f047-48d7-b260-3888d3a4fe33",
+      "name": "Spectrum | AT-Astra and Others (Spectrum Flight 3)",
+      "rocket": "Spectrum",
+      "site": {
+        "name": "Andøya Spaceport",
+        "lat": 69.1084,
+        "lon": 15.5895,
+        "pad": "Orbital Launch Pad"
+      },
+      "schedule": {
+        "net": "2026-11-26T20:00:00Z",
+        "window_start": "2026-11-26T20:00:00Z",
+        "window_end": "2026-11-26T21:30:00Z",
+        "precision": "Hour",
+        "status": "TBC",
+        "destination": null
+      },
+      "direction": {
+        "kind": "none",
+        "azimuth_deg": null,
+        "source": null,
+        "off_plane_deg": null
+      },
+      "tier": "watch",
+      "why": "The ISS orbit is too old to confirm or rule out a view.",
+      "reasons": [
+        "TIME_PRECISION_COARSE",
+        "TLE_AGE_OVER_24H",
+        "TLE_AGE_OVER_48H",
+        "TRAJECTORY_UNVERIFIED"
+      ],
+      "shots": [],
+      "revision": "46b492ec7155049717c4dd97"
+    }
+  ],
+  "revision": "9762bf4f3a9ac288a94797ff"
+}

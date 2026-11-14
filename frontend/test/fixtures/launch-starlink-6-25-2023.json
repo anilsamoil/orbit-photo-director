@@ -1,0 +1,26 @@
+{
+  "provenance": {
+    "source_url": "https://ll.thespacedevs.com/2.3.0/launches/previous/?search=Starlink%20Group%206-25&limit=5&mode=detailed",
+    "retrieved_at": "2026-11-13T23:38:19Z",
+    "response_sha256": "10898a02d1a7ecab2baf67c6ac238d941e5468f20702e7acce326c48d437c358",
+    "note": "Seven fields copied from the one result row. Status was Success when read; the test sets its own clock before liftoff."
+  },
+  "item": {
+    "event_id": "ec6b5681-566f-465e-a164-97cfe48b6172",
+    "name": "Falcon 9 Block 5 | Starlink Group 6-25",
+    "rocket": "Falcon 9 Block 5",
+    "site": {
+      "name": "Cape Canaveral SFS, FL, USA",
+      "lat": 28.56194122,
+      "lon": -80.57735736,
+      "pad": "Space Launch Complex 40"
+    },
+    "schedule": {
+      "net": "2023-10-30T23:20:30Z",
+      "window_start": "2023-10-30T23:20:30Z",
+      "window_end": "2023-10-31T02:22:00Z",
+      "precision": "Second",
+      "status": "Go"
+    }
+  }
+}
