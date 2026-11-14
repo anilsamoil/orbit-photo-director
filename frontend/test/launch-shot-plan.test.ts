@@ -177,7 +177,7 @@ async function issCard(entry: LaunchCatalogItem, group: 'tier' | 'all' = 'tier')
     card,
     lines: [
       card.querySelector('[data-iss-launch-verdict]')?.textContent ?? '',
-      ...[...card.querySelectorAll('[data-iss-launch-plan] p')].map((line) => line.textContent ?? ''),
+      ...[...card.querySelectorAll('[data-iss-launch-plan] p, [data-iss-launch-note]')].map((line) => line.textContent ?? ''),
     ],
   };
 }
@@ -218,9 +218,12 @@ describe('a Shot with an ascent envelope and an ISS-plane direction', () => {
     ]);
   });
 
-  it('opens the full plan from the ISS view card', async () => {
+  it.each([
+    ['Shot plan button', '[data-iss-launch-plan-open]'],
+    ['launch name, which is all a narrow pane has room for', '[data-iss-launch-name]'],
+  ])('opens the full plan from the ISS view card by its %s', async (_what, opener) => {
     const { card } = await issCard(SHOT);
-    card.querySelector<HTMLButtonElement>('[data-iss-launch-plan-open]')!.click();
+    card.querySelector<HTMLElement>(opener)!.click();
     const dialog = document.querySelector('.launch-dialog')!;
     expect(dialog.querySelector('h2')?.textContent).toBe('Dragon CRS-35');
     expect(planLines(dialog)).toEqual([...ASCENT_LINES, PLANE_DIRECTION, HONESTY]);
@@ -265,8 +268,8 @@ describe('an unassessed launch with no envelope', () => {
   it('says the same on the ISS view card and shows no window or honesty line', async () => {
     expect((await issCard(UNASSESSED, 'all')).lines).toEqual([
       'Unassessed. Schedule is too loose to plan a window.',
-      empty,
       NO_DIRECTION.replace('Launch direction: ', ''),
+      empty,
     ]);
   });
 
@@ -328,8 +331,8 @@ describe('no ascent plan without a direction source', () => {
   it('prints none on the ISS view card', async () => {
     expect((await issCard(unsourced)).lines).toEqual([
       'Watch. The view is not confirmed.',
-      empty,
       NO_DIRECTION.replace('Launch direction: ', ''),
+      empty,
     ]);
   });
 

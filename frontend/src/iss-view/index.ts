@@ -321,17 +321,22 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   factVerdict.dataset.issLaunchVerdict = '';
   const factPlan = document.createElement('div');
   factPlan.dataset.issLaunchPlan = '';
+  const factNote = document.createElement('p');
+  factNote.dataset.issLaunchNote = '';
   let shownPlan = '';
   const factPlanOpen = document.createElement('button');
   factPlanOpen.type = 'button';
   factPlanOpen.className = 'btn';
   factPlanOpen.dataset.issLaunchPlanOpen = '';
   factPlanOpen.textContent = 'Shot plan';
-  factPlanOpen.addEventListener('click', () => {
-    if (tierPick.kind !== 'held') return;
+  const openShotPlan = (): void => {
+    if (frameKind !== 'tiers' || tierPick.kind !== 'held') return;
     const launch = readTiers()?.find(tierPick.eventId);
     if (launch) openTierDetails(launch);
-  });
+  };
+  factPlanOpen.addEventListener('click', openShotPlan);
+  // A narrow pane has no room for the plan lines or the button, so the name opens the plan.
+  factName.addEventListener('click', openShotPlan);
   const factMissing = document.createElement('p');
   factMissing.dataset.issLaunchMissing = '';
   factMissing.textContent = 'Selected launch is no longer available';
@@ -971,6 +976,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
       launchCard.dataset.issLaunchState = 'selected';
       launchCard.replaceChildren(factName, factSite, factTime, factVisibility);
     }
+    delete factName.dataset.issLaunchPlanLink;
     const fact = launchTimeFact(choice, state, now);
     factName.textContent = choice.item.name;
     factSite.textContent = choice.item.site.name;
@@ -1000,8 +1006,9 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     else delete launchCard.dataset.issLaunchGroup;
     if (launchCard.dataset.issLaunchState !== 'selected' || !launchCard.contains(factVerdict)) {
       launchCard.dataset.issLaunchState = 'selected';
-      launchCard.replaceChildren(factName, factSite, factTime, factVisibility, factVerdict, factPlan, factPlanOpen);
+      launchCard.replaceChildren(factName, factSite, factTime, factVisibility, factVerdict, factPlan, factNote, factPlanOpen);
     }
+    factName.dataset.issLaunchPlanLink = '';
     paintShotPlan(launch);
     const fact = tierTimeFact(launch);
     factName.textContent = launch.name;
@@ -1013,16 +1020,13 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
 
   function paintShotPlan(launch: TierLaunch): void {
     const plan = shotPlan(launch);
-    const lines = [
-      ...plan.brief.map((fact) => `${fact.label}: ${fact.text}`),
-      ...(plan.empty ? [plan.empty] : []),
-      plan.direction.text,
-      ...(plan.honesty ? [plan.honesty] : []),
-    ];
-    const key = [plan.verdict, ...lines].join('\n');
+    const lines = [...plan.brief.map((fact) => `${fact.label}: ${fact.text}`), plan.direction.text];
+    const note = plan.empty ?? plan.honesty ?? '';
+    const key = [plan.verdict, note, ...lines].join('\n');
     if (shownPlan === key) return;
     shownPlan = key;
     factVerdict.textContent = plan.verdict;
+    factNote.textContent = note;
     factPlan.replaceChildren(...lines.map((text) => {
       const line = document.createElement('p');
       line.textContent = text;

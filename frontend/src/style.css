@@ -3950,7 +3950,8 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
 }
 
 [data-iss-launch-verdict],
-[data-iss-launch-plan] {
+[data-iss-launch-plan],
+[data-iss-launch-note] {
   margin-top: 0.3rem;
 }
 
@@ -3959,7 +3960,8 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   gap: 0.15rem;
 }
 
-[data-iss-launch-card] [data-iss-launch-plan] p {
+[data-iss-launch-card] [data-iss-launch-plan] p,
+[data-iss-launch-card] [data-iss-launch-note] {
   font-size: 0.76rem;
   font-weight: 400;
 }
@@ -3969,8 +3971,23 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   margin-top: 0.35rem;
 }
 
+[data-iss-launch-plan-link] {
+  cursor: pointer;
+}
+
+[data-iss-launch-plan-link]::after {
+  content: ' \203A';
+  color: #ffd45c;
+}
+
+[data-iss-scene][data-iss-short] [data-iss-launch-plan],
+[data-iss-scene][data-iss-launch-place='below'] [data-iss-launch-verdict],
+[data-iss-scene][data-iss-launch-place='below'] [data-iss-launch-plan],
+[data-iss-scene][data-iss-launch-place='below'] [data-iss-launch-note],
+[data-iss-scene][data-iss-launch-place='below'] [data-iss-launch-plan-open],
 [data-iss-scene][data-iss-launch-place='over'] [data-iss-launch-verdict],
 [data-iss-scene][data-iss-launch-place='over'] [data-iss-launch-plan],
+[data-iss-scene][data-iss-launch-place='over'] [data-iss-launch-note],
 [data-iss-scene][data-iss-launch-place='over'] [data-iss-launch-plan-open] {
   display: none;
 }
