@@ -32,10 +32,26 @@ export interface ShotProvenance {
   };
 }
 
+/** Where the launch heads, as published evidence. It never carries drawn geometry. */
+export type DirectionEvidence =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'iss_plane'; readonly azimuthDeg: number; readonly offPlaneDeg: number; readonly source: string }
+  | { readonly kind: 'published' | 'hazard_area'; readonly azimuthDeg: number; readonly source: string };
+
+/** One shot envelope: one subject at one liftoff scenario. Envelopes are never merged. */
 export interface TierShot {
   readonly subject: 'pad' | 'ascent';
+  readonly liftoffMs: number;
+  readonly startMs: number;
   readonly bestMs: number;
   readonly endMs: number;
+  readonly bestOffsetS: number;
+  readonly window: ShotEnvelope['window'];
+  readonly look: { readonly azimuthDeg: number; readonly offNadirDeg: number };
+  readonly slantKm: number;
+  readonly lens: { readonly kind: ShotEnvelope['lens']; readonly reason: string };
+  readonly light: ShotEnvelope['light'];
+  readonly confidence: { readonly tleAgeH: number; readonly robust: boolean };
   readonly score: { readonly low: number; readonly high: number };
   readonly provenance: ShotProvenance | null;
 }
@@ -58,6 +74,9 @@ export interface TierLaunch {
   readonly why: string;
   readonly reasons: readonly string[];
   readonly schedule: TierSchedule;
+  readonly direction: DirectionEvidence;
+  /** Every envelope, best first. */
+  readonly shots: readonly TierShot[];
   readonly top: TierShot | null;
   readonly corridor: Corridor | null;
   readonly whenMs: number;
@@ -157,16 +176,35 @@ function provenanceOf(shot: ShotEnvelope): ShotProvenance | null {
 }
 
 function toTierShot(shot: ShotEnvelope): TierShot | null {
+  const liftoffMs = Date.parse(shot.liftoff);
+  const startMs = Date.parse(shot.start);
   const bestMs = Date.parse(shot.best);
   const endMs = Date.parse(shot.end);
-  if (!Number.isFinite(bestMs) || !Number.isFinite(endMs)) return null;
+  if (![liftoffMs, startMs, bestMs, endMs].every(Number.isFinite)) return null;
   return {
     subject: shot.subject,
+    liftoffMs,
+    startMs,
     bestMs,
     endMs,
+    bestOffsetS: shot.best_offset_s,
+    window: shot.window,
+    look: { azimuthDeg: shot.look.azimuth_deg, offNadirDeg: shot.look.off_nadir_deg },
+    slantKm: shot.slant_km,
+    lens: { kind: shot.lens, reason: shot.lens_reason },
+    light: shot.light,
+    confidence: { tleAgeH: shot.confidence.tle_age_h, robust: shot.confidence.robust },
     score: { low: shot.score.low, high: shot.score.high },
     provenance: provenanceOf(shot),
   };
+}
+
+function directionOf(direction: LaunchCatalogItem['direction']): DirectionEvidence {
+  const { kind, azimuth_deg: azimuthDeg, source, off_plane_deg: offPlaneDeg } = direction;
+  if (kind === 'none' || azimuthDeg === null || source === null) return { kind: 'none' };
+  if (kind !== 'iss_plane') return { kind, azimuthDeg, source };
+  if (offPlaneDeg === null) return { kind: 'none' };
+  return { kind, azimuthDeg, offPlaneDeg, source };
 }
 
 function shotOrder(a: ShotEnvelope, b: ShotEnvelope): number {
@@ -194,12 +232,10 @@ function corridorOf(item: LaunchCatalogItem): Corridor | null {
 }
 
 function toTierLaunch(item: LaunchCatalogItem): TierLaunch {
-  const shots = item.shots.flatMap((shot) => {
-    const tierShot = toTierShot(shot);
-    return tierShot ? [tierShot] : [];
-  });
-  const ranked = item.shots.filter((shot) => toTierShot(shot) !== null).sort(shotOrder);
-  const top = ranked[0] ? toTierShot(ranked[0]) : null;
+  const shots = item.shots.flatMap((shot) => (toTierShot(shot) ? [shot] : []))
+    .sort(shotOrder)
+    .flatMap((shot) => toTierShot(shot) ?? []);
+  const top = shots[0] ?? null;
   const netMs = Date.parse(item.schedule.net);
   const windowEndMs = instant(item.schedule.window_end);
   let liveUntilMs = Number.isFinite(netMs) ? netMs : Number.NaN;
@@ -221,6 +257,8 @@ function toTierLaunch(item: LaunchCatalogItem): TierLaunch {
       precision: item.schedule.precision,
       status: item.schedule.status,
     },
+    direction: directionOf(item.direction),
+    shots,
     top,
     corridor: corridorOf(item),
     whenMs: top?.bestMs ?? netMs,

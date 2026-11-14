@@ -237,4 +237,52 @@ describe('tier projection', () => {
     expect(launch?.top?.provenance).toBeNull();
     expect(launch?.corridor).not.toBeNull();
   });
+
+  it('carries each envelope whole, best first, and never merges two into one interval', () => {
+    const pad = shot({
+      liftoff: iso(10), start: iso(10), best: iso(11), end: iso(12), best_offset_s: 60,
+      window: 'W7', slant_km: 420.4, light: 'pad_day', lens: 'wide', lens_reason: 'Close pad.',
+      look: { frame: 'orbital-lvlh', azimuth_deg: 10, off_nadir_deg: 20 },
+      score: { low: 20, high: 25, terms: shot().score.terms },
+      confidence: { tle_age_h: 30.5, along_track_sigma_km: 12, timing_sigma_s: 4, robust: true },
+    });
+    const ascent = shot({
+      subject: 'ascent', liftoff: iso(20), start: iso(22), best: iso(23.25), end: iso(25), best_offset_s: 195,
+      direction: { kind: 'iss_plane', azimuth_deg: 44.7, source: 'iss_tle_plane', off_plane_deg: 0.35 },
+      score: { low: 60, high: 70, terms: shot().score.terms },
+    });
+    const launch = tiersAt(catalog([catalogItem({ tier: 'likely', shots: [pad, ascent] })]), NOW)!.find('event-1')!;
+    expect(launch.shots.map((entry) => entry.subject)).toEqual(['ascent', 'pad']);
+    expect(launch.top).toBe(launch.shots[0]);
+    expect(launch.shots[0]).toMatchObject({
+      liftoffMs: Date.parse(iso(20)), startMs: Date.parse(iso(22)), bestMs: Date.parse(iso(23.25)),
+      endMs: Date.parse(iso(25)), bestOffsetS: 195,
+    });
+    expect(launch.shots[1]).toEqual({
+      subject: 'pad',
+      liftoffMs: Date.parse(iso(10)), startMs: Date.parse(iso(10)), bestMs: Date.parse(iso(11)), endMs: Date.parse(iso(12)),
+      bestOffsetS: 60,
+      window: 'W7',
+      look: { azimuthDeg: 10, offNadirDeg: 20 },
+      slantKm: 420.4,
+      lens: { kind: 'wide', reason: 'Close pad.' },
+      light: 'pad_day',
+      confidence: { tleAgeH: 30.5, robust: true },
+      score: { low: 20, high: 25 },
+      provenance: { evaluatedAt: iso(10), direction: { kind: 'none', azimuthDeg: null, source: null, offPlaneDeg: null } },
+    });
+  });
+
+  it('types the direction evidence by kind and keeps none free of numbers', () => {
+    const plane = catalogItem({ event_id: 'plane' });
+    const none = row('none', 'watch', 10);
+    const published = catalogItem({
+      event_id: 'published',
+      direction: { kind: 'published', azimuth_deg: 97, source: 'https://example.org/overview', off_plane_deg: null },
+    });
+    const tiers = tiersAt(catalog([plane, none, published]), NOW)!;
+    expect(tiers.find('plane')?.direction).toEqual({ kind: 'iss_plane', azimuthDeg: 44.7, offPlaneDeg: 0.35, source: 'iss plane' });
+    expect(tiers.find('none')?.direction).toEqual({ kind: 'none' });
+    expect(tiers.find('published')?.direction).toEqual({ kind: 'published', azimuthDeg: 97, source: 'https://example.org/overview' });
+  });
 });
