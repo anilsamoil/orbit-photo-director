@@ -252,6 +252,16 @@ for (const [name, browserType] of engines) {
       await openLaunches(page);
       const follow = page.locator('#toggle-follow-iss');
       if ((await follow.getAttribute('class'))?.includes('active')) await follow.click();
+      await page.evaluate((pad) => window.__opdMap.jumpTo({ center: pad, zoom: 3.2 }), scenario.pad);
+      await page.waitForTimeout(1500);
+      const unselected = await page.evaluate(captionProbe);
+      const painted = await page.evaluate(() => {
+        const source = window.__opdMap.getSource('launch-hazards');
+        const data = source && (source._data.geojson || source._data);
+        return (data?.features ?? []).map((feature) => feature.properties.area_id).sort();
+      });
+      const noneFile = `${name}_${scenario.name}_${width}x${height}_none.png`;
+      await page.screenshot({ path: `${OUT}/${noneFile}`, fullPage: false });
       await page.evaluate(() => {
         const details = document.querySelector('#map-launch-coverage .map-launch-primary');
         if (details) details.open = true;
@@ -263,10 +273,12 @@ for (const [name, browserType] of engines) {
       const caption = await page.evaluate(captionProbe);
       const polygons = await page.evaluate(polygonProbe, scenario.pad);
       const card = await page.evaluate(cardProbe);
-      const shot = (width === 874 && height === 402) || (width === 1024 && height === 768) || (width === 402 && height === 874);
-      const file = shot ? `${name}_${scenario.name}_${width}x${height}.png` : null;
-      if (file) await page.screenshot({ path: `${OUT}/${file}`, fullPage: false });
-      report.push({ engine: name, scenario: scenario.name, size: `${width}x${height}`, caption, polygons, card, errors, file });
+      const file = `${name}_${scenario.name}_${width}x${height}_selected.png`;
+      await page.screenshot({ path: `${OUT}/${file}`, fullPage: false });
+      report.push({
+        engine: name, scenario: scenario.name, size: `${width}x${height}`,
+        unselected, painted, caption, polygons, card, errors, file, noneFile,
+      });
       await context.close();
     }
     const context = await browser.newContext({ viewport: { width: 1024, height: 768 } });
@@ -338,6 +350,9 @@ const failed = report.filter((row) => {
   if (row.size === 'catalog-refresh-after-404') return row.clearedFetches <= row.before || row.restoredFetches <= row.clearedFetches;
   const caption = row.caption;
   const scenario = SCENARIOS.find((entry) => entry.name === row.scenario);
+  const before = row.unselected;
+  if (before.text !== LABEL || before.hidden || before.hits.length > 0 || before.outside.length > 0) return true;
+  if (row.painted.join() !== [...scenario.areas].sort().join()) return true;
   const areas = row.polygons.areas ?? {};
   const card = row.card.text ?? '';
   return caption.text !== LABEL || caption.hidden || caption.rangeText !== LABEL

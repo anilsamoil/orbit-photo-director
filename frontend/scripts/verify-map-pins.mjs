@@ -22,6 +22,8 @@ const NIGHT_LIGHTS = 'src/map/features/night-lights/layers.ts';
 const GLOBAL_DIM = 'src/map/overlays/global-dim.ts';
 const GROUND_TRACK = 'src/map/features/ground-track/layers.ts';
 const LAUNCH_CORRIDOR = 'src/map/features/launch-corridor/geometry.ts';
+const LAUNCH_FOCUS = 'src/map/features/launch-corridor/index.ts';
+const LAUNCH_HAZARDS = 'src/launch-hazards.ts';
 
 const PIN_FILES = [
   'test/map-render-contract.test.ts',
@@ -41,6 +43,7 @@ const PIN_FILES = [
   'src/map/features/targets/targets.test.ts',
   'src/map/features/launch-corridor/launch-corridor.test.ts',
   'test/launch-map-schedule.test.ts',
+  'test/launch-hazards.test.ts',
 ];
 
 const MUTATIONS = [
@@ -211,6 +214,54 @@ const MUTATIONS = [
     file: LAUNCH_CORRIDOR,
     find: '    if (pin.corridor) lines.push(...antimeridianSegments(pin.corridor.points, properties));',
     replace: '    lines.push(...antimeridianSegments(pin.corridor ? pin.corridor.points : [pin.site, pin.site], properties));',
+  },
+  {
+    contract: 'a selected launch hides the hazard areas of every other launch',
+    file: LAUNCH_FOCUS,
+    find: '  return selected.length ? selected : pins;',
+    replace: '  return pins;',
+  },
+  {
+    contract: 'leaving launch mode clears the launch selection',
+    file: LAUNCH_FOCUS,
+    find: '        state.selectedEventId = null;\n      }',
+    replace: '      }',
+  },
+  {
+    contract: 'a late hazard reply cannot replace a newer one',
+    file: LAUNCH_FOCUS,
+    find: '    if (epoch !== state.hazardEpoch) return;\n    applyHazardLoad(result);',
+    replace: '    applyHazardLoad(result);',
+  },
+  {
+    contract: 'a hazard popup names the launch each polygon belongs to',
+    file: LAUNCH_FOCUS,
+    find: '    if (launchName && !named.has(launchName)) {',
+    replace: '    if (named.has(launchName)) {',
+  },
+  {
+    contract: 'the hazard file is fetched again after every catalog refresh',
+    file: LAUNCH_FOCUS,
+    find: '      void onHazardCatalogRefresh();',
+    replace: '',
+  },
+  {
+    contract: 'a hazard polygon paints only for its own launch',
+    file: LAUNCH_HAZARDS,
+    find: '  const launch = bundle.launches.find((entry) => entry.event_id === eventId);',
+    replace: '  const launch = bundle.launches[0];',
+  },
+  {
+    contract: 'a notice checked more than two days ago stops painting on its own',
+    file: LAUNCH_HAZARDS,
+    find: '    if (nowMs >= notice.validUntilMs || nowMs >= notice.checkedMs + REVIEW_MAX_MS) continue;',
+    replace: '    if (nowMs >= notice.validUntilMs) continue;',
+  },
+  {
+    contract: 'a launch card shows only its own hazard notices',
+    file: LAUNCH_HAZARDS,
+    find: '  return shownNotes.notes.filter((note) => note.eventId === eventId);',
+    replace: '  return shownNotes.notes;',
   },
 ];
 

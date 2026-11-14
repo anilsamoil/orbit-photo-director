@@ -171,6 +171,7 @@ function hazardSignature(features: readonly GeoJSON.Feature[]): string {
       String(feature.id ?? ''),
       coords,
       String(props?.event_id ?? ''),
+      String(props?.launch_name ?? ''),
       String(props?.restriction_class ?? ''),
       String(props?.also ?? ''),
       String(props?.checked_at ?? ''),
@@ -183,10 +184,10 @@ function hazardSignature(features: readonly GeoJSON.Feature[]): string {
 }
 
 /** Every current map pin, or only the selected one while a selected launch is still a pin. */
-function eligibleEventIds(now: number): string[] {
-  const pins = (launchCatalog.read(now)?.mapPins ?? []).map((launch) => launch.eventId);
-  const selected = state.selectedEventId;
-  return selected !== null && pins.includes(selected) ? [selected] : pins;
+function eligiblePins(now: number): readonly TierLaunch[] {
+  const pins = launchCatalog.read(now)?.mapPins ?? [];
+  const selected = pins.filter((launch) => launch.eventId === state.selectedEventId);
+  return selected.length ? selected : pins;
 }
 
 function hazardFeaturesOf(eventId: string): GeoJSON.Feature[] {
@@ -196,8 +197,9 @@ function hazardFeaturesOf(eventId: string): GeoJSON.Feature[] {
 function paintHazards(core: MapCore, now: number): void {
   const bundle = state.hazardBundle;
   const features = bundle
-    ? eligibleEventIds(now).flatMap((eventId) => (
-      activeHazardFeatures(bundle, eventId, now, launchCatalog.attempt(eventId, now))
+    ? eligiblePins(now).flatMap((pin) => (
+      activeHazardFeatures(bundle, pin.eventId, now, launchCatalog.attempt(pin.eventId, now))
+        .map((feature) => ({ ...feature, properties: { ...feature.properties, launch_name: pin.name } }))
     ))
     : [];
   const signature = hazardSignature(features);
@@ -306,7 +308,10 @@ function applyLaunchVisibility(): void {
 export function syncMapLaunchMode(): void {
   if (!state.modeUnsub) {
     state.modeUnsub = subscribeMapLaunchMode((enabled) => {
-      if (!enabled) state.pendingFocusId = null;
+      if (!enabled) {
+        state.pendingFocusId = null;
+        state.selectedEventId = null;
+      }
       const core = state.core;
       core?.closePopup(enabled ? 'target' : 'launch');
       if (!core) return;
@@ -401,9 +406,18 @@ function hazardPopup(features: { properties: Record<string, unknown> | null }[])
   const title = document.createElement('p');
   title.textContent = HAZARD_LABEL;
   content.append(title);
+  const named = new Set<string>();
   for (const feature of features) {
     const props = feature.properties;
     if (!props) continue;
+    const launchName = typeof props.launch_name === 'string' ? props.launch_name : '';
+    if (launchName && !named.has(launchName)) {
+      named.add(launchName);
+      const launch = document.createElement('p');
+      launch.dataset.hazardLaunch = '1';
+      launch.textContent = launchName;
+      content.append(launch);
+    }
     const start = Date.parse(String(props.window_start ?? ''));
     const end = Date.parse(String(props.window_end ?? ''));
     const when = Number.isFinite(start) && Number.isFinite(end) ? tierWindowText(start, end) : '';

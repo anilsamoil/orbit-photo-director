@@ -779,6 +779,8 @@ describe('hazard file freshness', () => {
     releaseFirst(new Response(JSON.stringify(hazardFile()), { status: 200, headers: { 'content-type': 'application/json' } }));
     await first;
     expect(painted(vendor).map((feature) => feature.properties?.area_id).sort()).toEqual(['6/7129', 'A']);
+    syncLaunchHazards(now + 1000);
+    expect(painted(vendor).map((feature) => feature.properties?.area_id).sort()).toEqual(['6/7129', 'A']);
   });
 
   it('repaints after a 404 when the catalog asks for the file again', async () => {
@@ -1356,5 +1358,74 @@ describe('hazard areas for every catalog launch', () => {
     const twice = hazardFile();
     twice.launches.push(entryOf(twice));
     expect(parseHazardBundle(twice)).toBeNull();
+  });
+
+  it('paints two launches with overlapping windows, hides both for a third, and brings both back on deselect', () => {
+    const quiet: TierLaunch = { ...STARSHIP_PIN, eventId: 'launch-without-notices', name: 'Electron | No notices' };
+    vi.spyOn(launchCatalog, 'read').mockReturnValue({
+      highlights: [],
+      mapPins: [STARSHIP_PIN, VULCAN_PIN, quiet],
+    } as unknown as TierCatalog);
+    vi.spyOn(launchCatalog, 'attempt').mockReturnValue(ATTEMPT);
+    const caption = document.createElement('p');
+    caption.id = 'launch-hazard-caption';
+    caption.hidden = true;
+    document.body.append(caption);
+    const { vendor, core } = mount();
+    bindAscentPad(core);
+    syncMapLaunchMode();
+    useHazardBundleForTest(parsed(sameWindows(hazardFile(), VULCAN_EVENT_ID)));
+    setMapLaunchMode(true);
+    const at = NOV13 + 5 * 60_000;
+    const keys = () => painted(vendor).map((feature) => `${feature.properties?.event_id}/${feature.properties?.area_id}`).sort();
+    syncLaunchHazards(at);
+    const everything = keys();
+    expect(everything).toEqual([
+      `${STARSHIP_FLIGHT15_EVENT_ID}/6/7129`, `${STARSHIP_FLIGHT15_EVENT_ID}/A`, `${STARSHIP_FLIGHT15_EVENT_ID}/B`,
+      `${VULCAN_EVENT_ID}/6/7111`, `${VULCAN_EVENT_ID}/A`, `${VULCAN_EVENT_ID}/B`, `${VULCAN_EVENT_ID}/C`,
+    ].sort());
+    expect(document.querySelectorAll('#launch-hazard-caption')).toHaveLength(1);
+    expect(caption.hidden).toBe(false);
+    expect(caption.textContent).toBe(HAZARD_LABEL);
+    expect(focusLaunchOnMap(VULCAN_EVENT_ID)).toBe(true);
+    expect(keys()).toEqual(everything.filter((key) => key.startsWith(VULCAN_EVENT_ID)));
+    expect(focusLaunchOnMap('launch-without-notices')).toBe(true);
+    expect(keys()).toEqual([]);
+    expect(caption.hidden).toBe(true);
+    syncLaunchHazards(at + 60_000);
+    expect(keys()).toEqual([]);
+    setMapLaunchMode(false);
+    setMapLaunchMode(true);
+    syncLaunchHazards(at + 120_000);
+    expect(keys()).toEqual(everything);
+    expect(caption.hidden).toBe(false);
+  });
+
+  it('names each launch once in a popup that covers polygons of two launches', () => {
+    bothPins();
+    const { vendor, core } = mount();
+    bindAscentPad(core);
+    useHazardBundleForTest(parsed(sameWindows(hazardFile(), VULCAN_EVENT_ID)));
+    setMapLaunchMode(true);
+    syncLaunchHazards(NOV13 + 5 * 60_000);
+    const pick = (eventId: string, areaId: string) => {
+      const feature = painted(vendor).find((item) => item.properties?.event_id === eventId && item.properties?.area_id === areaId);
+      if (!feature) throw new Error(`${eventId} ${areaId}`);
+      return { properties: feature.properties, geometry: feature.geometry };
+    };
+    const open = (features: ReturnType<typeof pick>[]) => {
+      vendor.fireLayer('click', 'launch-hazard-fill-layer', { point: { x: 3, y: 3 }, lngLat: [-90, 27], features });
+      const content = vendor.popups.at(-1)?.content;
+      if (!content) throw new Error('expected a popup');
+      return content;
+    };
+    const one = open([pick(VULCAN_EVENT_ID, 'A'), pick(VULCAN_EVENT_ID, '6/7111')]);
+    expect([...one.querySelectorAll('[data-hazard-launch]')].map((node) => node.textContent)).toEqual([VULCAN_PIN.name]);
+    expect(one.textContent).not.toContain(STARSHIP_PIN.name);
+    const both = open([pick(STARSHIP_FLIGHT15_EVENT_ID, 'B'), pick(VULCAN_EVENT_ID, 'A'), pick(STARSHIP_FLIGHT15_EVENT_ID, 'A')]);
+    expect([...both.querySelectorAll('[data-hazard-launch]')].map((node) => node.textContent)).toEqual([STARSHIP_PIN.name, VULCAN_PIN.name]);
+    expect(both.textContent).toContain('NAVAREA IV 1080/26 area B, maritime high_risk.');
+    expect(both.textContent).toContain('NAVAREA IV 1099/26 area A, maritime hazard.');
+    expect(both.querySelectorAll('a')).toHaveLength(3);
   });
 });
