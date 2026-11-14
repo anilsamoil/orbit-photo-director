@@ -263,6 +263,18 @@ const MUTATIONS = [
     find: '  return shownNotes.notes.filter((note) => note.eventId === eventId);',
     replace: '  return shownNotes.notes;',
   },
+  {
+    contract: 'a launch card lists only its own undrawn notices',
+    file: LAUNCH_HAZARDS,
+    find: '  return shownNotes.listings.filter((listing) => listing.eventId === eventId);',
+    replace: '  return shownNotes.listings;',
+  },
+  {
+    contract: 'an undrawn notice leaves the card two days after its review or at its cancel time',
+    file: LAUNCH_HAZARDS,
+    find: '    .filter((item) => nowMs < item.validUntilMs && nowMs < item.checkedMs + REVIEW_MAX_MS)',
+    replace: '',
+  },
 ];
 
 const root = new URL('..', import.meta.url);

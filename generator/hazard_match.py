@@ -28,6 +28,10 @@ MAX_LAUNCHES = 32
 MAX_NOTICES = 16
 MAX_WINDOWS = 16
 MAX_INSTRUCTIONS = 4
+MAX_LISTED = 8
+MAX_LISTED_TEXT = 400
+LISTING_SPAN_MAX = timedelta(days=21)
+UNREAD_LEAD = timedelta(hours=24)
 MAX_BYTES = 256 * 1024
 _CLASSES = ("hazard", "high_risk", "restricted_airspace")
 _INSTANT = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
@@ -131,23 +135,89 @@ def same_ring(left: tuple[Position, ...], right: tuple[Position, ...]) -> bool:
     )
 
 
+def _pad_km(launch: Launch, notice: Notice) -> float:
+    """Distance from the pad to the notice: its parsed areas, or its record outline."""
+    rings = [area.ring for area in notice.areas] or ([notice.outline] if notice.outline else [])
+    return min((pad_distance_km(launch, ring) for ring in rings), default=math.inf)
+
+
+def _published_span(notice: Notice) -> tuple[datetime, datetime] | None:
+    """From the first readable window, or the record start, to the cancel time. Short spans only."""
+    starts = [window.start for area in notice.areas for window in area.windows]
+    begin = min(starts) if starts else notice.valid_from
+    if begin is None or notice.valid_until is None or notice.valid_until - begin > LISTING_SPAN_MAX:
+        return None
+    return begin, notice.valid_until
+
+
+def _regulated_area_launches(launches: list[Launch], notice: Notice) -> list[str]:
+    """Launches a safety zone or regulated navigation area is published for."""
+    at_pad = [launch for launch in launches if _pad_km(launch, notice) <= PAD_ANCHOR_KM]
+    if any(area.windows for area in notice.areas):
+        return [launch.event_id for launch in at_pad if in_force_at_window_open(launch, notice)]
+    span = _published_span(notice)
+    return [launch.event_id for launch in at_pad if span and span[0] <= launch.net < span[1]]
+
+
+def _unread_time_launches(launches: list[Launch], notice: Notice) -> list[str]:
+    """Launches at the pad inside the life of a notice that has a time nobody could read."""
+    span = _published_span(notice)
+    return [
+        launch.event_id
+        for launch in launches
+        if span
+        and _pad_km(launch, notice) <= PAD_ANCHOR_KM
+        and span[0] - UNREAD_LEAD <= launch.opens
+        and launch.net < span[1]
+    ]
+
+
+def _listings(sighting: Sighting, reason: str, texts: list[str]) -> list[dict]:
+    """Text for the launch card. A listing has no geometry and is never drawn."""
+    notice = sighting.notice
+    ends = [window.end for area in notice.areas for window in area.windows]
+    until = notice.valid_until or max(ends, default=None)
+    if until is None:
+        return []
+    return [
+        {
+            "authority": notice.authority,
+            "notice_id": notice.notice_id,
+            "reason": reason,
+            "text": text[:MAX_LISTED_TEXT],
+            "checked_at": utc(sighting.checked_at),
+            "valid_until": utc(until),
+            "source_url": notice.source_url,
+            "source_sha256": notice.source_sha256,
+        }
+        for text in texts
+        if text
+    ]
+
+
 def match_notices(
     launches: list[Launch],
     sightings: list[Sighting],
     now: datetime,
     overrides: dict | None = None,
-) -> tuple[dict[str, list[Sighting]], list[dict]]:
-    """Decide each notice once. The log holds every decision and its reasons."""
+) -> tuple[dict[str, list[Sighting]], dict[str, list[dict]], list[dict]]:
+    """Decide each notice once: drawn, listed as text, or neither. The log holds every reason."""
     pins = dict((overrides or {}).get("pin", {}))
     bans = set((overrides or {}).get("ban", []))
     known = {launch.event_id: launch for launch in launches}
     superseded = {name for sighting in sightings for name in sighting.notice.cancels}
     matched: dict[str, list[Sighting]] = {}
+    listed: dict[str, list[dict]] = {}
     log: list[dict] = []
     for sighting in sorted(sightings, key=lambda entry: entry.notice.notice_id):
         notice = sighting.notice
         event_id: str | None = None
         reasons: list[str] = []
+        unread = [
+            problem.split(":", 1)[1]
+            for problem in notice.problems
+            if problem.startswith("WINDOW_UNPARSED:")
+        ]
         if notice.notice_id in bans:
             decision = "banned"
         elif notice.notice_id in superseded:
@@ -160,6 +230,14 @@ def match_notices(
             event_id = pins[notice.notice_id]
             decision = "matched" if event_id in known and notice.areas else "unmatched"
             reasons = ["PINNED" if decision == "matched" else "PIN_UNUSABLE"]
+        elif notice.kind == "regulated_area":
+            located = _regulated_area_launches(launches, notice)
+            if len(located) == 1:
+                decision, event_id = "listed", located[0]
+            elif located:
+                decision, reasons = "ambiguous", located
+            else:
+                decision, reasons = "not_launch", [notice.kind]
         elif notice.kind != "launch":
             decision, reasons = "not_launch", [notice.kind]
         elif not notice.areas:
@@ -167,7 +245,7 @@ def match_notices(
         else:
             confident: list[str] = []
             for launch in launches:
-                distance = min(pad_distance_km(launch, area.ring) for area in notice.areas)
+                distance = _pad_km(launch, notice)
                 anchored = distance <= PAD_ANCHOR_KM
                 timed = in_force_at_window_open(launch, notice)
                 if anchored and timed:
@@ -176,16 +254,27 @@ def match_notices(
                     reasons.append(f"NOT_IN_FORCE_AT_WINDOW_OPEN:{launch.event_id}")
                 elif timed:
                     reasons.append(f"NOT_AT_PAD:{launch.event_id}:{distance:.0f}km")
+            around = _unread_time_launches(launches, notice) if unread else []
             if len(confident) == 1:
                 decision, event_id, reasons = "matched", confident[0], []
             elif confident:
                 decision, reasons = "ambiguous", confident
+            elif len(around) == 1:
+                decision, event_id, reasons = "listed", around[0], ["UNREAD_TIME"]
             else:
                 decision, reasons = "unmatched", reasons or ["NO_LAUNCH_AT_PAD_AND_TIME"]
-        if decision != "matched":
-            event_id = None
-        else:
+        if decision == "matched":
             matched.setdefault(event_id, []).append(sighting)
+        if decision in ("matched", "listed"):
+            found = (
+                _listings(sighting, "not_drawn", [notice.subject])
+                if notice.kind == "regulated_area"
+                else _listings(sighting, "unread_time", unread)
+            )
+            if found:
+                listed.setdefault(event_id, []).extend(found)
+        else:
+            event_id = None
         log.append(
             {
                 "notice_id": notice.notice_id,
@@ -198,7 +287,7 @@ def match_notices(
                 "checked_at": utc(sighting.checked_at),
             }
         )
-    return matched, log
+    return matched, listed, log
 
 
 def _closed_counter_clockwise(ring: tuple[Position, ...]) -> list[list[float]]:
@@ -212,7 +301,11 @@ def _slug(text: str) -> str:
 
 
 def _launch_entry(
-    event_id: str, sightings: list[Sighting], now: datetime, log: list[dict]
+    event_id: str,
+    sightings: list[Sighting],
+    listings: list[dict],
+    now: datetime,
+    log: list[dict],
 ) -> dict | None:
     rows: list[_Row] = []
     for sighting in sightings:
@@ -265,7 +358,7 @@ def _launch_entry(
         twin.restriction_class = row.restriction_class
         agree = "" if twin.windows == row.windows else ":WINDOWS_DIFFER"
         _note(log, notice.notice_id, f"CROSS_CHECK_OF:{twin.sighting.notice.notice_id}{agree}")
-    if not final:
+    if not final and not listings:
         return None
     if len(final) > MAX_NOTICES:
         for row in final:
@@ -313,6 +406,7 @@ def _launch_entry(
         "event_id": event_id,
         "notices": notices,
         "geojson": {"type": "FeatureCollection", "features": features},
+        "listed": listings[:MAX_LISTED],
     }
 
 
@@ -330,10 +424,12 @@ def build_bundle(
 ) -> tuple[dict, list[dict]]:
     """Hazard schema 2 for every catalog launch with a confident notice, and the decision log."""
     launches = launches_from_catalog(items, now)
-    matched, log = match_notices(launches, sightings, now, overrides)
+    matched, listed, log = match_notices(launches, sightings, now, overrides)
     entries = []
-    for event_id in sorted(matched):
-        entry = _launch_entry(event_id, matched[event_id], now, log)
+    for event_id in sorted({*matched, *listed}):
+        entry = _launch_entry(
+            event_id, matched.get(event_id, []), listed.get(event_id, []), now, log
+        )
         if entry:
             entries.append(entry)
     bundle = {
@@ -374,7 +470,7 @@ def validate_bundle(bundle: dict) -> None:
         raise ValueError("HAZARD_LAUNCHES")
     seen_events: set[str] = set()
     for launch in launches:
-        keys(launch, "event_id notices geojson")
+        keys(launch, "event_id notices geojson listed")
         if (
             not isinstance(launch["event_id"], str)
             or not launch["event_id"]
@@ -382,12 +478,32 @@ def validate_bundle(bundle: dict) -> None:
         ):
             raise ValueError("HAZARD_EVENT")
         seen_events.add(launch["event_id"])
-        notices = launch["notices"]
+        notices, listed = launch["notices"], launch["listed"]
+        if not isinstance(listed, list) or len(listed) > MAX_LISTED or not (notices or listed):
+            raise ValueError("HAZARD_LISTED")
+        for item in listed:
+            keys(
+                item,
+                "authority notice_id reason text checked_at valid_until source_url source_sha256",
+            )
+            texts = (item["authority"], item["notice_id"], item["text"])
+            if any(not isinstance(text, str) or not text for text in texts):
+                raise ValueError("HAZARD_LISTED")
+            if item["reason"] not in ("unread_time", "not_drawn"):
+                raise ValueError("HAZARD_LISTED")
+            if len(item["text"]) > MAX_LISTED_TEXT or not str(item["source_url"]).startswith(
+                "https://"
+            ):
+                raise ValueError("HAZARD_LISTED")
+            if not re.fullmatch(r"[a-f0-9]{64}", str(item["source_sha256"])):
+                raise ValueError("HAZARD_LISTED")
+            instant(item["checked_at"])
+            instant(item["valid_until"])
         collection = keys(launch["geojson"], "type features")
         features = collection["features"]
         if (
             not isinstance(notices, list)
-            or not 1 <= len(notices) <= MAX_NOTICES
+            or len(notices) > MAX_NOTICES
             or collection["type"] != "FeatureCollection"
             or not isinstance(features, list)
             or len(features) != len(notices)

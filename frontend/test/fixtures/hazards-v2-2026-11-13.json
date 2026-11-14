@@ -283,6 +283,28 @@
     ],
     "type": "FeatureCollection"
    },
+   "listed": [
+    {
+     "authority": "USCG",
+     "checked_at": "2026-11-13T23:29:34Z",
+     "notice_id": "USCG LNM 58296",
+     "reason": "not_drawn",
+     "source_sha256": "524b13514f21f1e9406284e02e247d4133814323922bca216830529caba29aa3",
+     "source_url": "https://navcen.uscg.gov/sites/default/files/msi/spaceOpsPoly_1.geojson",
+     "text": "Safety Zone. Gulf of America \u2013 Safety Zone \u2013 Space Launch --- From: 2026-11-13 To: 2026-11-19 --- The U.S. Coast Guard Captain of the Port Corpus Christi is establishing a Safety Zone in the near shore region of the space launch hazard area in the Gulf of America.",
+     "valid_until": "2026-11-20T23:59:59Z"
+    },
+    {
+     "authority": "USCG",
+     "checked_at": "2026-11-13T23:29:34Z",
+     "notice_id": "USCG LNM 58298",
+     "reason": "not_drawn",
+     "source_sha256": "524b13514f21f1e9406284e02e247d4133814323922bca216830529caba29aa3",
+     "source_url": "https://navcen.uscg.gov/sites/default/files/msi/spaceOpsPoly_1.geojson",
+     "text": "Safety Zone. South Bay \u2013 Safety Zone \u2013 Space Launch --- From: 2026-11-13 To: 2026-11-20 --- The U.S. Coast Guard Captain of the Port Corpus Christi is establishing a Safety Zone in South Bay.",
+     "valid_until": "2026-11-21T23:59:59Z"
+    }
+   ],
    "notices": [
     {
      "also": [],
@@ -584,6 +606,7 @@
     ],
     "type": "FeatureCollection"
    },
+   "listed": [],
    "notices": [
     {
      "also": [],
@@ -1055,6 +1078,28 @@
     ],
     "type": "FeatureCollection"
    },
+   "listed": [
+    {
+     "authority": "NGA",
+     "checked_at": "2026-11-13T23:27:32Z",
+     "notice_id": "NAVAREA IV 1099/26",
+     "reason": "unread_time",
+     "source_sha256": "7bfa936bab5af0d4d0e37435e7c8104e83fef7d11d2a7f5d260b7db838a3b635",
+     "source_url": "https://space-notices.com/notice/nav-warning-NAVAREA%20IV%201099%2F26",
+     "text": "1616550Z TO 161828",
+     "valid_until": "2026-11-19T18:24:00Z"
+    },
+    {
+     "authority": "USCG",
+     "checked_at": "2026-11-13T23:29:34Z",
+     "notice_id": "USCG LNM 58225",
+     "reason": "not_drawn",
+     "source_sha256": "524b13514f21f1e9406284e02e247d4133814323922bca216830529caba29aa3",
+     "source_url": "https://navcen.uscg.gov/sites/default/files/msi/spaceOpsPoly_1.geojson",
+     "text": "Active RNA. Space Operations/Active RNA/Government Supported (RNA) 1. SPACE LAUNCH OPERATIONS, WHICH MAY BE HAZARDOUS TO SURFACE VESSELS, WILL BE CONDUCTED WITHIN PORTIONS OF THE FOLLOWING HAZARD AREAS FOR VULCAN KV-01:",
+     "valid_until": "2027-05-10T23:59:59Z"
+    }
+   ],
    "notices": [
     {
      "also": [],
@@ -1192,6 +1237,6 @@
    ]
   }
  ],
- "revision": "4c5220558ba0f083",
+ "revision": "5c4b2bea36be037b",
  "schema_version": 2
 }

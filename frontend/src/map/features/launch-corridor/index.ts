@@ -3,6 +3,7 @@ import { openLaunchDetails, renderLegacyLaunchCard } from '../../../launch-card'
 import { launchCatalog, subscribeLaunchSlots } from '../../../launch-catalog';
 import {
   activeHazardFeatures,
+  activeHazardListings,
   hazardFactText,
   HAZARD_LABEL,
   loadPublishedHazards,
@@ -196,15 +197,19 @@ function hazardFeaturesOf(eventId: string): GeoJSON.Feature[] {
 
 function paintHazards(core: MapCore, now: number): void {
   const bundle = state.hazardBundle;
+  const pins = bundle ? eligiblePins(now) : [];
   const features = bundle
-    ? eligiblePins(now).flatMap((pin) => (
+    ? pins.flatMap((pin) => (
       activeHazardFeatures(bundle, pin.eventId, now, launchCatalog.attempt(pin.eventId, now))
         .map((feature) => ({ ...feature, properties: { ...feature.properties, launch_name: pin.name } }))
     ))
     : [];
+  const listings = bundle
+    ? pins.flatMap((pin) => activeHazardListings(bundle, pin.eventId, now, launchCatalog.attempt(pin.eventId, now)))
+    : [];
   const signature = hazardSignature(features);
   state.hazardFeatures = features;
-  publishHazardNotes(notesOf(features));
+  publishHazardNotes(notesOf(features), listings);
   if (signature !== state.hazardSignature || !core.hasSource('launch-hazards')) {
     state.hazardSignature = signature;
     core.setGeoJson('launch-hazards', { type: 'FeatureCollection', features });

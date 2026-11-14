@@ -7,6 +7,7 @@ import { LaunchCatalogStore, launchCatalog } from '../src/launch-catalog';
 import { renderMapLaunchBrief } from '../src/launch-map-brief';
 import {
   activeHazardFeatures,
+  activeHazardListings,
   HAZARD_LABEL,
   HAZARD_PATH,
   loadPublishedHazards,
@@ -271,6 +272,16 @@ type HazardFileLaunch = {
     also: string[];
   }[];
   geojson: { features: { properties: { area_id: string }; geometry: { type: string; coordinates: number[][][] } }[] };
+  listed: {
+    authority: string;
+    notice_id: string;
+    reason: string;
+    text: string;
+    checked_at: string;
+    valid_until: string;
+    source_url: string;
+    source_sha256: string;
+  }[];
 };
 
 type HazardFile = {
@@ -300,6 +311,7 @@ function without(file: HazardFile, areaId: string): HazardFile {
 
 function reviewed(file: HazardFile, checkedAt: string, eventId = STARSHIP_FLIGHT15_EVENT_ID): HazardFile {
   for (const notice of entryOf(file, eventId).notices) notice.checked_at = checkedAt;
+  for (const listed of entryOf(file, eventId).listed) listed.checked_at = checkedAt;
   return file;
 }
 
@@ -1324,11 +1336,19 @@ describe('hazard areas for every catalog launch', () => {
     expect(text).toContain('NAVAREA IV 1099/26 area C, maritime hazard.');
     expect(text).toContain('Checked 2026-11-13T23:27:32Z');
     expect(text).not.toContain('1080/26');
-    expect(vulcan.querySelectorAll('[data-hazard-note] a')).toHaveLength(4);
+    expect(vulcan.querySelectorAll('[data-hazard-note] a')).toHaveLength(6);
+    expect(text).toContain('Published for this launch and not drawn on the map:');
+    expect(text).toContain('NAVAREA IV 1099/26 publishes a time the map could not read: "1616550Z TO 161828". Nothing is drawn for that time. Checked 2026-11-13T23:27:32Z.');
+    expect(text).toContain('USCG LNM 58225 is not drawn. Active RNA. Space Operations/Active RNA/Government Supported (RNA) 1. SPACE LAUNCH OPERATIONS');
+    expect([...vulcan.querySelectorAll('[data-hazard-listed]')].map((node) => (node as HTMLElement).dataset.hazardListed)).toEqual(['unread_time', 'not_drawn']);
+    expect(painted(vendor).some((feature) => /5829[68]|58225/.test(String(feature.properties?.notice_id)))).toBe(false);
     const other = starship.querySelector('[data-hazard-note]')?.textContent ?? '';
     expect(other).toContain('NAVAREA IV 1080/26 area A, maritime hazard.');
     expect(other).not.toContain('1099/26');
     expect(other).not.toContain('6/7111');
+    expect(other).toContain('USCG LNM 58296 is not drawn. Safety Zone. Gulf of America');
+    expect(other).toContain('USCG LNM 58298 is not drawn. Safety Zone. South Bay');
+    expect(other).not.toContain('58225');
     const feature = painted(vendor).find((item) => item.properties?.area_id === '6/7111');
     if (!feature) throw new Error('missing Cape airspace');
     vendor.fireLayer('click', 'launch-hazard-fill-layer', {
@@ -1434,5 +1454,95 @@ describe('hazard areas for every catalog launch', () => {
     expect(both.textContent).toContain('NAVAREA IV 1080/26 area B, maritime high_risk.');
     expect(both.textContent).toContain('NAVAREA IV 1099/26 area A, maritime hazard.');
     expect(both.querySelectorAll('a')).toHaveLength(3);
+  });
+
+  it('paints nothing for the unreadable 16 Nov window and says so on the card', () => {
+    const NOV16 = Date.parse('2026-11-16T17:00:00Z');
+    const attempt = { startMs: Date.parse('2026-11-16T16:50:00Z'), endMs: Date.parse('2026-11-16T17:19:00Z') };
+    const notice = readFileSync(resolve(ROOT, 'test/fixtures/notices/navarea-iv-1099-26.txt'), 'utf8');
+    expect(notice).toContain('1616550Z TO 161828,');
+    const whole = parsed(reviewed(hazardFile(), '2026-11-16T12:00:00Z', VULCAN_EVENT_ID));
+    expect(activeHazardFeatures(whole, VULCAN_EVENT_ID, NOV16, attempt)).toEqual([]);
+    expect(areaIds(activeHazardFeatures(whole, VULCAN_EVENT_ID, Date.parse('2026-11-17T17:00:00Z'), {
+      startMs: Date.parse('2026-11-17T16:28:00Z'), endMs: Date.parse('2026-11-17T17:00:00Z'),
+    }))).toEqual(['A', 'B', 'C']);
+    const listed = activeHazardListings(whole, VULCAN_EVENT_ID, NOV16, attempt);
+    expect(listed.map((item) => [item.noticeId, item.reason, item.text])).toEqual([
+      ['NAVAREA IV 1099/26', 'unread_time', '1616550Z TO 161828'],
+      ['USCG LNM 58225', 'not_drawn', expect.stringContaining('Active RNA.')],
+    ]);
+    expect(activeHazardListings(whole, VULCAN_EVENT_ID, NOV16, null)).toEqual([]);
+    expect(activeHazardListings(whole, STARSHIP_FLIGHT15_EVENT_ID, NOV16, attempt).map((item) => item.noticeId)).toEqual([]);
+    expect(activeHazardListings(whole, VULCAN_EVENT_ID, Date.parse('2026-11-18T12:00:00Z'), attempt)).toEqual([]);
+    expect(activeHazardListings(whole, VULCAN_EVENT_ID, Date.parse('2026-11-18T11:59:59Z'), attempt)).toHaveLength(2);
+
+    const sixteenth = reviewed(hazardFile(), '2026-11-16T12:00:00Z', VULCAN_EVENT_ID);
+    const entry = entryOf(sixteenth, VULCAN_EVENT_ID);
+    entry.notices = [];
+    entry.geojson.features = [];
+    entry.listed = entry.listed.filter((item) => item.reason === 'unread_time');
+    expect(activeHazardListings(parsed(sixteenth), VULCAN_EVENT_ID, Date.parse('2026-11-19T18:24:00Z'), attempt)).toEqual([]);
+    vi.spyOn(launchCatalog, 'read').mockReturnValue({
+      highlights: [],
+      mapPins: [VULCAN_PIN, STARSHIP_PIN],
+      find: (eventId: string) => (eventId === VULCAN_EVENT_ID ? VULCAN_PIN : STARSHIP_PIN),
+    } as unknown as TierCatalog);
+    vi.spyOn(launchCatalog, 'attempt').mockImplementation((eventId: string) => (eventId === VULCAN_EVENT_ID ? attempt : null));
+    const caption = document.createElement('p');
+    caption.id = 'launch-hazard-caption';
+    document.body.append(caption);
+    const vendor = createVendorDouble();
+    const core = createMapCore(vendor, createClock(() => NOV16));
+    noteLaunchCore(core);
+    bindAscentPad(core);
+    useHazardBundleForTest(parsed(sixteenth));
+    setMapLaunchMode(true);
+    syncLaunchHazards(NOV16);
+    expect(painted(vendor)).toEqual([]);
+    expect(caption.hidden).toBe(true);
+    const card = renderTierCard(VULCAN_PIN, () => {});
+    const block = card.querySelector('[data-hazard-note]');
+    expect(block?.textContent).toBe(
+      'Published for this launch and not drawn on the map:'
+      + 'NAVAREA IV 1099/26 publishes a time the map could not read: "1616550Z TO 161828". Nothing is drawn for that time. Checked 2026-11-16T12:00:00Z. '
+      + 'https://space-notices.com/notice/nav-warning-NAVAREA%20IV%201099%2F26',
+    );
+    expect(block?.querySelector('a')?.getAttribute('href')).toBe('https://space-notices.com/notice/nav-warning-NAVAREA%20IV%201099%2F26');
+    expect(block?.textContent).not.toContain('not a flight path');
+    expect(card.querySelector('button.btn')?.textContent).toBe('Show launch site');
+    expect(renderTierCard(STARSHIP_PIN, () => {}).querySelector('[data-hazard-note]')).toBeNull();
+    const showModal = HTMLDialogElement.prototype.showModal;
+    HTMLDialogElement.prototype.showModal = function open() { this.setAttribute('open', ''); };
+    openTierDetails(VULCAN_PIN);
+    expect(document.querySelector('[data-tier-track]')?.textContent).toBe('Pad only');
+    expect(document.querySelector('.launch-dialog [data-hazard-listed="unread_time"]')?.textContent).toContain('"1616550Z TO 161828"');
+    expect(focusLaunchOnMap(STARSHIP_FLIGHT15_EVENT_ID)).toBe(true);
+    expect(document.querySelector('.launch-dialog [data-hazard-listed]')).toBeNull();
+    HTMLDialogElement.prototype.showModal = showModal;
+    expect(vendor.cameraCalls.some((call) => call.method === 'fitBounds')).toBe(false);
+  });
+
+  it('refuses a file whose undrawn list is malformed, and a launch with nothing to show', () => {
+    const edits: ((launch: HazardFileLaunch) => void)[] = [
+      (launch) => { launch.listed[0]!.reason = 'hazard'; },
+      (launch) => { launch.listed[0]!.text = ''; },
+      (launch) => { launch.listed[0]!.text = 'x'.repeat(401); },
+      (launch) => { launch.listed[0]!.checked_at = 'yesterday'; },
+      (launch) => { launch.listed[0]!.source_url = 'http://example.invalid/'; },
+      (launch) => { launch.listed = Array(9).fill(launch.listed[0]); },
+      (launch) => { (launch as unknown as { listed: unknown }).listed = null; },
+      (launch) => { launch.listed = []; launch.notices = []; launch.geojson.features = []; },
+    ];
+    for (const edit of edits) {
+      const file = hazardFile();
+      expect(parseHazardBundle(file)).not.toBeNull();
+      edit(entryOf(file, VULCAN_EVENT_ID));
+      expect(parseHazardBundle(file)).toBeNull();
+    }
+    const textOnly = hazardFile();
+    const launch = entryOf(textOnly, VULCAN_EVENT_ID);
+    launch.notices = [];
+    launch.geojson.features = [];
+    expect(parseHazardBundle(textOnly)?.launches.find((entry) => entry.event_id === VULCAN_EVENT_ID)?.listed).toHaveLength(2);
   });
 });

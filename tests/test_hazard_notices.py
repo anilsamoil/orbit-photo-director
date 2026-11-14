@@ -56,6 +56,7 @@ def test_starship_navarea_vertices_and_windows_come_from_the_notice_text():
         (_utc(f"2026-11-{day}T22:45"), _utc(f"2026-11-{day + 1}T00:40")) for day in range(13, 20)
     ]
     assert notice.valid_until == _utc("2026-11-20T01:40")
+    assert notice.valid_from == _utc("2026-11-09T07:53") and notice.outline == ()
 
 
 def test_a_vertex_moved_one_hundredth_of_a_minute_moves_the_parsed_ring():
@@ -358,7 +359,18 @@ def test_coast_guard_notices_that_are_not_launch_hazard_areas_are_classified_so(
     kinds = {notice.notice_id: notice.kind for notice in fx.uscg_notices()}
     assert len(kinds) == 23
     assert kinds["USCG LNM 58204"] == kinds["USCG LNM 58114"] == kinds["USCG LNM 58119"] == "recovery"
-    assert kinds["USCG LNM 58296"] == kinds["USCG LNM 58225"] == "other"
+    assert kinds["USCG LNM 58296"] == kinds["USCG LNM 58298"] == kinds["USCG LNM 58225"] == "regulated_area"
+    assert kinds["USCG LNM 58306"] == "recovery"
+    zone = fx.uscg_notice(58296)
+    assert zone.areas == () and len(zone.outline) == 10
+    assert (zone.valid_from, zone.valid_until) == (_utc("2026-11-12T00:00"), datetime(2026, 11, 20, 23, 59, 59, tzinfo=UTC))
+    assert zone.subject == (
+        "Safety Zone. Gulf of America \u2013 Safety Zone \u2013 Space Launch --- From: 2026-11-13 To: 2026-11-19 --- "
+        "The U.S. Coast Guard Captain of the Port Corpus Christi is establishing a Safety Zone in the near shore "
+        "region of the space launch hazard area in the Gulf of America."
+    )
+    assert zone.subject.removeprefix("Safety Zone. ") in " ".join(fx.uscg_description(58296).split())
+    assert fx.uscg_notice(58225).subject.endswith("HAZARD AREAS FOR VULCAN KV-01:")
     assert sorted(name for name, kind in kinds.items() if kind == "launch") == [
         "USCG LNM 57935", "USCG LNM 58060", "USCG LNM 58067", "USCG LNM 58217",
         "USCG LNM 58218", "USCG LNM 58219", "USCG LNM 58224",
@@ -393,6 +405,13 @@ def test_coast_guard_area_with_an_unreadable_line_is_not_drawn_short():
     assert reparse(58067, "Gulf", "Gulf", STATUS="Draft") == []
     assert reparse(58067, "Gulf", "Gulf", MSI_GROUP="Bridges") == []
     assert reparse(58067, "Gulf", "Gulf", END_DATE="soon")[0].valid_until is None
+    assert reparse(58067, "Gulf", "Gulf", BEGIN_DATE=True)[0].valid_from is None
+    assert len(reparse(58067, "Gulf", "Gulf")[0].outline) > 20
+    payload["features"][0]["geometry"] = {"type": "Polygon", "coordinates": [[[0, 0], [1, 1]]]}
+    payload["features"][1]["geometry"] = {"type": "Point", "coordinates": [0, 0]}
+    payload["features"][2]["geometry"] = {"type": "Polygon", "coordinates": "none"}
+    reread = parse_uscg_space_operations(json.dumps(payload).encode(), "https://navcen.uscg.gov/x")
+    assert [notice.outline for notice in reread[:3]] == [(), (), ()]
     for body, code in ((b"{", "USCG_NOT_JSON"), (b"{}", "USCG_SHAPE"), (b" " * 4_000_001, "USCG_TOO_LARGE")):
         with pytest.raises(NoticeError, match=code):
             parse_uscg_space_operations(body, "https://navcen.uscg.gov/x")

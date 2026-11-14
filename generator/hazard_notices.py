@@ -66,6 +66,8 @@ class Notice:
     problems: tuple[str, ...]
     source_url: str
     source_sha256: str
+    valid_from: datetime | None = None
+    outline: tuple[Position, ...] = ()
 
 
 def sha256_hex(body: bytes) -> str:
@@ -100,6 +102,8 @@ def notice_record(notice: Notice) -> dict:
         ],
         "cancels": list(notice.cancels),
         "valid_until": _stamp(notice.valid_until) if notice.valid_until else None,
+        "valid_from": _stamp(notice.valid_from) if notice.valid_from else None,
+        "outline": [[lon, lat] for lon, lat in notice.outline],
         "problems": list(notice.problems),
         "source_url": notice.source_url,
         "source_sha256": notice.source_sha256,
@@ -125,6 +129,8 @@ def notice_from_record(record: dict) -> Notice:
         ),
         cancels=tuple(record["cancels"]),
         valid_until=_instant(record["valid_until"]) if record["valid_until"] else None,
+        valid_from=_instant(record["valid_from"]) if record.get("valid_from") else None,
+        outline=tuple((float(lon), float(lat)) for lon, lat in record.get("outline", [])),
         problems=tuple(record["problems"]),
         source_url=record["source_url"],
         source_sha256=record["source_sha256"],
@@ -357,6 +363,7 @@ def parse_broadcast_warning(
         problems=tuple(dict.fromkeys(problems)),
         source_url=source_url,
         source_sha256=source_sha256,
+        valid_from=issued,
     )
 
 
@@ -571,11 +578,7 @@ def parse_uscg_space_operations(body: bytes, source_url: str) -> list[Notice]:
         props = feature.get("properties") if isinstance(feature, dict) else None
         if not isinstance(props, dict):
             continue
-        uid, description, ends = (
-            props.get("MSI_UID"),
-            props.get("DESCRIPTION"),
-            props.get("END_DATE"),
-        )
+        uid, description = props.get("MSI_UID"), props.get("DESCRIPTION")
         if (
             type(uid) is not int
             or not isinstance(description, str)
@@ -584,32 +587,59 @@ def parse_uscg_space_operations(body: bytes, source_url: str) -> list[Notice]:
             continue
         if props.get("MSI_GROUP") != "Space Operations":
             continue
+        lead = _lead(" ".join(description.split()))
+        category = props.get("SUB_CATEGORY")
         if _USCG_NOT_LAUNCH.search(" ".join(description.split())[:300].upper()):
             kind = "recovery"
-        elif props.get("SUB_CATEGORY") != "Hazardous Warning Area":
+        elif category in ("Safety Zone", "Active RNA"):
+            kind, lead = "regulated_area", f"{category}. {lead}"
+        elif category != "Hazardous Warning Area":
             kind = "other"
         else:
             kind = "launch"
         areas, problems = _uscg_areas(description)
-        valid_until = None
-        if type(ends) is int and 0 < ends < 4_102_444_800_000:
-            valid_until = datetime.fromtimestamp(ends // 1000, tz=UTC)
         notices.append(
             Notice(
                 authority="USCG",
                 notice_id=f"USCG LNM {uid}",
                 kind=kind,
                 domain="maritime",
-                subject=" ".join(description.split())[:160],
+                subject=lead,
                 areas=tuple(areas),
                 cancels=(),
-                valid_until=valid_until,
+                valid_until=_uscg_date(props.get("END_DATE")),
                 problems=tuple(problems),
                 source_url=source_url,
                 source_sha256=digest,
+                valid_from=_uscg_date(props.get("BEGIN_DATE")),
+                outline=_uscg_outline(feature.get("geometry")),
             )
         )
     return notices
+
+
+def _lead(text: str, limit: int = 280) -> str:
+    """The opening of a notice, cut at the last sentence or heading end inside the limit."""
+    if len(text) <= limit:
+        return text
+    ends = [mark.end() for mark in re.finditer(r"(?<=\w\w)[.:](?= )", text[:limit])]
+    return text[: ends[-1]] if ends and ends[-1] > 80 else text[:limit].rstrip()
+
+
+def _uscg_date(value: object) -> datetime | None:
+    if type(value) is not int or not 0 < value < 4_102_444_800_000:
+        return None
+    return datetime.fromtimestamp(value // 1000, tz=UTC)
+
+
+def _uscg_outline(geometry: object) -> tuple[Position, ...]:
+    """The record's own published outline. It locates a notice and is never drawn."""
+    if not isinstance(geometry, dict) or geometry.get("type") != "Polygon":
+        return ()
+    try:
+        return _ring([_position(float(lat), float(lon)) for lon, lat in geometry["coordinates"][0]])
+    except (KeyError, IndexError, TypeError, ValueError):
+        return ()
 
 
 _FAA_NOT_LAUNCH = re.compile(r"RECOVERY|RE-?ENTRY|RETURN|LANDING")

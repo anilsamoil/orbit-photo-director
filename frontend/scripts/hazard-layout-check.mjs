@@ -17,6 +17,7 @@ const SCENARIOS = [
     card: [
       'NAVAREA IV 1080/26', 'area A', 'maritime', 'UTC', 'Checked 2026-11-13T10:02:00Z',
       'three hours prior to the earliest launch', 'SFC-UNL', 'INTERNATIONAL WATERS',
+      'USCG LNM 58296 is not drawn. Safety Zone.',
     ],
   },
   {
@@ -28,6 +29,7 @@ const SCENARIOS = [
     card: [
       'NAVAREA IV 1099/26', 'area C', 'maritime', 'UTC', 'Checked 2026-11-13T23:27:32Z',
       'TFR 6/7111 (also TFR 6/7112)', 'SFC-FL180', '12 MILE COASTAL LIMIT',
+      'NAVAREA IV 1099/26 publishes a time the map could not read: "1616550Z TO 161828"',
     ],
   },
 ];

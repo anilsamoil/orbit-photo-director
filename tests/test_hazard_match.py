@@ -144,6 +144,12 @@ def test_every_notice_of_the_run_has_one_logged_decision():
     assert decisions["USCG LNM 58067"]["reasons"] == ["CROSS_CHECK_OF:NAVAREA IV 1080/26"]
     assert decisions["USCG LNM 58224"]["reasons"] == ["CROSS_CHECK_OF:NAVAREA IV 1099/26:WINDOWS_DIFFER"]
     assert decisions["TFR 6/7112"]["reasons"] == ["SAME_AREA_AS:TFR 6/7111"]
+    assert {name: entry["event_id"] for name, entry in decisions.items() if entry["decision"] == "listed"} == {
+        "USCG LNM 58225": fx.VULCAN,
+        "USCG LNM 58296": fx.STARSHIP,
+        "USCG LNM 58298": fx.STARSHIP,
+    }
+    assert (decisions["USCG LNM 58306"]["decision"], decisions["USCG LNM 58306"]["reasons"]) == ("not_launch", ["recovery"])
     assert _drawn(bundle, fx.VULCAN) == [
         ("NAVAREA IV 1099/26", "A"), ("NAVAREA IV 1099/26", "B"), ("NAVAREA IV 1099/26", "C"), ("TFR 6/7111", "6/7111"),
     ]
@@ -248,8 +254,10 @@ def test_slip_past_every_published_window_and_a_cancelled_launch_draw_nothing():
     seen = fx.scenario_sightings()
     late = fx.item(fx.STARSHIP, net="2026-11-20T22:45:00Z", window_start="2026-11-20T22:45:00Z", window_end="2026-11-21T00:00:00Z")
     bundle, log = build_bundle([late], seen, NOW)
-    assert bundle["launches"] == []
+    assert _drawn(bundle, fx.STARSHIP) == []
     assert _decisions(log)["NAVAREA IV 1080/26"]["reasons"] == [f"NOT_IN_FORCE_AT_WINDOW_OPEN:{fx.STARSHIP}"]
+    past_every_record = fx.item(fx.STARSHIP, net="2026-11-21T23:59:59Z", window_start="2026-11-21T22:45:00Z", window_end="2026-11-22T00:40:00Z")
+    assert build_bundle([past_every_record], seen, NOW)[0]["launches"] == []
     for status in ("Cancelled", "TBD", "Hold"):
         cancelled = fx.item(fx.STARSHIP, status=status)
         assert launches_from_catalog([cancelled], NOW) == []
@@ -296,6 +304,119 @@ def test_a_review_older_than_two_days_and_a_notice_past_its_cancel_time_are_drop
     entry = fx.launch(bundle, fx.VULCAN)["notices"][0]
     assert entry["windows"] == [{"start": "2026-11-19T15:46:00Z", "end": "2026-11-19T17:24:00Z"}]
     assert entry["valid_until"] == "2026-11-19T18:24:00Z"
+
+
+def test_a_notice_with_an_unreadable_time_is_listed_on_the_day_it_cannot_be_drawn():
+    amended = fx.broadcast_notice("navarea-iv-1099-26.txt")
+    on_the_16th = fx.item(fx.VULCAN, net="2026-11-16T16:50:30Z", window_start="2026-11-16T16:50:00Z", window_end="2026-11-16T17:19:00Z")
+    now = _utc("2026-11-16T12:00")
+    (launch,) = launches_from_catalog([on_the_16th], now)
+    assert in_force_at_window_open(launch, amended) is False
+    bundle, log = build_bundle([on_the_16th], _seen(amended, at=now), now)
+    entry = fx.launch(bundle, fx.VULCAN)
+    assert entry["notices"] == [] and entry["geojson"]["features"] == []
+    assert entry["listed"] == [{
+        "authority": "NGA",
+        "notice_id": "NAVAREA IV 1099/26",
+        "reason": "unread_time",
+        "text": "1616550Z TO 161828",
+        "checked_at": "2026-11-16T12:00:00Z",
+        "valid_until": "2026-11-19T18:24:00Z",
+        "source_url": fx.manifest("navarea-iv-1099-26.txt")["source_url"],
+        "source_sha256": fx.file_sha256("navarea-iv-1099-26.txt"),
+    }]
+    assert "1616550Z TO 161828," in fx.broadcast_body("navarea-iv-1099-26.txt", "NAVAREA IV 1099/26")
+    decision = _decisions(log)["NAVAREA IV 1099/26"]
+    assert (decision["decision"], decision["event_id"], decision["reasons"]) == ("listed", fx.VULCAN, ["UNREAD_TIME"])
+    validate_bundle(bundle)
+    with_coast_guard, _ = build_bundle([on_the_16th], _seen(amended, fx.uscg_notice(58224), at=now), now)
+    assert _drawn(with_coast_guard, fx.VULCAN) == [("USCG LNM 58224", "A")]
+    assert [x["notice_id"] for x in fx.launch(with_coast_guard, fx.VULCAN)["listed"]] == ["NAVAREA IV 1099/26"]
+    on_a_readable_day, _ = build_bundle([fx.item(fx.VULCAN)], _seen(amended), NOW)
+    assert len(_drawn(on_a_readable_day, fx.VULCAN)) == 3
+    assert [x["text"] for x in fx.launch(on_a_readable_day, fx.VULCAN)["listed"]] == ["1616550Z TO 161828"]
+    clean = fx.broadcast_notice("navarea-iv-1078-26.txt")
+    assert fx.launch(build_bundle([fx.item(fx.VULCAN)], _seen(clean), NOW)[0], fx.VULCAN)["listed"] == []
+
+
+def test_an_unreadable_time_is_listed_only_for_one_launch_at_the_pad_inside_the_notice_life():
+    amended = fx.broadcast_notice("navarea-iv-1099-26.txt")
+    now = _utc("2026-11-13T12:00")
+
+    def listed_for(**schedule: str) -> list[str]:
+        bundle, _ = build_bundle([fx.item(fx.VULCAN, **schedule)], _seen(amended, at=now), now)
+        return [x["notice_id"] for entry in bundle["launches"] for x in entry["listed"]]
+
+    assert listed_for(net="2026-11-16T03:00:00Z", window_start="2026-11-16T03:00:00Z", window_end="2026-11-16T04:00:00Z") == ["NAVAREA IV 1099/26"]
+    assert listed_for(net="2026-11-13T17:32:00Z", window_start="2026-11-13T17:32:00Z", window_end="2026-11-13T18:00:00Z") == ["NAVAREA IV 1099/26"]
+    assert listed_for(net="2026-11-13T17:31:00Z", window_start="2026-11-13T17:31:00Z", window_end="2026-11-13T18:00:00Z") == []
+    assert listed_for(net="2026-11-19T18:24:00Z", window_start="2026-11-19T18:00:00Z", window_end="2026-11-19T19:00:00Z") == []
+    elsewhere = fx.item(fx.USSF_317, net="2026-11-16T16:50:00Z", window_start="2026-11-16T16:50:00Z", window_end="2026-11-16T17:19:00Z")
+    assert build_bundle([elsewhere], _seen(amended, at=now), now)[0]["launches"] == []
+    twin = fx.item(fx.VULCAN, net="2026-11-16T16:50:00Z", window_start="2026-11-16T16:50:00Z", window_end="2026-11-16T17:19:00Z")
+    other = json.loads(json.dumps(twin))
+    other["event_id"] = "second-launch-from-the-same-pad"
+    bundle, log = build_bundle([twin, other], _seen(amended, at=now), now)
+    assert bundle["launches"] == [] and _decisions(log)["NAVAREA IV 1099/26"]["decision"] == "unmatched"
+    air_launch = fx.uscg_notice(58219)
+    assert air_launch.problems == ("WINDOW_UNPARSED:221400Z NOV TO 242000Z NOV 2026",)
+    later = _utc("2026-11-17T00:00")
+    at_the_pad = [launch.event_id for launch in launches_from_catalog(fx.catalog_items(), later) if abs(launch.lat - 34.632) < 0.01]
+    assert len(at_the_pad) == 3
+    three, log = build_bundle(fx.catalog_items(), _seen(air_launch, at=later), later)
+    assert three["launches"] == [] and _decisions(log)["USCG LNM 58219"]["decision"] == "unmatched"
+    alone, log = build_bundle([fx.item("460d9db7-eaf6-4cd9-b095-cff433534c09")], _seen(air_launch, at=later), later)
+    assert [(x["notice_id"], x["text"]) for x in alone["launches"][0]["listed"]] == [("USCG LNM 58219", "221400Z NOV TO 242000Z NOV 2026")]
+    assert alone["launches"][0]["notices"] == []
+    assert amended.valid_from == _utc("2026-11-13T17:20")
+    unreadable = type(amended)(**{**amended.__dict__, "areas": tuple(type(area)(area.area_id, area.ring, (), "hazard") for area in amended.areas)})
+    for net, expected in (("2026-11-16T16:50:00Z", ["NAVAREA IV 1099/26"]), ("2026-11-12T17:19:00Z", [])):
+        only = fx.item(fx.VULCAN, net=net, window_start=net, window_end=net)
+        found, _ = build_bundle([only], _seen(unreadable, at=_utc("2026-11-12T12:00")), _utc("2026-11-12T12:00"))
+        assert [x["notice_id"] for entry in found["launches"] for x in entry["listed"]] == expected
+    undated = type(amended)(**{**unreadable.__dict__, "valid_until": None})
+    assert build_bundle([fx.item(fx.VULCAN)], _seen(undated), NOW)[0]["launches"] == []
+
+
+def test_safety_zones_and_regulated_areas_are_listed_as_text_and_never_drawn():
+    bundle, log = fx.scenario_bundle()
+    starship = fx.launch(bundle, fx.STARSHIP)
+    assert [(x["notice_id"], x["reason"]) for x in starship["listed"]] == [("USCG LNM 58296", "not_drawn"), ("USCG LNM 58298", "not_drawn")]
+    assert starship["listed"][0]["text"] == fx.uscg_notice(58296).subject
+    assert starship["listed"][0]["valid_until"] == "2026-11-20T23:59:59Z"
+    assert starship["listed"][0]["source_sha256"] == fx.file_sha256(fx.USCG)
+    assert all("58296" not in feature["id"] and "58298" not in feature["id"] for feature in starship["geojson"]["features"])
+    assert len(starship["geojson"]["features"]) == 3
+    vulcan = fx.launch(bundle, fx.VULCAN)
+    assert [(x["notice_id"], x["reason"]) for x in vulcan["listed"]] == [("NAVAREA IV 1099/26", "unread_time"), ("USCG LNM 58225", "not_drawn")]
+    assert vulcan["listed"][1]["text"].startswith("Active RNA. ")
+    assert all(feature["properties"]["notice_id"] != "USCG LNM 58225" for feature in vulcan["geojson"]["features"])
+    assert fx.launch(bundle, fx.USSF_317)["listed"] == []
+    zone, rna = fx.uscg_notice(58296), fx.uscg_notice(58225)
+    now = NOW
+
+    def decision(notice, *items) -> tuple[str, str | None]:
+        _, log = build_bundle(list(items), _seen(notice, at=now), now)
+        entry = _decisions(log)[notice.notice_id]
+        return entry["decision"], entry["event_id"]
+
+    assert decision(zone, fx.item(fx.STARSHIP)) == ("listed", fx.STARSHIP)
+    assert decision(zone, fx.item(fx.VULCAN)) == ("not_launch", None)
+    after_the_record = fx.item(fx.STARSHIP, net="2026-11-20T23:59:59Z", window_start="2026-11-20T22:45:00Z", window_end="2026-11-21T00:40:00Z")
+    assert decision(zone, after_the_record) == ("not_launch", None)
+    second = fx.item(fx.STARSHIP)
+    second["event_id"] = "second-launch-from-the-same-pad"
+    assert decision(zone, fx.item(fx.STARSHIP), second) == ("ambiguous", None)
+    assert rna.valid_until - rna.valid_from > timedelta(days=150)
+    assert decision(rna, fx.item(fx.VULCAN)) == ("listed", fx.VULCAN)
+    day_late = fx.item(fx.VULCAN, net="2026-11-20T17:32:30Z", window_start="2026-11-20T17:32:00Z", window_end="2026-11-20T18:01:00Z")
+    assert decision(rna, day_late) == ("not_launch", None)
+    long_lived = type(zone)(**{**zone.__dict__, "valid_until": zone.valid_from + timedelta(days=22)})
+    assert decision(long_lived, fx.item(fx.STARSHIP)) == ("not_launch", None)
+    no_outline = type(zone)(**{**zone.__dict__, "outline": ()})
+    assert decision(no_outline, fx.item(fx.STARSHIP)) == ("not_launch", None)
+    reentry = fx.uscg_notice(58306)
+    assert reentry.kind == "recovery" and decision(reentry, fx.item(fx.STARSHIP)) == ("not_launch", None)
 
 
 def test_coast_guard_areas_stand_alone_while_nga_is_unreachable():
@@ -415,6 +536,17 @@ def test_a_launch_with_more_areas_than_the_map_accepts_is_left_out_whole():
     lambda b: b.update(schema_version=1),
     lambda b: b.update(revision="latest"),
     lambda b: b.update(launches=[b["launches"][0]] * 33),
+    lambda b: b["launches"][1].update(listed=None),
+    lambda b: b["launches"][1].pop("listed"),
+    lambda b: b["launches"][1].update(notices=[], geojson={"type": "FeatureCollection", "features": []}),
+    lambda b: b["launches"][0]["listed"][0].update(reason="hazard"),
+    lambda b: b["launches"][0]["listed"][0].update(text=""),
+    lambda b: b["launches"][0]["listed"][0].update(text="x" * 401),
+    lambda b: b["launches"][0]["listed"][0].update(ring=[[0, 0]]),
+    lambda b: b["launches"][0]["listed"][0].update(source_url="http://example.invalid/"),
+    lambda b: b["launches"][0]["listed"][0].update(source_sha256="abc"),
+    lambda b: b["launches"][0]["listed"][0].update(valid_until="tomorrow"),
+    lambda b: b["launches"][0].update(listed=b["launches"][0]["listed"] * 5),
 ])
 def test_a_file_the_map_would_refuse_is_refused_before_it_is_written(damage):
     bundle = json.loads(fx.GOLDEN.read_text())

@@ -13,6 +13,7 @@ const MAX_NOTICES = 16;
 const MAX_WINDOWS = 16;
 const MAX_INSTRUCTIONS = 4;
 const MAX_ALSO = 8;
+const MAX_LISTED = 8;
 
 const FILL_OPACITY = {
   hazard: 0.12,
@@ -22,6 +23,7 @@ const FILL_OPACITY = {
 
 const DOMAINS = new Set(['maritime', 'airspace']);
 const CLASSES = new Set(['hazard', 'high_risk', 'restricted_airspace']);
+const LISTED_REASONS = new Set(['unread_time', 'not_drawn']);
 
 export type HazardAttempt = {
   readonly startMs: number;
@@ -52,10 +54,24 @@ export type HazardNotice = {
   readonly source_sha256: string;
 };
 
+/** A published notice the map does not draw: an unreadable time, or a zone listed as text only. */
+export type HazardListedNotice = {
+  readonly authority: string;
+  readonly notice_id: string;
+  readonly reason: 'unread_time' | 'not_drawn';
+  readonly text: string;
+  readonly checked_at: string;
+  readonly checkedMs: number;
+  readonly valid_until: string;
+  readonly validUntilMs: number;
+  readonly source_url: string;
+};
+
 export type LaunchHazards = {
   readonly event_id: string;
   readonly notices: readonly HazardNotice[];
   readonly geojson: GeoJSON.FeatureCollection;
+  readonly listed: readonly HazardListedNotice[];
 };
 
 export type HazardBundle = {
@@ -80,6 +96,15 @@ export type HazardNote = {
   readonly qualification: string;
 };
 
+export type HazardListing = {
+  readonly eventId: string;
+  readonly noticeId: string;
+  readonly reason: 'unread_time' | 'not_drawn';
+  readonly text: string;
+  readonly sourceUrl: string;
+  readonly checkedAt: string;
+};
+
 export type HazardLoad =
   | { readonly kind: 'current'; readonly bundle: HazardBundle }
   | { readonly kind: 'withdrawn' }
@@ -90,21 +115,32 @@ const NOTE_FIELDS = [
   'windowStart', 'windowEnd', 'sourceUrl', 'checkedAt', 'qualification',
 ] as const;
 
-const shownNotes: { notes: HazardNote[]; listeners: Set<() => void> } = { notes: [], listeners: new Set() };
+const LISTING_FIELDS = ['eventId', 'noticeId', 'reason', 'text', 'sourceUrl', 'checkedAt'] as const;
 
-function sameNotes(left: readonly HazardNote[], right: readonly HazardNote[]): boolean {
+const shownNotes: { notes: HazardNote[]; listings: HazardListing[]; listeners: Set<() => void> } = {
+  notes: [],
+  listings: [],
+  listeners: new Set(),
+};
+
+function sameRows<Row, Field extends keyof Row>(
+  left: readonly Row[], right: readonly Row[], fields: readonly Field[],
+): boolean {
   if (left.length !== right.length) return false;
-  return left.every((note, index) => {
+  return left.every((row, index) => {
     const other = right[index];
-    return !!other && NOTE_FIELDS.every((field) => note[field] === other[field]);
+    return !!other && fields.every((field) => row[field] === other[field]);
   });
 }
 
-/** The cards read the notes the map last painted. A launch with none is Pad only. */
-export function publishHazardNotes(notes: readonly HazardNote[]): void {
-  const next = notes.map((note) => ({ ...note }));
-  if (sameNotes(shownNotes.notes, next)) return;
-  shownNotes.notes = next;
+/** The cards read what the map last painted, and the notices it knows of and does not draw. */
+export function publishHazardNotes(notes: readonly HazardNote[], listings: readonly HazardListing[] = []): void {
+  const nextNotes = notes.map((note) => ({ ...note }));
+  const nextListings = listings.map((listing) => ({ ...listing }));
+  if (sameRows(shownNotes.notes, nextNotes, NOTE_FIELDS)
+    && sameRows(shownNotes.listings, nextListings, LISTING_FIELDS)) return;
+  shownNotes.notes = nextNotes;
+  shownNotes.listings = nextListings;
   for (const listener of [...shownNotes.listeners]) listener();
 }
 
@@ -115,6 +151,18 @@ export function subscribeHazardNotes(listener: () => void): () => void {
 
 export function hazardNotesFor(eventId: string): readonly HazardNote[] {
   return shownNotes.notes.filter((note) => note.eventId === eventId);
+}
+
+export function hazardListingsFor(eventId: string): readonly HazardListing[] {
+  return shownNotes.listings.filter((listing) => listing.eventId === eventId);
+}
+
+/** One undrawn notice in plain words. An unreadable time is quoted as published. */
+export function hazardListingText(listing: Pick<HazardListing, 'noticeId' | 'reason' | 'text' | 'checkedAt'>): string {
+  const what = listing.reason === 'unread_time'
+    ? `publishes a time the map could not read: "${listing.text}". Nothing is drawn for that time.`
+    : `is not drawn. ${listing.text}`;
+  return `${listing.noticeId} ${what} Checked ${listing.checkedAt}.`;
 }
 
 /** The notice facts in one sentence, the same on the card and on the polygon. */
@@ -249,11 +297,45 @@ function noticeOf(value: unknown): HazardNotice | null {
   };
 }
 
+function listedOf(value: unknown): HazardListedNotice | null {
+  const row = record(value);
+  if (!row) return null;
+  const authority = text(row.authority);
+  const noticeId = text(row.notice_id);
+  const words = text(row.text);
+  const reason = row.reason;
+  const sourceUrl = text(row.source_url);
+  const checked = instant(row.checked_at);
+  const valid = instant(row.valid_until);
+  if (!authority || !noticeId || !words || words.length > 400 || !sourceUrl || !checked || !valid) return null;
+  if (typeof reason !== 'string' || !LISTED_REASONS.has(reason)) return null;
+  if (!sourceUrl.startsWith('https://')) return null;
+  return {
+    authority,
+    notice_id: noticeId,
+    reason: reason as HazardListedNotice['reason'],
+    text: words,
+    checked_at: checked.text,
+    checkedMs: checked.ms,
+    valid_until: valid.text,
+    validUntilMs: valid.ms,
+    source_url: sourceUrl,
+  };
+}
+
 function launchOf(value: unknown): LaunchHazards | null {
   const row = record(value);
   const eventId = row ? text(row.event_id) : null;
   if (!row || !eventId) return null;
-  if (!Array.isArray(row.notices) || row.notices.length === 0 || row.notices.length > MAX_NOTICES) return null;
+  if (!Array.isArray(row.listed) || row.listed.length > MAX_LISTED) return null;
+  const listed: HazardListedNotice[] = [];
+  for (const entry of row.listed) {
+    const item = listedOf(entry);
+    if (!item) return null;
+    listed.push(item);
+  }
+  if (!Array.isArray(row.notices) || row.notices.length > MAX_NOTICES) return null;
+  if (row.notices.length + listed.length === 0) return null;
   const notices: HazardNotice[] = [];
   for (const entry of row.notices) {
     const notice = noticeOf(entry);
@@ -297,7 +379,7 @@ function launchOf(value: unknown): LaunchHazards | null {
       geometry: { type: 'Polygon', coordinates: [ring] },
     });
   }
-  return { event_id: eventId, notices, geojson: { type: 'FeatureCollection', features } };
+  return { event_id: eventId, notices, geojson: { type: 'FeatureCollection', features }, listed };
 }
 
 /** A file that fails any check is absent, for every launch. Vertices are not dropped one by one. */
@@ -374,6 +456,27 @@ export function activeHazardFeatures(
     });
   }
   return features;
+}
+
+/** One launch's undrawn notices that are still in force and reviewed, while the launch has an attempt. */
+export function activeHazardListings(
+  bundle: HazardBundle,
+  eventId: string,
+  nowMs: number,
+  attempt: HazardAttempt | null,
+): HazardListing[] {
+  const launch = bundle.launches.find((entry) => entry.event_id === eventId);
+  if (!launch || !attempt) return [];
+  return launch.listed
+    .filter((item) => nowMs < item.validUntilMs && nowMs < item.checkedMs + REVIEW_MAX_MS)
+    .map((item) => ({
+      eventId: launch.event_id,
+      noticeId: item.notice_id,
+      reason: item.reason,
+      text: item.text,
+      sourceUrl: item.source_url,
+      checkedAt: item.checked_at,
+    }));
 }
 
 /** Same-origin hazard file. A 404 or a bad body is withdrawal. A 5xx is unavailable. */

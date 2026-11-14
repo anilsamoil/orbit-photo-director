@@ -1,5 +1,14 @@
 import { launchCatalog } from './launch-catalog';
-import { HAZARD_LABEL, hazardFactText, hazardNotesFor, subscribeHazardNotes, type HazardNote } from './launch-hazards';
+import {
+  HAZARD_LABEL,
+  hazardFactText,
+  hazardListingsFor,
+  hazardListingText,
+  hazardNotesFor,
+  subscribeHazardNotes,
+  type HazardListing,
+  type HazardNote,
+} from './launch-hazards';
 import { tierScheduleFacts, tierWindowText, tierWord, type TierLaunch } from './launch-tiers';
 
 function row(container: HTMLElement, label: string, value: string): void {
@@ -56,14 +65,36 @@ export function renderTierCard(launch: TierLaunch, onShowMap?: (eventId: string)
 
 function hazardNoteBlock(eventId: string): HTMLElement | null {
   const notes = hazardNotesFor(eventId);
-  if (!notes.length) return null;
+  const listings = hazardListingsFor(eventId);
+  if (!notes.length && !listings.length) return null;
   const block = document.createElement('div');
   block.dataset.hazardNote = '1';
-  const summary = document.createElement('p');
-  summary.textContent = `${HAZARD_LABEL}.`;
-  block.append(summary);
-  for (const note of notes) block.append(hazardFact(note));
+  if (notes.length) {
+    const summary = document.createElement('p');
+    summary.textContent = `${HAZARD_LABEL}.`;
+    block.append(summary);
+    for (const note of notes) block.append(hazardFact(note));
+  }
+  if (listings.length) {
+    const lead = document.createElement('p');
+    lead.textContent = 'Published for this launch and not drawn on the map:';
+    block.append(lead);
+    for (const listing of listings) block.append(hazardListingLine(listing));
+  }
   return block;
+}
+
+function hazardListingLine(listing: HazardListing): HTMLParagraphElement {
+  const line = document.createElement('p');
+  line.dataset.hazardListed = listing.reason;
+  line.textContent = `${hazardListingText(listing)} `;
+  const link = document.createElement('a');
+  link.href = listing.sourceUrl;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.textContent = listing.sourceUrl;
+  line.append(link);
+  return line;
 }
 
 function hazardFact(note: HazardNote): HTMLParagraphElement {
@@ -130,7 +161,7 @@ export function openTierDetails(launch: TierLaunch): void {
     const note = hazardNoteBlock(current.eventId);
     track.textContent = current.corridor
       ? current.corridor.points.map((point) => `${point.lat.toFixed(2)}, ${point.lon.toFixed(2)}`).join(' → ')
-      : note
+      : hazardNotesFor(current.eventId).length
         ? `${HAZARD_LABEL}.`
         : 'Pad only';
     content.append(why, track);
