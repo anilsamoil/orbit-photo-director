@@ -32,6 +32,8 @@ const TEXT = {
   publisherFailed: 'Starship: orbit lookup failed, the publisher could not reach CelesTrak. No orbit is drawn.',
   browserFailed: 'Starship: orbit lookup failed, CelesTrak could not be reached from this browser. No orbit is drawn.',
   noOrbit: 'Starship: no public orbit yet. CelesTrak GP and Supplemental GP list no element set for it.',
+  unread: 'Starship: orbit lookup failed, this browser could not load the published orbit list. No orbit is drawn.',
+  hidden: 'Starship is hidden. Check it to look for its orbit again.',
 };
 
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.pbf': 'application/x-protobuf', '.geojson': 'application/json', '.webmanifest': 'application/manifest+json' };
@@ -100,6 +102,7 @@ function issRow() {
 /** Each state: what the publisher says, and what CelesTrak answers a browser. */
 const STATES = {
   'lookup-failed': { tracked: NO_DATA, celestrak: 'unreachable' },
+  'artifact-unread': { tracked: null, celestrak: 'unreachable' },
   'no-public-orbit': { tracked: { objects: [{ ...STARSHIP, reason: 'no_public_orbit' }] }, celestrak: 'empty' },
   'published-norad-25544': { tracked: () => ({ objects: [STARSHIP, issRow()] }), celestrak: 'unreachable' },
 };
@@ -131,7 +134,9 @@ async function prepare(page, state, nowMs, celestrakRequests) {
   await page.route('**/v/browser/passes.json', (route) => json(route, []));
   await page.route('**/v/browser/top5.json', (route) => json(route, []));
   await page.route('**/v/browser/track.json', (route) => json(route, trackFor(nowMs)));
-  await page.route('**/v/browser/tracked.json', (route) => json(route, tracked));
+  await page.route('**/v/browser/tracked.json', (route) => (tracked === null
+    ? route.fulfill({ status: 404, contentType: 'application/json', body: '{"error":"not_found"}' })
+    : json(route, tracked)));
   await page.route('**/launch/catalog/latest.json', (route) => json(route, pointer));
   await page.route('**/launch/catalog/v/**', (route) => json(route, text));
   await page.route('**/launch/latest.json', (route) => route.fulfill({ status: 404, contentType: 'application/json', body: '{"error":"not_found"}' }));
@@ -251,6 +256,17 @@ try {
         check(tapped, tapped.starshipChecked === true, 'box unchecked itself after a failed lookup');
         check(tapped, tapped.celestrak.length === 4, `asked ${tapped.celestrak.length} URLs, want 4`);
         check(tapped, tapped.satelliteLayers.length === 0, 'drew a track after a failed lookup');
+
+        const hidden = await run('lookup-failed', size, false, async (page) => {
+          await page.locator('#satellite-picker-list label', { hasText: 'Starship' }).click();
+          return 'tap-hides';
+        });
+        check(hidden, hidden.status === TEXT.hidden, `status is "${hidden.status}"`);
+        check(hidden, hidden.starshipChecked === false, 'box stayed checked after a tap');
+        check(hidden, hidden.celestrak.length === 0, 'asked CelesTrak on the tap that hides');
+
+        const unread = await run('artifact-unread', size, false);
+        check(unread, unread.notes.includes(TEXT.unread), `notes are ${JSON.stringify(unread.notes)}`);
 
         const none = await run('no-public-orbit', size, false);
         check(none, none.notes.includes(TEXT.noOrbit), `notes are ${JSON.stringify(none.notes)}`);

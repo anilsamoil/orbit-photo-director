@@ -76,12 +76,13 @@ function notesBlock(list: HTMLElement): HTMLElement {
   return notes;
 }
 
-/** Rebuilt on open and on every selection change, so checkboxes and
- *  badges never disagree with what is wanted. A checked box means wanted,
+/** Rebuilt on open and on every change while open, so checkboxes and
+ *  badges never disagree with what is wanted. A closed panel is left alone:
+ *  a rebuild resizes the map, which would cut a drag in progress. A checked box means wanted,
  *  whether or not an orbit could be drawn. */
 export function renderPickerList(port: PickerPort): void {
   const list = byId('satellite-picker-list');
-  if (!list) return;
+  if (!list || byId('satellite-picker-panel')?.hidden) return;
   list.textContent = '';
   const notes = notesBlock(list);
   notes.textContent = '';

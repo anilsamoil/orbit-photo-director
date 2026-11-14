@@ -393,6 +393,18 @@ describe('a published vehicle', () => {
     expect(rowFor('Starship').querySelector('.sat-stale')?.textContent).toBe('last good');
   });
 
+  it('a publisher run leaves the map alone while the panel is closed', async () => {
+    const { core } = mounted();
+    const resize = vi.spyOn(core, 'resize');
+    await publish(ELEMENTS_ROW);
+    vi.advanceTimersByTime(60_000);
+    await settle();
+    vi.advanceTimersByTime(100);
+
+    expect(resize).not.toHaveBeenCalled();
+    expect(document.querySelectorAll('#satellite-picker-list label')).toHaveLength(0);
+  });
+
   it('before any artifact is read, blames this browser and not the publisher', async () => {
     mounted();
     await publish(...UNREAD_TRACKED);
