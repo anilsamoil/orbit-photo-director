@@ -1,19 +1,28 @@
 import { describe, expect, it } from 'vitest';
 
+import noDataArtifact from './fixtures/tracked-lookup-failed.json' with { type: 'json' };
+
 import {
+  UNPUBLISHED_TRACKED,
   orbitPeriodSeconds,
   parseTracked,
   recordsFromArtifact,
-  statusText,
   type TrackedElements,
   type TrackedUnavailable,
 } from '../src/tracked';
+
+const LOOKUP = {
+  names: ['STARSHIP', 'SHIP'],
+  patterns: ['^STARSHIP(?:[\\s-]|$)', '^SHIP[\\s-]+\\d+\\b'],
+  max_age_hours: 12,
+};
 
 const UNAVAILABLE: TrackedUnavailable = {
   state: 'unavailable',
   id: 'starship',
   label: 'Starship',
   color: '#ff5c5c',
+  lookup: LOOKUP,
   reason: 'no_public_orbit',
 };
 
@@ -22,6 +31,7 @@ const ELEMENTS: TrackedElements = {
   id: 'starship',
   label: 'Starship',
   color: '#ff5c5c',
+  lookup: LOOKUP,
   source: 'supgp',
   name: 'STARSHIP S41',
   norad: 1,
@@ -46,18 +56,25 @@ describe('tracked artifact', () => {
     })).toBeNull();
   });
 
-  it('uses the no-orbit row when the artifact is missing or empty', () => {
-    expect(recordsFromArtifact(null)).toEqual([UNAVAILABLE]);
-    expect(recordsFromArtifact({ objects: [] })).toEqual([UNAVAILABLE]);
-    expect(statusText(recordsFromArtifact(null)[0]!)).toBe('Starship: no public orbit yet');
+  it('reads a missing or empty artifact as a failed lookup, never as no orbit', () => {
+    const failed = { ...UNAVAILABLE, reason: 'lookup_failed' };
+    expect(recordsFromArtifact(null)).toEqual([failed]);
+    expect(recordsFromArtifact({ objects: [] })).toEqual([failed]);
   });
 
-  it('names each honest state', () => {
-    expect(statusText(UNAVAILABLE)).toBe('Starship: no public orbit yet');
-    expect(statusText({ ...UNAVAILABLE, reason: 'aged_out' })).toBe('Starship: public orbit expired');
-    expect(statusText({ ...UNAVAILABLE, reason: 'lookup_failed' })).toBe('Starship: orbit lookup failed');
-    expect(statusText(ELEMENTS)).toBe('Starship: STARSHIP S41');
-    expect(statusText({ ...ELEMENTS, from_cache: true })).toBe('Starship: STARSHIP S41 (last good)');
+  it('assumes exactly what the generator publishes when it has no data', () => {
+    expect(parseTracked(noDataArtifact)).toEqual(UNPUBLISHED_TRACKED);
+  });
+
+  it('keeps the built-in Starship lookup for a row from a publisher that sends none', () => {
+    const { lookup: _lookup, ...bare } = UNAVAILABLE;
+    expect(parseTracked({ objects: [bare] })).toEqual([UNAVAILABLE]);
+    expect(parseTracked({ objects: [{ ...bare, lookup: { names: 'STARSHIP' } }] })).toEqual([UNAVAILABLE]);
+  });
+
+  it('reads the lookup of an object the operator added', () => {
+    const row = { ...UNAVAILABLE, id: 'ship-40', label: 'Ship 40', lookup: { names: [], patterns: [], max_age_hours: 48, catnr: 67002, intldes: '2026-211A' } };
+    expect(parseTracked({ objects: [row] })).toEqual([row]);
   });
 
   it('takes one orbit from the element set mean motion', () => {

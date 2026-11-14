@@ -50,7 +50,7 @@ import {
 } from './features/iss-marker';
 import { groundTrackFeatures } from './features/ground-track/geometry';
 import { refreshLabels, resetLabelsForTest } from './features/labels';
-import { applyTracked } from './features/tracked';
+import { applyPublishedOrbits } from './features/satellites';
 import {
   ascentPadLayer,
   ascentTrajectoryLayer,
@@ -431,7 +431,7 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   syncMapLaunchMode();
   bindLaunchStore();
   syncIssMarker(core);
-  applyTracked(core, trackedRecords);
+  applyPublishedOrbits(trackedRecords);
 
   if (isFirstInit) {
     clock.every(1000, (nowMs) => {

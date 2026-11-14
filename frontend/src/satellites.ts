@@ -1,10 +1,13 @@
+import { tleEpochMs } from './iss-sgp4';
 import { rememberIssTle } from './iss-tle';
+import type { TrackedLookup, TrackedRecord } from './tracked';
 
 /** Multi-satellite tracking (v1.6.0.0 — Pettit feedback #6).
  *
- *  Curated hot-list + custom NORAD/name search. TLEs fetched from
- *  CelesTrak (free, CORS-enabled, no auth) and cached in localStorage
- *  with a 6h TTL. Pure-frontend: no generator/server changes.
+ *  Curated hot-list + custom NORAD/name search. An orbit comes from the
+ *  publisher's `tracked.json` first, then the last good element set in
+ *  localStorage, then CelesTrak GP and Supplemental GP when the operator
+ *  asks. Nothing here invents an element set.
  *
  *  Per /plan-eng-review 2026-05-22:
  *    A1: never block map render on CelesTrak; fetch lazily on selection
@@ -23,11 +26,12 @@ export interface TLEPair {
   name: string;
 }
 
-/** How a satellite's TLE is resolved. Discriminated union (Q1) — clearer
- *  at the call site than a sentinel `norad_id: 0`. */
+/** How a satellite's TLE is resolved. `published` is a row of the
+ *  publisher's `tracked.json`, which also carries how to look it up. */
 export type SatelliteResolution =
   | { kind: 'catnr'; catnr: number }
-  | { kind: 'name'; query: string };
+  | { kind: 'name'; query: string }
+  | { kind: 'published'; id: string };
 
 export interface SatelliteMeta {
   /** Stable display name in the picker (e.g., "Tiangong (CSS)"). */
@@ -78,27 +82,52 @@ export const CURATED_SATELLITES: SatelliteMeta[] = [
     short_label: 'SS',
     track_color: '#ff5c5c',
     icon: '🚀',
-    resolution: { kind: 'name', query: 'STARSHIP' },
+    resolution: { kind: 'published', id: 'starship' },
   },
 ];
 
 /** Stable key for a SatelliteMeta — used as the cache key + the picker
  *  selection key. CATNR resolutions get the integer; name resolutions
- *  get "name:<query>". */
+ *  get "name:<query>"; published objects get "tracked:<id>". */
 export function metaKey(meta: SatelliteMeta): string {
-  return meta.resolution.kind === 'catnr'
-    ? String(meta.resolution.catnr)
-    : `name:${meta.resolution.query}`;
+  const resolution = meta.resolution;
+  if (resolution.kind === 'catnr') return String(resolution.catnr);
+  if (resolution.kind === 'name') return `name:${resolution.query}`;
+  return `tracked:${resolution.id}`;
 }
 
-const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
-const CELESTRAK_BASE = 'https://celestrak.org/NORAD/elements/gp.php';
+const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const GP_URL = 'https://celestrak.org/NORAD/elements/gp.php';
+const SUPGP_URL = 'https://celestrak.org/NORAD/elements/supplemental/sup-gp.php';
 const FETCH_TIMEOUT_MS = 15_000;
+const HOUR_MS = 3_600_000;
+
+export type Feed = 'gp' | 'supgp';
+
+/** Why a lookup has no answer. `publisher` means the published artifact
+ *  reported a failed lookup and this browser did not ask CelesTrak itself. */
+export type LookupFailure = 'timeout' | 'network' | 'http' | 'unreadable' | 'publisher';
+
+/** The outcome of one lookup. `not_found` and `expired` are answers from a
+ *  source that replied; `failed` is a source that did not. */
+export type OrbitLookup =
+  | {
+      state: 'elements';
+      tle: TLEPair;
+      match_count: number;
+      origin: 'published' | Feed | 'cache';
+      stale: boolean;
+    }
+  | { state: 'not_found' }
+  | { state: 'expired' }
+  | { state: 'failed'; cause: LookupFailure };
+
+/** `published` reads the artifact and the last good cache only. `ask`
+ *  also queries CelesTrak, and is for a tap, never a timer. */
+export type LookupMode = 'published' | 'ask';
 
 interface CacheEntry {
   tle: TLEPair;
-  /** How many satellites the CelesTrak NAME= response contained when
-   *  this entry was cached. Surfaced in the UI when >1 (A4). */
   match_count?: number;
   fetchedAtMs: number;
 }
@@ -111,7 +140,9 @@ function readCache(meta: SatelliteMeta): CacheEntry | null {
   try {
     const raw = localStorage.getItem(cacheKey(meta));
     if (!raw) return null;
-    return JSON.parse(raw) as CacheEntry;
+    const entry = JSON.parse(raw) as CacheEntry;
+    if (typeof entry?.tle?.line1 !== 'string' || typeof entry.tle.line2 !== 'string') return null;
+    return entry;
   } catch {
     return null;
   }
@@ -121,159 +152,244 @@ function writeCache(meta: SatelliteMeta, entry: CacheEntry): void {
   try {
     localStorage.setItem(cacheKey(meta), JSON.stringify(entry));
   } catch {
-    /* quota exhausted or storage disabled — silently fall back to in-memory */
+    /* quota exhausted or storage disabled */
   }
 }
 
-/** Parse a CelesTrak FORMAT=TLE response. Supports both 2-line (just
- *  data lines) and 3-line (name header + 2 data lines) shapes.
- *
- *  When the response contains MULTIPLE satellites (NAME= search with
- *  N matches), returns the FIRST satellite plus a `match_count` so the
- *  caller can surface "1 of N matches" in the picker.
- *
- *  Returns null on parse failure. */
-export function parseCelestrakTLE(text: string): { tle: TLEPair; match_count: number } | null {
-  if (!text) return null;
+/** Every 2-line or 3-line element set in a CelesTrak FORMAT=TLE body. */
+export function parseElementSets(text: string): TLEPair[] {
   const lines = text
     .split(/\r?\n/)
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
-  if (lines.length < 2) return null;
-  // Count how many `1 ` lines appear — that's how many satellites are in the response.
-  let match_count = 0;
-  for (const ln of lines) if (ln.startsWith('1 ')) match_count++;
-  if (match_count === 0) return null;
-  // Find the first `1 ` line; the preceding line (if any and not starting
-  // with `1 ` or `2 `) is the name; the following line should start with `2 `.
-  for (let i = 0; i < lines.length; i++) {
-    if (!lines[i]!.startsWith('1 ')) continue;
+  const found: TLEPair[] = [];
+  for (let i = 0; i + 1 < lines.length; i++) {
     const line1 = lines[i]!;
-    const line2 = lines[i + 1];
-    if (!line2 || !line2.startsWith('2 ')) continue;
-    let name = 'UNKNOWN';
-    if (i > 0 && !lines[i - 1]!.startsWith('1 ') && !lines[i - 1]!.startsWith('2 ')) {
-      name = lines[i - 1]!;
-    }
-    return {
-      tle: { line1, line2, name },
-      match_count,
-    };
+    const line2 = lines[i + 1]!;
+    if (!line1.startsWith('1 ') || !line2.startsWith('2 ')) continue;
+    const before = i > 0 ? lines[i - 1]! : '';
+    const named = before !== '' && !before.startsWith('1 ') && !before.startsWith('2 ');
+    found.push({ line1, line2, name: named ? before : 'UNKNOWN' });
+    i += 1;
   }
-  return null;
+  return found;
 }
 
-async function fetchWithTimeout(url: string): Promise<Response> {
+/** The first element set of a body, with how many the body held (A4). */
+export function parseCelestrakTLE(text: string): { tle: TLEPair; match_count: number } | null {
+  const sets = parseElementSets(text ?? '');
+  const first = sets[0];
+  return first ? { tle: first, match_count: sets.length } : null;
+}
+
+/** COSPAR `2026-159A` and TLE `26159A` compare as the same designator. */
+export function canonicalIntldes(value: string): string {
+  const text = value.replace(/\s+/g, '').toUpperCase();
+  const cospar = /^(\d{4})-(\d{1,3})([A-Z]{1,3})$/.exec(text);
+  if (cospar) {
+    const year = String(Number(cospar[1]) % 100).padStart(2, '0');
+    return `${year}${cospar[2]!.padStart(3, '0')}${cospar[3]}`;
+  }
+  return text;
+}
+
+function matchesLookup(lookup: TrackedLookup, tle: TLEPair): boolean {
+  if (lookup.catnr !== undefined && Number(tle.line1.slice(2, 7)) === lookup.catnr) return true;
+  if (lookup.intldes && canonicalIntldes(tle.line1.slice(9, 17)) === canonicalIntldes(lookup.intldes)) {
+    return true;
+  }
+  const name = tle.name.replace(/\s+/g, ' ').trim();
+  return lookup.patterns.some((source) => {
+    try {
+      return new RegExp(source, 'i').test(name);
+    } catch {
+      return false;
+    }
+  });
+}
+
+type Query = { feed: Feed; url: string };
+
+function query(feed: Feed, param: string, value: string | number): Query {
+  const base = feed === 'supgp' ? SUPGP_URL : GP_URL;
+  return { feed, url: `${base}?${param}=${encodeURIComponent(String(value))}&FORMAT=TLE` };
+}
+
+/** The publisher's queries, in the publisher's order: Supplemental GP
+ *  before GP, for the catalog number, the designator, then each name. */
+export function lookupQueries(lookup: TrackedLookup): Query[] {
+  const out: Query[] = [];
+  const both = (param: string, value: string | number): void => {
+    out.push(query('supgp', param, value), query('gp', param, value));
+  };
+  if (lookup.catnr !== undefined) both('CATNR', lookup.catnr);
+  if (lookup.intldes) both('INTDES', lookup.intldes);
+  for (const name of lookup.names) both('NAME', name);
+  return out;
+}
+
+type Reply =
+  | { kind: 'sets'; feed: Feed; sets: TLEPair[] }
+  | { kind: 'empty' }
+  | { kind: 'error'; cause: Exclude<LookupFailure, 'publisher'> };
+
+async function ask({ feed, url }: Query): Promise<Reply> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    return await fetch(url, { signal: controller.signal });
+    const resp = await fetch(url, { signal: controller.signal });
+    if (resp.status === 404) return { kind: 'empty' };
+    if (!resp.ok) return { kind: 'error', cause: 'http' };
+    const body = await resp.text();
+    const lowered = body.toLowerCase();
+    if (body.trim() === '' || lowered.includes('no gp data found') || lowered.includes('no supgp data found')) {
+      return { kind: 'empty' };
+    }
+    const sets = parseElementSets(body);
+    return sets.length > 0 ? { kind: 'sets', feed, sets } : { kind: 'error', cause: 'unreadable' };
+  } catch {
+    return { kind: 'error', cause: controller.signal.aborted ? 'timeout' : 'network' };
   } finally {
     clearTimeout(timer);
   }
 }
 
-/** Resolve TLE for a curated SatelliteMeta. Uses localStorage cache
- *  (6h TTL) — returns cached entry if fresh, else fetches from
- *  CelesTrak. On network/parse failure with no cache, returns null.
- *  On network failure WITH cache (even stale), returns the stale entry
- *  so the operator's last-known orbit still renders.
- *
- *  Returned object includes `match_count` so the picker UI can surface
- *  ambiguity when a name-search returned multiple satellites (A4). */
-export async function fetchSatelliteTLE(
+const CAUSE_ORDER: readonly Exclude<LookupFailure, 'publisher'>[] = ['timeout', 'network', 'http', 'unreadable'];
+
+function worstCause(replies: readonly Reply[]): Exclude<LookupFailure, 'publisher'> | null {
+  const causes = replies.flatMap((reply) => (reply.kind === 'error' ? [reply.cause] : []));
+  return CAUSE_ORDER.find((cause) => causes.includes(cause)) ?? null;
+}
+
+function ageHours(tle: TLEPair, nowMs: number): number {
+  const epoch = tleEpochMs(tle);
+  return epoch === null ? Number.POSITIVE_INFINITY : (nowMs - epoch) / HOUR_MS;
+}
+
+function fromCache(entry: CacheEntry, stale: boolean): OrbitLookup {
+  return { state: 'elements', tle: entry.tle, match_count: entry.match_count ?? 1, origin: 'cache', stale };
+}
+
+function keep(meta: SatelliteMeta, tle: TLEPair, matchCount: number, nowMs: number): void {
+  writeCache(meta, { tle, match_count: matchCount, fetchedAtMs: nowMs });
+  if (meta.resolution.kind === 'catnr' && meta.resolution.catnr === 25544) rememberIssTle(tle);
+}
+
+function publishedRow(meta: SatelliteMeta, published: readonly TrackedRecord[]): TrackedRecord | undefined {
+  const resolution = meta.resolution;
+  if (resolution.kind === 'published') return published.find((record) => record.id === resolution.id);
+  if (resolution.kind === 'catnr') {
+    return published.find((record) => record.state === 'elements' && record.norad === resolution.catnr);
+  }
+  return undefined;
+}
+
+async function resolvePublished(
   meta: SatelliteMeta,
-): Promise<{ tle: TLEPair; match_count: number; stale: boolean } | null> {
-  const now = Date.now();
+  row: TrackedRecord | undefined,
+  mode: LookupMode,
+  nowMs: number,
+): Promise<OrbitLookup> {
+  const lookup = row?.lookup;
   const cached = readCache(meta);
-  // Fresh cache hit.
-  if (cached && (now - cached.fetchedAtMs) < CACHE_TTL_MS) {
-    return {
-      tle: cached.tle,
-      match_count: cached.match_count ?? 1,
-      stale: false,
-    };
-  }
+  const lastGood = cached && lookup && ageHours(cached.tle, nowMs) <= lookup.max_age_hours ? cached : null;
+  const publisherSays: OrbitLookup =
+    !row || row.state === 'elements' || row.reason === 'lookup_failed'
+      ? { state: 'failed', cause: 'publisher' }
+      : row.reason === 'aged_out' ? { state: 'expired' } : { state: 'not_found' };
 
-  // Cache miss or expired — try CelesTrak.
-  const url = meta.resolution.kind === 'catnr'
-    ? `${CELESTRAK_BASE}?CATNR=${meta.resolution.catnr}&FORMAT=TLE`
-    : `${CELESTRAK_BASE}?NAME=${encodeURIComponent(meta.resolution.query)}&FORMAT=TLE`;
+  if (mode === 'published' || !lookup) return lastGood ? fromCache(lastGood, true) : publisherSays;
 
-  let resp: Response;
-  try {
-    resp = await fetchWithTimeout(url);
-  } catch {
-    // Network error — fall back to stale cache if any.
-    if (cached) return { tle: cached.tle, match_count: cached.match_count ?? 1, stale: true };
-    return null;
+  const replies = await Promise.all(lookupQueries(lookup).map(ask));
+  const candidates = replies.flatMap((reply) =>
+    reply.kind === 'sets'
+      ? reply.sets.filter((tle) => matchesLookup(lookup, tle)).map((tle) => ({ tle, feed: reply.feed }))
+      : [],
+  );
+  const usable = candidates.filter(({ tle }) => ageHours(tle, nowMs) <= lookup.max_age_hours);
+  if (usable.length > 0) {
+    const best = usable.reduce((a, b) => {
+      const ea = tleEpochMs(a.tle) ?? 0;
+      const eb = tleEpochMs(b.tle) ?? 0;
+      if (eb !== ea) return eb > ea ? b : a;
+      return b.feed === 'supgp' && a.feed !== 'supgp' ? b : a;
+    });
+    if (lastGood && (tleEpochMs(lastGood.tle) ?? 0) > (tleEpochMs(best.tle) ?? 0)) return fromCache(lastGood, true);
+    keep(meta, best.tle, usable.length, nowMs);
+    return { state: 'elements', tle: best.tle, match_count: usable.length, origin: best.feed, stale: false };
   }
-  if (!resp.ok) {
-    if (cached) return { tle: cached.tle, match_count: cached.match_count ?? 1, stale: true };
-    return null;
-  }
-  let body: string;
-  try {
-    body = await resp.text();
-  } catch {
-    if (cached) return { tle: cached.tle, match_count: cached.match_count ?? 1, stale: true };
-    return null;
-  }
-  const parsed = parseCelestrakTLE(body);
-  if (!parsed) {
-    // CelesTrak responded but parse failed (corrupt body, no results).
-    // For name searches that return zero results, the body may be empty
-    // or contain only an HTML error page. Fall back to stale cache.
-    if (cached) return { tle: cached.tle, match_count: cached.match_count ?? 1, stale: true };
-    return null;
-  }
-  const entry: CacheEntry = {
-    tle: parsed.tle,
-    match_count: parsed.match_count,
-    fetchedAtMs: now,
-  };
-  writeCache(meta, entry);
-  if (meta.resolution.kind === 'catnr' && meta.resolution.catnr === 25544) {
-    rememberIssTle(parsed.tle);
-  }
-  return { tle: parsed.tle, match_count: parsed.match_count, stale: false };
+  if (lastGood) return fromCache(lastGood, true);
+  if (candidates.length > 0) return { state: 'expired' };
+  const cause = worstCause(replies);
+  if (cause === null) return { state: 'not_found' };
+  return publisherSays.state === 'failed' ? { state: 'failed', cause } : publisherSays;
 }
 
-/** Resolve a custom NORAD CATNR (operator-entered). Returns null on
- *  invalid input or network failure. */
-export async function fetchTLEByCATNR(
-  catnr: number,
-): Promise<{ tle: TLEPair; match_count: number } | null> {
-  if (!Number.isFinite(catnr) || catnr <= 0) return null;
-  const meta: SatelliteMeta = {
-    name: `NORAD ${catnr}`,
-    short_label: `#${catnr}`,
-    track_color: '#888',
-    icon: '🛰',
-    resolution: { kind: 'catnr', catnr },
-  };
-  const result = await fetchSatelliteTLE(meta);
-  if (!result) return null;
-  return { tle: result.tle, match_count: result.match_count };
+async function resolveDirect(meta: SatelliteMeta, param: string, value: string | number, nowMs: number): Promise<OrbitLookup> {
+  const cached = readCache(meta);
+  if (cached && nowMs - cached.fetchedAtMs < CACHE_TTL_MS) return fromCache(cached, false);
+  const reply = await ask(query('gp', param, value));
+  if (reply.kind === 'sets') {
+    const tle = reply.sets[0]!;
+    keep(meta, tle, reply.sets.length, nowMs);
+    return { state: 'elements', tle, match_count: reply.sets.length, origin: 'gp', stale: false };
+  }
+  if (cached) return fromCache(cached, true);
+  return reply.kind === 'empty' ? { state: 'not_found' } : { state: 'failed', cause: reply.cause };
 }
 
-/** Resolve a custom name fragment (operator-entered). Returns null on
- *  no results / network failure. */
-export async function fetchTLEByName(
-  name: string,
-): Promise<{ tle: TLEPair; match_count: number } | null> {
-  const q = name.trim();
-  if (!q) return null;
-  const meta: SatelliteMeta = {
-    name: `Search: ${q}`,
-    short_label: q.slice(0, 3),
-    track_color: '#888',
-    icon: '🔍',
-    resolution: { kind: 'name', query: q },
-  };
-  const result = await fetchSatelliteTLE(meta);
-  if (!result) return null;
-  return { tle: result.tle, match_count: result.match_count };
+/** Find the orbit of one satellite. A row of `tracked.json` with elements
+ *  wins. A published object otherwise falls back to its last good element
+ *  set while that is young enough, and in `ask` mode to the publisher's own
+ *  CelesTrak queries. A catalog number or a name the publisher does not
+ *  carry is asked of CelesTrak GP, with the 6 h cache in front. */
+export async function resolveOrbit(
+  meta: SatelliteMeta,
+  published: readonly TrackedRecord[],
+  mode: LookupMode,
+  nowMs: number = Date.now(),
+): Promise<OrbitLookup> {
+  const row = publishedRow(meta, published);
+  if (row?.state === 'elements') {
+    const tle: TLEPair = { line1: row.line1, line2: row.line2, name: row.name };
+    keep(meta, tle, 1, nowMs);
+    return { state: 'elements', tle, match_count: 1, origin: 'published', stale: row.from_cache === true };
+  }
+  const resolution = meta.resolution;
+  if (resolution.kind === 'published') return resolvePublished(meta, row, mode, nowMs);
+  if (resolution.kind === 'catnr') {
+    if (!Number.isInteger(resolution.catnr) || resolution.catnr <= 0) return { state: 'not_found' };
+    return resolveDirect(meta, 'CATNR', resolution.catnr, nowMs);
+  }
+  if (resolution.query.trim() === '') return { state: 'not_found' };
+  return resolveDirect(meta, 'NAME', resolution.query, nowMs);
+}
+
+const FAILURE_TEXT: Record<LookupFailure, string> = {
+  timeout: 'CelesTrak did not answer within 15 s',
+  network: 'CelesTrak could not be reached from this browser',
+  http: 'CelesTrak answered with an error',
+  unreadable: 'CelesTrak sent a reply that is not an element set',
+  publisher: 'the publisher could not reach CelesTrak',
+};
+
+/** One sentence for the picker. A failed lookup never reads as a miss. */
+export function lookupMessage(meta: SatelliteMeta, lookup: OrbitLookup): string {
+  const resolution = meta.resolution;
+  if (lookup.state === 'elements') {
+    if (lookup.origin === 'cache' && lookup.stale) return `${meta.name}: drawing the last good orbit, ${lookup.tle.name}`;
+    if (resolution.kind === 'published') return `${meta.name}: drawing ${lookup.tle.name}`;
+    return 'Tracking added';
+  }
+  if (lookup.state === 'failed') {
+    return `${meta.name}: orbit lookup failed, ${FAILURE_TEXT[lookup.cause]}. No orbit is drawn.`;
+  }
+  if (lookup.state === 'expired') return `${meta.name}: the last public orbit is too old to draw.`;
+  if (resolution.kind === 'published') {
+    return `${meta.name}: no public orbit yet. CelesTrak GP and Supplemental GP list no element set for it.`;
+  }
+  if (resolution.kind === 'name') return `No satellite found for "${resolution.query}"`;
+  return `NORAD ${resolution.catnr} is not in CelesTrak GP.`;
 }
 
 /** Test-only helper — clear all cached TLEs from localStorage. */

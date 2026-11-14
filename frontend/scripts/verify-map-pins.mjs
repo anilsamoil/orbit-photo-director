@@ -15,7 +15,8 @@ const CATALOG = 'src/map/map-core/catalog.ts';
 const CAMERA = 'src/map/map-core/camera.ts';
 const PIN_DROP = 'src/map/features/pin-drop/index.ts';
 const SATELLITES = 'src/map/features/satellites/index.ts';
-const TRACKED = 'src/map/features/tracked/index.ts';
+const SATELLITE_LAYERS = 'src/map/features/satellites/layers.ts';
+const ORBIT_LOOKUP = 'src/satellites.ts';
 const TARGETS = 'src/map/features/targets/index.ts';
 const LABELS = 'src/map/features/labels/index.ts';
 const NIGHT_LIGHTS = 'src/map/features/night-lights/layers.ts';
@@ -36,7 +37,10 @@ const PIN_FILES = [
   'test/map-pin-drop-contract.test.ts',
   'test/map-satellites-contract.test.ts',
   'test/map-ground-track-contract.test.ts',
-  'src/map/features/tracked/tracked.test.ts',
+  'src/map/features/satellites/satellites.test.ts',
+  'test/satellites.test.ts',
+  'test/tracked.test.ts',
+  'test/orbit-sight.test.ts',
   'src/map/features/lightning/lightning.test.ts',
   'src/map/features/targets/targets.test.ts',
   'src/map/features/launch-corridor/launch-corridor.test.ts',
@@ -177,22 +181,124 @@ const MUTATIONS = [
     replace: '      const atMs = core.clock.now();',
   },
   {
-    contract: 'a tracked vehicle orbit starts at the view instant, not the wall clock',
-    file: TRACKED,
-    find: '  const fromMs = core.clock.viewMs();',
-    replace: '  const fromMs = core.clock.now();',
+    contract: 'an orbit is sampled over that satellite\'s own period, not the ISS period',
+    file: SATELLITE_LAYERS,
+    find: '  for (let t = 0; t <= period; t += SAMPLE_SECONDS) {',
+    replace: '  for (let t = 0; t <= 5568; t += SAMPLE_SECONDS) {',
   },
   {
-    contract: 'a tracked vehicle marker sits at its sub-point for the view instant',
-    file: TRACKED,
-    find: '  const atMs = core.clock.viewMs();',
-    replace: '  const atMs = core.clock.now();',
+    contract: 'a published vehicle is drawn on the render that carries it in tracked.json',
+    file: MAP,
+    find: '  applyPublishedOrbits(trackedRecords);',
+    replace: '',
+  },
+  {
+    contract: 'a CelesTrak request that fails is a failed lookup, not a miss',
+    file: ORBIT_LOOKUP,
+    find: "  return reply.kind === 'empty' ? { state: 'not_found' } : { state: 'failed', cause: reply.cause };",
+    replace: "  return { state: 'not_found' };",
+  },
+  {
+    contract: 'one failed feed among empty ones is a failed lookup for a published vehicle',
+    file: ORBIT_LOOKUP,
+    find: "  if (cause === null) return { state: 'not_found' };\n  return publisherSays.state === 'failed' ? { state: 'failed', cause } : publisherSays;",
+    replace: "  return publisherSays.state === 'failed' ? { state: 'not_found' } : publisherSays;",
+  },
+  {
+    contract: 'a timeout is told apart from an unreachable host',
+    file: ORBIT_LOOKUP,
+    find: "    return { kind: 'error', cause: controller.signal.aborted ? 'timeout' : 'network' };",
+    replace: "    return { kind: 'error', cause: 'network' };",
+  },
+  {
+    contract: 'Starship is looked up in Supplemental GP as well as GP',
+    file: ORBIT_LOOKUP,
+    find: "    out.push(query('supgp', param, value), query('gp', param, value));",
+    replace: "    out.push(query('gp', param, value));",
+  },
+  {
+    contract: 'only an element set whose name, number or designator matches is taken for the vehicle',
+    file: ORBIT_LOOKUP,
+    find: '      ? reply.sets.filter((tle) => matchesLookup(lookup, tle)).map((tle) => ({ tle, feed: reply.feed }))',
+    replace: '      ? reply.sets.map((tle) => ({ tle, feed: reply.feed }))',
+  },
+  {
+    contract: 'an element set older than the publisher limit is never drawn',
+    file: ORBIT_LOOKUP,
+    find: '  const usable = candidates.filter(({ tle }) => ageHours(tle, nowMs) <= lookup.max_age_hours);',
+    replace: '  const usable = candidates;',
+  },
+  {
+    contract: 'the last good element set is dropped once it passes the publisher limit',
+    file: ORBIT_LOOKUP,
+    find: '  const lastGood = cached && lookup && ageHours(cached.tle, nowMs) <= lookup.max_age_hours ? cached : null;',
+    replace: '  const lastGood = cached && lookup ? cached : null;',
+  },
+  {
+    contract: 'the map never asks CelesTrak for a published vehicle on its own',
+    file: ORBIT_LOOKUP,
+    find: "  if (mode === 'published' || !lookup) return lastGood ? fromCache(lastGood, true) : publisherSays;",
+    replace: '  if (!lookup) return lastGood ? fromCache(lastGood, true) : publisherSays;',
+  },
+  {
+    contract: 'the newest element set wins',
+    file: ORBIT_LOOKUP,
+    find: '      if (eb !== ea) return eb > ea ? b : a;',
+    replace: '      if (eb !== ea) return a;',
+  },
+  {
+    contract: 'an unread tracked.json is a failed lookup, never a confirmed absence',
+    file: 'src/tracked.ts',
+    find: "    reason: 'lookup_failed',\n    lookup: {",
+    replace: "    reason: 'no_public_orbit',\n    lookup: {",
+  },
+  {
+    contract: 'an answer to an earlier lookup never replaces a later one',
+    file: SATELLITES,
+    find: '      if (wanted.get(key) !== sat || sat.asked !== turn) return null;',
+    replace: '      if (wanted.get(key) !== sat) return null;',
+  },
+  {
+    contract: 'a wanted satellite with no element set draws nothing',
+    file: SATELLITES,
+    find: '      for (const [key, sat] of wanted) if (!elementsOf(sat)) erase(key, sat);',
+    replace: '',
+  },
+  {
+    contract: 'an unchecked published vehicle stays off through later publisher runs',
+    file: SATELLITES,
+    find: '      if (isPublished(sat.meta)) setPublishedHidden(key, true);',
+    replace: '',
+  },
+  {
+    contract: 'a typed satellite that cannot be looked up is not kept',
+    file: 'src/map/features/satellites/picker.ts',
+    find: '    else port.remove(metaKey(meta));',
+    replace: '',
+  },
+  {
+    contract: 'a checked row keeps its place in the list',
+    file: 'src/map/features/satellites/picker.ts',
+    find: '  return [...curated, ...port.metas().filter((meta) => !curatedKeys.has(metaKey(meta)))];',
+    replace: '  return [...curated, ...port.metas()];',
+  },
+  {
+    contract: 'the picker says why a wanted satellite has no orbit',
+    file: 'src/map/features/satellites/picker.ts',
+    find: '    if (note) notes.appendChild(note);',
+    replace: '',
+  },
+  {
+    contract: 'line of sight ends where the Earth is in the way',
+    file: 'src/orbit-sight.ts',
+    find: '  return nearest >= EARTH_RADIUS_KM ? Math.sqrt(dd) : null;',
+    replace: '  return nearest >= 0 ? Math.sqrt(dd) : null;',
   },
   {
     contract: 'unchecking a satellite forgets it for the next visit',
     file: SATELLITES,
-    find: '      tracked.delete(key);\n      publish();\n      persistSelectedKeys(tracked.keys());',
-    replace: '      tracked.delete(key);\n      publish();',
+    find: '      publish();\n      persist();\n    };\n\n    const port',
+    replace: '      publish();\n    };\n\n    const port',
   },
   {
     contract: 'a crew roster site popup has no Edit button',

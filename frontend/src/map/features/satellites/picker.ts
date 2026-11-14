@@ -1,13 +1,25 @@
 import { setMapLaunchMode } from '../../../map-launch-mode';
-import { CURATED_SATELLITES, metaKey, type SatelliteMeta } from '../../../satellites';
-import { metaForQuery } from './selection';
+import {
+  CURATED_SATELLITES,
+  lookupMessage,
+  metaKey,
+  type OrbitLookup,
+  type SatelliteMeta,
+} from '../../../satellites';
+import { isPublished, metaForQuery } from './selection';
 
 const ISS_KEY = '25544';
 
 export type AddResult = { ok: boolean; message: string };
 
+/** What the picker shows for a wanted satellite. `lookup` is null while
+ *  the first lookup runs. `sight` is the ISS line-of-sight line. */
+export type PickerRow = { lookup: OrbitLookup | null; sight: string | null };
+
 export interface PickerPort {
-  tracked(key: string): { stale: boolean; matchCount: number } | undefined;
+  /** Published vehicles and typed satellites, beyond the curated list. */
+  metas(): SatelliteMeta[];
+  row(key: string): PickerRow | undefined;
   add(meta: SatelliteMeta): Promise<AddResult>;
   remove(key: string): void;
   resize(): void;
@@ -28,27 +40,64 @@ function badge(className: string, text: string): HTMLSpanElement {
   return span;
 }
 
+/** The curated rows in their fixed order, then published vehicles and
+ *  typed satellites. A row never moves when it is checked. */
+function listed(port: PickerPort): SatelliteMeta[] {
+  const curated = CURATED_SATELLITES.filter((meta) => metaKey(meta) !== ISS_KEY && !isPublished(meta));
+  const curatedKeys = new Set(curated.map(metaKey));
+  return [...curated, ...port.metas().filter((meta) => !curatedKeys.has(metaKey(meta)))];
+}
+
+/** One line per wanted satellite: why nothing is drawn, or when the ISS
+ *  has a line of sight to what is drawn. */
+function rowNote(meta: SatelliteMeta, row: PickerRow): HTMLElement | null {
+  if (!row.lookup) return null;
+  const drawn = row.lookup.state === 'elements';
+  const text = drawn ? row.sight && `${meta.name}: ${row.sight}` : lookupMessage(meta, row.lookup);
+  if (!text) return null;
+  const note = document.createElement('div');
+  note.className = drawn ? 'sat-row-note' : 'sat-row-note error';
+  note.textContent = text;
+  return note;
+}
+
+/** The notes sit under the list, not between its rows, so a note never
+ *  moves a row the operator is about to tap. */
+function notesBlock(list: HTMLElement): HTMLElement {
+  const existing = byId('satellite-picker-notes');
+  if (existing) return existing;
+  const notes = document.createElement('div');
+  notes.id = 'satellite-picker-notes';
+  notes.className = 'satellite-picker-notes';
+  notes.setAttribute('role', 'status');
+  list.insertAdjacentElement('afterend', notes);
+  return notes;
+}
+
 /** Rebuilt on open and on every selection change, so checkboxes and
- *  badges never disagree with what is tracked. */
+ *  badges never disagree with what is wanted. A checked box means wanted,
+ *  whether or not an orbit could be drawn. */
 export function renderPickerList(port: PickerPort): void {
   const list = byId('satellite-picker-list');
   if (!list) return;
   list.textContent = '';
-  for (const meta of CURATED_SATELLITES) {
+  const notes = notesBlock(list);
+  notes.textContent = '';
+  for (const meta of listed(port)) {
     const key = metaKey(meta);
-    if (key === ISS_KEY) continue;
-    const state = port.tracked(key);
+    const row = port.row(key);
     const label = document.createElement('label');
     const box = document.createElement('input');
     box.type = 'checkbox';
-    box.checked = !!state;
+    box.checked = !!row;
     box.addEventListener('change', async () => {
       if (box.checked) {
         const status = byId('satellite-picker-status');
-        if (status) status.textContent = `Fetching ${meta.name}…`;
-        const result = await port.add(meta);
-        showStatus(status, result);
-        if (!result.ok) box.checked = false;
+        if (status) {
+          status.textContent = `Looking up ${meta.name}…`;
+          status.className = 'satellite-picker-status';
+        }
+        showStatus(status, await port.add(meta));
       } else {
         port.remove(key);
       }
@@ -58,9 +107,16 @@ export function renderPickerList(port: PickerPort): void {
     const name = document.createElement('span');
     name.textContent = meta.name;
     label.append(box, icon, name);
-    if (state?.stale) label.appendChild(badge('sat-stale', 'stale TLE'));
-    else if (state && state.matchCount > 1) label.appendChild(badge('sat-multi-match', `1 of ${state.matchCount}`));
+    const lookup = row?.lookup;
+    if (lookup?.state === 'elements') {
+      if (lookup.stale) label.appendChild(badge('sat-stale', isPublished(meta) ? 'last good' : 'stale TLE'));
+      else if (lookup.match_count > 1) label.appendChild(badge('sat-multi-match', `1 of ${lookup.match_count}`));
+    } else if (lookup) {
+      label.appendChild(badge('sat-stale', 'no orbit'));
+    }
     list.appendChild(label);
+    const note = row ? rowNote(meta, row) : null;
+    if (note) notes.appendChild(note);
   }
   requestAnimationFrame(() => port.resize());
 }
@@ -107,12 +163,12 @@ export function bindPicker(port: PickerPort): void {
       status.textContent = 'Searching…';
       status.className = 'satellite-picker-status';
     }
-    const result = await port.add(metaForQuery(query));
+    const meta = metaForQuery(query);
+    const result = await port.add(meta);
     showStatus(status, result);
-    if (result.ok) {
-      input.value = '';
-      renderPickerList(port);
-    }
+    if (result.ok) input.value = '';
+    else port.remove(metaKey(meta));
+    renderPickerList(port);
   };
   addButton.addEventListener('click', () => { void addTyped(); });
   input.addEventListener('keydown', (e) => {

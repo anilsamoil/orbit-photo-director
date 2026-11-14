@@ -311,10 +311,11 @@ const HELP_SECTIONS: HelpSection[] = [
         icon: '🚀',
         label: 'Starship',
         text:
-          'Starship is not a legend row. When a public orbit is available, ' +
-          'the map draws a red diamond labeled Starship and a dotted track. ' +
-          'The Starship checkbox under the satellite button is a separate ' +
-          'search.',
+          'Starship is not a legend row. It is the Starship checkbox under ' +
+          'the satellite button, and it starts checked. When a public ' +
+          'orbit is published, the map draws a red diamond labeled Starship ' +
+          'and a dotted track of one orbit. When none is, the row says ' +
+          'whether no orbit is published yet or the lookup failed.',
       },
     ],
   },

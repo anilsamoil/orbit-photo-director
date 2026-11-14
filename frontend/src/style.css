@@ -1864,6 +1864,16 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   font-size: 0.7rem;
   margin-left: auto;
 }
+.satellite-picker-notes .sat-row-note {
+  margin-top: 0.3rem;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.satellite-picker-notes .sat-row-note.error {
+  color: #ff7070;
+}
 .satellite-picker-custom {
   margin-top: 0.5rem;
   padding-top: 0.5rem;

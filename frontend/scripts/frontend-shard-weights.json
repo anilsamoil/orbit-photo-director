@@ -13,7 +13,6 @@
   "src/map/features/targets/targets.test.ts": 0.567,
   "src/map/features/terminator/terminator.test.ts": 0.465,
   "src/map/features/time-scrub/time-scrub.test.ts": 0.436,
-  "src/map/features/tracked/tracked.test.ts": 0.496,
   "test/access-reauth.test.ts": 0.424,
   "test/account-session.test.ts": 1.435,
   "test/account-storage.test.ts": 0.456,
@@ -193,5 +192,6 @@
   "test/viirs-alpha.test.ts": 0.476,
   "test/webkit-floor.test.ts": 1.864,
   "test/webkit-gate.test.ts": 0.792,
-  "test/wx.test.ts": 0.441
+  "test/wx.test.ts": 0.441,
+  "test/orbit-sight.test.ts": 0.4
 }

@@ -1,11 +1,22 @@
 import type { Manifest } from './types';
 import { fetchArtifact } from './manifest';
 
+/** How the publisher found this object, so a browser can repeat the same
+ *  lookup against the same two feeds. */
+export type TrackedLookup = {
+  readonly names: readonly string[];
+  readonly patterns: readonly string[];
+  readonly max_age_hours: number;
+  readonly catnr?: number;
+  readonly intldes?: string;
+};
+
 export type TrackedElements = {
   readonly state: 'elements';
   readonly id: string;
   readonly label: string;
   readonly color: string;
+  readonly lookup: TrackedLookup;
   readonly source: 'gp' | 'supgp';
   readonly name: string;
   readonly norad: number;
@@ -22,6 +33,7 @@ export type TrackedUnavailable = {
   readonly id: string;
   readonly label: string;
   readonly color: string;
+  readonly lookup: TrackedLookup;
   readonly reason: 'no_public_orbit' | 'aged_out' | 'lookup_failed';
 };
 
@@ -31,24 +43,45 @@ const REASONS = ['no_public_orbit', 'aged_out', 'lookup_failed'] as const;
 const COLOR = /^#[0-9a-fA-F]{6}$/;
 const ID = /^[a-z0-9-]+$/;
 
+/** What the map assumes when `tracked.json` cannot be read. An unread
+ *  artifact is a failed lookup, never a confirmed absence. */
 export const UNPUBLISHED_TRACKED: readonly TrackedRecord[] = [
   {
     id: 'starship',
     label: 'Starship',
     color: '#ff5c5c',
     state: 'unavailable',
-    reason: 'no_public_orbit',
+    reason: 'lookup_failed',
+    lookup: {
+      names: ['STARSHIP', 'SHIP'],
+      patterns: ['^STARSHIP(?:[\\s-]|$)', '^SHIP[\\s-]+\\d+\\b'],
+      max_age_hours: 12,
+    },
   },
 ];
 
-export function statusText(record: TrackedRecord): string {
-  if (record.state === 'unavailable') {
-    if (record.reason === 'aged_out') return `${record.label}: public orbit expired`;
-    if (record.reason === 'lookup_failed') return `${record.label}: orbit lookup failed`;
-    return `${record.label}: no public orbit yet`;
-  }
-  const cached = record.from_cache ? ' (last good)' : '';
-  return `${record.label}: ${record.name}${cached}`;
+const NO_LOOKUP: TrackedLookup = { names: [], patterns: [], max_age_hours: 12 };
+
+function isStrings(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+/** A row from a publisher that predates `lookup` keeps the built-in rules
+ *  for its id. */
+function parseLookup(id: string, raw: unknown): TrackedLookup {
+  const builtIn = UNPUBLISHED_TRACKED.find((record) => record.id === id)?.lookup ?? NO_LOOKUP;
+  if (!raw || typeof raw !== 'object') return builtIn;
+  const row = raw as Record<string, unknown>;
+  if (!isStrings(row.names) || !isStrings(row.patterns)) return builtIn;
+  if (typeof row.max_age_hours !== 'number' || !(row.max_age_hours > 0)) return builtIn;
+  const lookup: { -readonly [K in keyof TrackedLookup]: TrackedLookup[K] } = {
+    names: row.names,
+    patterns: row.patterns,
+    max_age_hours: row.max_age_hours,
+  };
+  if (typeof row.catnr === 'number' && Number.isInteger(row.catnr) && row.catnr > 0) lookup.catnr = row.catnr;
+  if (typeof row.intldes === 'string' && row.intldes.length > 0) lookup.intldes = row.intldes;
+  return lookup;
 }
 
 /** Mean motion is TLE line 2 columns 53-63, in revolutions per day. */
@@ -91,6 +124,7 @@ function parseOne(item: unknown): TrackedRecord | null {
   if (typeof id !== 'string' || !ID.test(id)) return null;
   if (typeof label !== 'string' || label.length === 0) return null;
   const color = typeof row.color === 'string' && COLOR.test(row.color) ? row.color : '#ff5c5c';
+  const lookup = parseLookup(id, row.lookup);
   if (row.state === 'unavailable') {
     if (typeof row.reason !== 'string' || !(REASONS as readonly string[]).includes(row.reason)) {
       return null;
@@ -100,6 +134,7 @@ function parseOne(item: unknown): TrackedRecord | null {
       id,
       label,
       color,
+      lookup,
       reason: row.reason as TrackedUnavailable['reason'],
     };
   }
@@ -116,6 +151,7 @@ function parseOne(item: unknown): TrackedRecord | null {
     id,
     label,
     color,
+    lookup,
     source: row.source,
     name: row.name,
     norad: row.norad,

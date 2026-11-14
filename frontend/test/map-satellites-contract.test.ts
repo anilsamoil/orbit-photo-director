@@ -166,9 +166,11 @@ describe('the picker', () => {
       '🇨🇳Tiangong (CSS)',
       '🔭Hubble (HST)',
       '🪐X-37B',
-      '🚀Starship',
+      '🚀Starshipno orbit',
     ]);
-    expect(rows().map((row) => row.querySelector('input')!.checked)).toEqual([false, false, false, false]);
+    expect(rows().map((row) => row.querySelector('input')!.checked)).toEqual([false, false, false, true]);
+    expect(el('satellite-picker-notes').textContent)
+      .toBe('Starship: orbit lookup failed, the publisher could not reach CelesTrak. No orbit is drawn.');
     pickerButton().click();
     expect(panel().hidden).toBe(true);
     expect(pickerButton().classList.contains('active')).toBe(false);
@@ -227,7 +229,7 @@ describe('tracking a satellite', () => {
     expect(lons(east!)).toEqual(lons(home!).map((lon) => lon + 360));
     expect(lons(west!)).toEqual(lons(home!).map((lon) => lon - 360));
     const samples = features.filter((_, i) => i % 3 === 0).reduce((n, f) => n + (f.geometry as GeoJSON.LineString).coordinates.length, 0);
-    expect(samples).toBe(Math.floor(5568 / 30) + 1);
+    expect(samples).toBe(Math.floor(86_400 / 15.6 / 30) + 1);
     expect(home!.geometry.coordinates[1]).toEqual(subPointAt(TIANGONG, NOW + 30_000));
   });
 
@@ -290,16 +292,68 @@ describe('tracking a satellite', () => {
     expect(rowFor('Tiangong').querySelector('.sat-stale')?.textContent).toBe('stale TLE');
   });
 
-  it('a lookup that finds nothing reports it and leaves the box unchecked', async () => {
+  it('a typed lookup that finds nothing reports the miss and tracks nothing', async () => {
     await typeAndAdd('99999');
-    expect(status().textContent).toBe("Couldn't fetch TLE for NORAD 99999");
+    expect(status().textContent).toBe('NORAD 99999 is not in CelesTrak GP.');
     expect(status().className).toBe('satellite-picker-status error');
     expect(el<HTMLInputElement>('satellite-picker-input').value).toBe('99999');
 
     await typeAndAdd('nosuchbird');
     expect(status().textContent).toBe('No satellite found for "NOSUCHBIRD"');
-    expect(persisted()).toBeNull();
+    expect(persisted()).toBe('[]');
     expect(renderedMap().layerOrder.some((id) => id.startsWith('sat-track-layer-'))).toBe(false);
+  });
+
+  it('a typed lookup that CelesTrak never answers is reported as a failure, not as a miss', async () => {
+    await typeAndAdd('unreachable');
+
+    expect(status().textContent)
+      .toBe('UNREACHABLE: orbit lookup failed, CelesTrak could not be reached from this browser. No orbit is drawn.');
+    expect(status().className).toBe('satellite-picker-status error');
+  });
+
+  it('checking a curated satellite CelesTrak cannot serve keeps the box checked and says why beside it', async () => {
+    await check('Hubble');
+
+    expect(checkboxFor('Hubble').checked).toBe(true);
+    expect(el('satellite-picker-notes').textContent)
+      .toContain('Hubble (HST): orbit lookup failed, CelesTrak could not be reached from this browser. No orbit is drawn.');
+    expect(persisted()).toBe('["20580"]');
+  });
+});
+
+describe('the published Starship orbit', () => {
+  const SHIP = {
+    line1: '1 67001U 26210A   26124.50000000  .00000000  00000-0  00000-0 0  9990',
+    line2: '2 67001  26.5000 270.0000 0003000  90.0000 270.0000 16.00000000    10',
+  };
+
+  it('is drawn on the next map render that carries it in tracked.json, with no tap and no CelesTrak request', async () => {
+    expect(renderedMap().getLayer('sat-track-layer-tracked:starship')).toBeUndefined();
+    stubArtifactFetch({
+      'passes.json': [],
+      'track.json': TRACK_FIXTURE,
+      'tracked.json': {
+        objects: [{
+          id: 'starship', label: 'Starship', color: '#ff5c5c', state: 'elements', source: 'supgp',
+          name: 'STARSHIP S41', norad: 67001, intldes: '26210A', ...SHIP,
+          epoch: '2026-05-04T12:00:00Z', age_hours: 0.17,
+        }],
+      },
+    });
+    celestrakStub();
+
+    await mapModule.renderMap({
+      ...MANIFEST_FIXTURE,
+      artifacts: { ...MANIFEST_FIXTURE.artifacts, tracked: { path: 'tracked.json', sha256: '', bytes: 1 } },
+    });
+    await settle();
+
+    expect(renderedMap().getLayer('sat-track-layer-tracked:starship')).toBeDefined();
+    expect(trackStart('tracked:starship')).toEqual(subPointAt(SHIP, NOW));
+    expect(markerFor('Starship: STARSHIP S41')?.lngLat).toEqual(subPointAt(SHIP, NOW));
+    expect(mapModule.getSatelliteTopbarReadouts().map((readout) => readout.label)).toEqual(['SS']);
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).startsWith('https://celestrak.org'))).toBe(false);
   });
 });
 
