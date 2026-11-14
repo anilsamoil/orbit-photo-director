@@ -11,6 +11,13 @@ esac
 cd "$(dirname "$0")"
 deploy_bash=${DEPLOY_BASH:-bash}
 real_node=$(command -v node)
+# Linux names /proc/PID/comm after the main thread, and Node 24 renames that
+# thread to MainThread (Node 26: node-MainThread), so comm stops saying node.
+# Where /proc exists, identify the parser by the binary it executes instead.
+real_node_exe=
+if [ -r /proc/self/exe ]; then
+  real_node_exe=$(readlink -f "$real_node")
+fi
 package_bash=$(command -v bash)
 wrangler_target=""
 calib_token="$(printf '%s' machine; printf '%s' -secret)"
@@ -209,7 +216,7 @@ hold_same() {
 
 hold_accept_parser() {
   local pid="$1"
-  local cmd comm have noted
+  local cmd comm exe have noted
   if [ ! -f "$hold_dir/pids/$pid" ]; then
     return 1
   fi
@@ -227,6 +234,13 @@ hold_accept_parser() {
     *parseEmailAllowlist*) ;;
     *) return 1 ;;
   esac
+  if [ -n "$real_node_exe" ]; then
+    exe=$(readlink "/proc/$pid/exe" 2>/dev/null || true)
+    if [ -z "$exe" ] || [ "$exe" != "$real_node_exe" ]; then
+      return 1
+    fi
+    return 0
+  fi
   comm=$(ps_comm "$pid")
   case "$comm" in
     node|*/node) ;;
