@@ -29,7 +29,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../../../..');
 const frontendDir = resolve(repoRoot, 'frontend');
 const featureDir = resolve(here, '../features');
-const FEATURE_FILES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'iss', 'help', 'profile', 'log', 'phone', 'tracked', 'service-worker'];
+const FEATURE_FILES = ['banner', 'topbar', 'queue', 'upcoming', 'map', 'hazards', 'iss', 'help', 'profile', 'log', 'phone', 'tracked', 'service-worker'];
 
 function homeDir() {
   return process.env.OPD_VERIFY_HOME || '/tmp/opd-verify/default';
