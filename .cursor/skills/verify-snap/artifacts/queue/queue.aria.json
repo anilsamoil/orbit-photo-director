@@ -1,0 +1,14 @@
+{
+  "title": "SNAP (SNAP's Not an Astro Photographer)",
+  "brand": "SNAP",
+  "viewClass": "view-queue",
+  "activeTab": "tab-queue",
+  "cardCount": 3,
+  "cardTextSample": [
+    "Verify TokyoIn 17 minnightclear11:25 UTCnadir 180 km22° · WORF★☆☆☆☆· P(unobstructed) 1▾★☆☆☆☆ poor · score 1p(unobstructed)1cloud + sun-glint clearregime fit1target wants night; pass is nightnadir prox",
+    "Verify AndesIn 40 mindayclear11:48 UTCnadir 180 km22° · WORF★☆☆☆☆· P(unobstructed) 1▾★☆☆☆☆ poor · score 1p(unobstructed)1cloud + sun-glint clearregime fit1target wants day; pass is daynadir proximity1",
+    "Verify Nile DeltaIn 1h 2mdayclear12:10 UTCnadir 180 km22° · WORF★☆☆☆☆· P(unobstructed) 1▾★☆☆☆☆ poor · score 1p(unobstructed)1cloud + sun-glint clearregime fit1target wants day; pass is daynadir proxim"
+  ],
+  "banner": "Last updated 8 min ago",
+  "hasVerifyTokyo": true
+}
