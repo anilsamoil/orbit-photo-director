@@ -1,5 +1,6 @@
 import { launchCatalog } from './launch-catalog';
-import { tierScheduleFacts, tierWord, type TierLaunch } from './launch-tiers';
+import { hazardNotesFor, subscribeHazardNotes, type HazardNote } from './launch-hazards';
+import { tierScheduleFacts, tierWindowText, tierWord, type TierLaunch } from './launch-tiers';
 
 function row(container: HTMLElement, label: string, value: string): void {
   const line = document.createElement('div');
@@ -36,18 +37,50 @@ export function renderTierCard(launch: TierLaunch, onShowMap?: (eventId: string)
   const why = document.createElement('p');
   why.textContent = launch.why;
   card.append(name, summary, why);
+  const hazard = hazardNoteBlock(launch.eventId);
+  if (hazard) card.append(hazard);
   if (onShowMap) {
     const actions = document.createElement('div');
     actions.className = 'launch-brief-actions';
     const show = document.createElement('button');
     show.type = 'button';
     show.className = 'btn';
-    show.textContent = launch.corridor ? 'Show site and corridor' : 'Show launch site';
+    const areas = hazardNotesFor(launch.eventId).length > 0;
+    show.textContent = launch.corridor ? 'Show site and corridor' : areas ? 'Show published hazard areas' : 'Show launch site';
     show.addEventListener('click', () => onShowMap(launch.eventId));
     actions.append(show);
     card.append(actions);
   }
   return card;
+}
+
+function hazardNoteBlock(eventId: string): HTMLElement | null {
+  const notes = hazardNotesFor(eventId);
+  if (!notes.length) return null;
+  const block = document.createElement('div');
+  block.dataset.hazardNote = '1';
+  const summary = document.createElement('p');
+  summary.textContent = 'Published hazard areas \u2014 not a flight path or navigation guidance.';
+  block.append(summary);
+  for (const note of notes) block.append(hazardFact(note));
+  return block;
+}
+
+function hazardFact(note: HazardNote): HTMLParagraphElement {
+  const line = document.createElement('p');
+  const start = Date.parse(note.windowStart);
+  const end = Date.parse(note.windowEnd);
+  const when = Number.isFinite(start) && Number.isFinite(end)
+    ? tierWindowText(start, end)
+    : `${note.windowStart} to ${note.windowEnd}`;
+  line.textContent = `${note.noticeId} area ${note.areaId}, ${note.domain} ${note.restriction}. ${when} Checked ${note.checkedAt}. ${note.qualification} `;
+  const link = document.createElement('a');
+  link.href = note.sourceUrl;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.textContent = note.sourceUrl;
+  line.append(link);
+  return line;
 }
 
 function evidenceNote(kind: 'expired' | 'missing'): HTMLParagraphElement {
@@ -94,14 +127,32 @@ export function openTierDetails(launch: TierLaunch): void {
     why.textContent = current.why;
     const track = document.createElement('p');
     track.dataset.tierTrack = '1';
+    const note = current.corridor ? null : hazardNoteBlock(current.eventId);
     track.textContent = current.corridor
       ? current.corridor.points.map((point) => `${point.lat.toFixed(2)}, ${point.lon.toFixed(2)}`).join(' → ')
-      : 'Pad only';
+      : note
+        ? 'Published hazard areas \u2014 not a flight path or navigation guidance.'
+        : 'Pad only';
     content.append(why, track);
+    if (note) content.append(note);
   };
-  const unsubscribe = launchCatalog.subscribe(paint);
+  const unsubscribe = launchCatalog.subscribe(() => {
+    if (!dialog.isConnected) {
+      unsubscribe();
+      return;
+    }
+    paint();
+  });
+  const unsubscribeNotes = subscribeHazardNotes(() => {
+    if (!dialog.isConnected) {
+      unsubscribeNotes();
+      return;
+    }
+    paint();
+  });
   dialog.addEventListener('close', () => {
     unsubscribe();
+    unsubscribeNotes();
     dialog.remove();
   }, { once: true });
   dialog.append(heading, content, close);

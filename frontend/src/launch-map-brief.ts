@@ -1,7 +1,8 @@
-import type { LaunchState } from './launch-store';
 import { launchCatalog } from './launch-catalog';
-import { launchBrief, selectLaunches } from './launch-selectors';
+import { subscribeHazardNotes } from './launch-hazards';
 import { operatorLaunchLines, renderLaunchCard, renderLaunchCoverage } from './launch-card';
+import { launchBrief, selectLaunches } from './launch-selectors';
+import { launchStore, type LaunchState } from './launch-store';
 import { renderTierCard } from './launch-tier-card';
 import { shotForecastLabel, tierWord, type TierCatalog } from './launch-tiers';
 
@@ -20,9 +21,32 @@ function savePrimaryOpen(container: HTMLElement, open: boolean): void {
   } catch { /* The current page still remembers when browser storage is unavailable. */ }
 }
 
+type BriefHost = HTMLElement & {
+  hazardWatch?: () => void;
+  showMap?: (eventId: string) => void;
+};
+
+function watchHazardNotes(container: HTMLElement, onShowMap: (eventId: string) => void): void {
+  const host = container as BriefHost;
+  host.showMap = onShowMap;
+  if (host.hazardWatch) return;
+  const unsubscribe = subscribeHazardNotes(() => {
+    if (!container.isConnected) {
+      unsubscribe();
+      host.hazardWatch = undefined;
+      return;
+    }
+    const show = host.showMap;
+    if (!show) return;
+    renderMapLaunchBrief(container, launchStore.getState(), Date.now(), show);
+  });
+  host.hazardWatch = unsubscribe;
+}
+
 /** Launches stay one tap away, leaving the map clear by default. */
 export function renderMapLaunchBrief(container: HTMLElement, state: LaunchState, now: number,
   onShowMap: (eventId: string) => void): void {
+  watchHazardNotes(container, onShowMap);
   const tiers = launchCatalog.read(now);
   if (tiers) {
     renderTierMapBrief(container, tiers, now, onShowMap);
@@ -90,7 +114,7 @@ function renderTierMapBrief(container: HTMLElement, tiers: TierCatalog, now: num
   if (previousPrimary) savePrimaryOpen(container, primaryWasOpen);
   const moreWasOpen = container.querySelector<HTMLDetailsElement>('.map-launch-more')?.open ?? false;
   container.className = 'map-launch-brief';
-  const primary = tiers.highlights[0] ?? tiers.mapPins[0] ?? null;
+  const primary = tiers.highlights?.[0] ?? tiers.mapPins[0] ?? null;
   const rest = tiers.mapPins.filter((pin) => pin !== primary);
   const nodes: HTMLElement[] = [];
   if (primary) {

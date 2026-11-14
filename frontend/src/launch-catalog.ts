@@ -38,6 +38,7 @@ export class LaunchCatalogStore {
   private held: Held | null = null;
   private seen: LaunchCatalogPointer | null = null;
   private listeners = new Set<() => void>();
+  private refreshListeners = new Set<() => void>();
   private inFlight: Promise<void> | null = null;
   private controller: AbortController | null = null;
   private readKey = '';
@@ -65,9 +66,27 @@ export class LaunchCatalogStore {
     return tiersAt(this.held.catalog, now);
   }
 
+  /** Window of one current map pin. A dropped, cancelled, or out-of-range launch has none. */
+  attempt(eventId: string, now: number): { startMs: number; endMs: number } | null {
+    const pin = this.read(now)?.mapPins.find((launch) => launch.eventId === eventId);
+    if (!pin) return null;
+    const start = pin.schedule.windowStartMs ?? pin.schedule.netMs;
+    const end = pin.schedule.windowEndMs ?? pin.schedule.netMs;
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null;
+    const net = pin.schedule.netMs;
+    if (pin.schedule.windowStartMs !== null && pin.schedule.windowEndMs !== null && (net < start || net > end)) return null;
+    return { startMs: start, endMs: end };
+  }
+
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };
+  }
+
+  /** Fires after every online refresh, including one that keeps the same pins. */
+  subscribeRefresh(listener: () => void): () => void {
+    this.refreshListeners.add(listener);
+    return () => { this.refreshListeners.delete(listener); };
   }
 
   refresh(online = true): Promise<void> {
@@ -135,6 +154,7 @@ export class LaunchCatalogStore {
         const now = Date.now();
         this.publish(this.read(now), now);
       }
+      for (const listener of [...this.refreshListeners]) listener();
     }
   }
 

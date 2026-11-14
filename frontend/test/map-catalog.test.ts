@@ -23,7 +23,7 @@ import {
 vi.mock('maplibre-gl', async () => (await import('./maplibre-double')).maplibreModuleMock());
 
 describe('the layer catalog', () => {
-  it('is the twenty-two slot paint order, bottom first', () => {
+  it('is the twenty-four slot paint order, bottom first', () => {
     expect([...LAYER_ORDER]).toEqual([
       'esri-imagery-layer',
       'carto-dark-layer',
@@ -41,6 +41,8 @@ describe('the layer catalog', () => {
       'targets-layer',
       'terminator-line-layer',
       'subsolar-point-layer',
+      'launch-hazard-fill-layer',
+      'launch-hazard-outline-layer',
       'ascent-trajectory-layer',
       'ascent-pad-layer',
       'esri-labels-reference-layer',
@@ -56,10 +58,10 @@ describe('the layer catalog', () => {
   });
 
   it('places every satellite track in the one shared slot above the labels', () => {
-    expect(positionOf(satTrackLayerId('iss'))).toBe(19);
-    expect(positionOf(satTrackLayerId('tiangong'))).toBe(19);
-    expect(positionOf('esri-labels-reference-layer')).toBe(18);
-    expect(positionOf('lookup-pin-layer')).toBe(20);
+    expect(positionOf(satTrackLayerId('iss'))).toBe(21);
+    expect(positionOf(satTrackLayerId('tiangong'))).toBe(21);
+    expect(positionOf('esri-labels-reference-layer')).toBe(20);
+    expect(positionOf('lookup-pin-layer')).toBe(22);
   });
 
   it('derives the satellite ids from one key', () => {
@@ -143,10 +145,10 @@ describe('the catalog against what renderMap paints', () => {
   it('every layer renderMap brings up is a catalog id, painted in ascending catalog position', async () => {
     await mapModule.renderMap(MANIFEST_FIXTURE);
     const painted = renderedMap().layerOrder;
-    expect(painted).toHaveLength(17);
+    expect(painted).toHaveLength(19);
     for (const id of painted) expect(isLayerId(id)).toBe(true);
     const positions = painted.map((id) => positionOf(id as LayerId));
-    expect(positions).toEqual([0, 1, 2, 3, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
+    expect(positions).toEqual([0, 1, 2, 3, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
   });
 
   it('every source renderMap declares or adds is a catalog source id', async () => {
