@@ -336,7 +336,7 @@ function utcClock(ms: number): string {
   return new Date(ms).toISOString().slice(11, 19);
 }
 
-function utcInstant(ms: number): string {
+export function utcInstant(ms: number): string {
   return `${utcDate(ms)}, ${utcClock(ms)} UTC`;
 }
 
@@ -379,7 +379,7 @@ export function tierWindowText(startMs: number, endMs: number): string {
   return `${tierWindowUtc(startMs, endMs)} · ${houstonRange(startMs, endMs)}`;
 }
 
-/** NET, launch window, and best time. A missing window or shot omits that row. */
+/** NET and launch window. A missing window omits that row. */
 export function tierScheduleFacts(launch: TierLaunch): { label: string; text: string }[] {
   const facts: { label: string; text: string }[] = [
     { label: 'NET', text: tierInstantText(launch.schedule.netMs) },
@@ -387,7 +387,6 @@ export function tierScheduleFacts(launch: TierLaunch): { label: string; text: st
   const start = launch.schedule.windowStartMs;
   const end = launch.schedule.windowEndMs;
   if (start !== null && end !== null) facts.push({ label: 'Launch window', text: tierWindowText(start, end) });
-  if (launch.top) facts.push({ label: 'Best time', text: tierInstantText(launch.top.bestMs) });
   return facts;
 }
 

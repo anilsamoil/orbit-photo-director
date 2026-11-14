@@ -31,6 +31,8 @@ import {
 } from './launches';
 import { launchCatalog, subscribeLaunchSlots } from '../launch-catalog';
 import { launchVerdictBlock, selectLaunches, utc, type LaunchSelection } from '../launch-selectors';
+import { shotPlan } from '../launch-shot-plan';
+import { openTierDetails } from '../launch-tier-card';
 import { launchPickerLabels, scheduleLabel, tierLabel, tierWindowUtc, type TierCatalog, type TierLaunch } from '../launch-tiers';
 import { launchStore } from '../launch-store';
 import { openHelpModal } from '../help';
@@ -315,6 +317,21 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
   factTime.append(factTimeLabel, factTimeValue);
   const factVisibility = document.createElement('p');
   factVisibility.dataset.issLaunchVisibility = '';
+  const factVerdict = document.createElement('p');
+  factVerdict.dataset.issLaunchVerdict = '';
+  const factPlan = document.createElement('div');
+  factPlan.dataset.issLaunchPlan = '';
+  let shownPlan = '';
+  const factPlanOpen = document.createElement('button');
+  factPlanOpen.type = 'button';
+  factPlanOpen.className = 'btn';
+  factPlanOpen.dataset.issLaunchPlanOpen = '';
+  factPlanOpen.textContent = 'Shot plan';
+  factPlanOpen.addEventListener('click', () => {
+    if (tierPick.kind !== 'held') return;
+    const launch = readTiers()?.find(tierPick.eventId);
+    if (launch) openTierDetails(launch);
+  });
   const factMissing = document.createElement('p');
   factMissing.dataset.issLaunchMissing = '';
   factMissing.textContent = 'Selected launch is no longer available';
@@ -950,7 +967,7 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     launchCard.hidden = false;
     if (group === 'all') launchCard.dataset.issLaunchGroup = 'all';
     else delete launchCard.dataset.issLaunchGroup;
-    if (launchCard.dataset.issLaunchState !== 'selected') {
+    if (launchCard.dataset.issLaunchState !== 'selected' || launchCard.contains(factVerdict)) {
       launchCard.dataset.issLaunchState = 'selected';
       launchCard.replaceChildren(factName, factSite, factTime, factVisibility);
     }
@@ -981,16 +998,36 @@ export function mountIssScene(host: HTMLElement, options: MountIssSceneOptions):
     launchCard.hidden = false;
     if (pick.group === 'all') launchCard.dataset.issLaunchGroup = 'all';
     else delete launchCard.dataset.issLaunchGroup;
-    if (launchCard.dataset.issLaunchState !== 'selected') {
+    if (launchCard.dataset.issLaunchState !== 'selected' || !launchCard.contains(factVerdict)) {
       launchCard.dataset.issLaunchState = 'selected';
-      launchCard.replaceChildren(factName, factSite, factTime, factVisibility);
+      launchCard.replaceChildren(factName, factSite, factTime, factVisibility, factVerdict, factPlan, factPlanOpen);
     }
+    paintShotPlan(launch);
     const fact = tierTimeFact(launch);
     factName.textContent = launch.name;
     factSite.textContent = launch.site.name;
     factTimeLabel.textContent = fact.label;
     factTimeValue.textContent = fact.text;
     factVisibility.textContent = launchVisibility;
+  }
+
+  function paintShotPlan(launch: TierLaunch): void {
+    const plan = shotPlan(launch);
+    const lines = [
+      ...plan.brief.map((fact) => `${fact.label}: ${fact.text}`),
+      ...(plan.empty ? [plan.empty] : []),
+      plan.direction.text,
+      ...(plan.honesty ? [plan.honesty] : []),
+    ];
+    const key = [plan.verdict, ...lines].join('\n');
+    if (shownPlan === key) return;
+    shownPlan = key;
+    factVerdict.textContent = plan.verdict;
+    factPlan.replaceChildren(...lines.map((text) => {
+      const line = document.createElement('p');
+      line.textContent = text;
+      return line;
+    }));
   }
 
   function aimToward(site: LaunchSite): void {
