@@ -311,10 +311,17 @@ const HELP_SECTIONS: HelpSection[] = [
         icon: '🚀',
         label: 'Starship',
         text:
-          'Starship is not a legend row. When a public orbit is available, ' +
-          'the map draws a red diamond labeled Starship and a dotted track. ' +
-          'The Starship checkbox under the satellite button is a separate ' +
-          'search.',
+          'Starship is not a legend row. It is the Starship checkbox under ' +
+          'the satellite button, and it starts checked. When a public ' +
+          'orbit is published, the map draws a red diamond labeled Starship ' +
+          'and a dotted track of one orbit. An orbit whose epoch is more ' +
+          'than 12 hours old is still drawn for up to 72 hours, marked ' +
+          'stale orbit with its age. When none is, a line under the ' +
+          'list says whether no orbit is published yet, the last one is ' +
+          'too old to draw or has reentered, or the lookup failed. When ' +
+          'more than one Starship object is in orbit, the newest ship is ' +
+          'drawn and that line names the others. Unchecking the box hides ' +
+          'Starship. Checking it again asks CelesTrak directly.',
       },
     ],
   },

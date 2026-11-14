@@ -321,6 +321,8 @@ const STARSHIP_PIN: TierLaunch = {
     precision: 'Minute',
     status: 'TBC',
   },
+  direction: { kind: 'none' },
+  shots: [],
   top: null,
   corridor: null,
   whenMs: NOV13,

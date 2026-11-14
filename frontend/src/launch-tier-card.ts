@@ -1,5 +1,6 @@
 import { launchCatalog } from './launch-catalog';
 import { hazardNotesFor, subscribeHazardNotes, type HazardNote } from './launch-hazards';
+import { shotPlan, type EnvelopeFacts, type ShotPlan } from './launch-shot-plan';
 import { tierScheduleFacts, tierWindowText, tierWord, type TierLaunch } from './launch-tiers';
 
 function row(container: HTMLElement, label: string, value: string): void {
@@ -12,6 +13,31 @@ function row(container: HTMLElement, label: string, value: string): void {
   text.textContent = value;
   line.append(name, text);
   container.append(line);
+}
+
+function note(container: HTMLElement, text: string, mark: string): void {
+  const line = document.createElement('p');
+  line.dataset.shotPlan = mark;
+  line.textContent = text;
+  container.append(line);
+}
+
+function envelopeBlock(container: HTMLElement, envelope: EnvelopeFacts): void {
+  note(container, envelope.title, 'title');
+  for (const fact of envelope.facts) row(container, fact.label, fact.text);
+}
+
+/** The card shows the best envelope. The details dialog shows every one, each on its own. */
+function planBlock(plan: ShotPlan, every: boolean): HTMLElement {
+  const block = document.createElement('div');
+  block.className = 'launch-plan';
+  const shown = every ? plan.envelopes : plan.envelopes.slice(0, 1);
+  for (const envelope of shown) envelopeBlock(block, envelope);
+  if (plan.empty) note(block, plan.empty, 'empty');
+  row(block, plan.direction.label, plan.direction.text);
+  if (plan.honesty) note(block, plan.honesty, 'honesty');
+  if (!every && plan.more) note(block, plan.more, 'more');
+  return block;
 }
 
 export function renderTierCard(launch: TierLaunch, onShowMap?: (eventId: string) => void): HTMLElement {
@@ -36,7 +62,7 @@ export function renderTierCard(launch: TierLaunch, onShowMap?: (eventId: string)
   for (const fact of tierScheduleFacts(launch)) row(summary, fact.label, fact.text);
   const why = document.createElement('p');
   why.textContent = launch.why;
-  card.append(name, summary, why);
+  card.append(name, summary, why, planBlock(shotPlan(launch), false));
   const hazard = hazardNoteBlock(launch.eventId);
   if (hazard) card.append(hazard);
   if (onShowMap) {
@@ -133,7 +159,7 @@ export function openTierDetails(launch: TierLaunch): void {
       : note
         ? 'Published hazard areas \u2014 not a flight path or navigation guidance.'
         : 'Pad only';
-    content.append(why, track);
+    content.append(why, planBlock(shotPlan(current), true), track);
     if (note) content.append(note);
   };
   const unsubscribe = launchCatalog.subscribe(() => {

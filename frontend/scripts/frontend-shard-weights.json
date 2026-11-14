@@ -13,7 +13,6 @@
   "src/map/features/targets/targets.test.ts": 0.567,
   "src/map/features/terminator/terminator.test.ts": 0.465,
   "src/map/features/time-scrub/time-scrub.test.ts": 0.436,
-  "src/map/features/tracked/tracked.test.ts": 0.496,
   "test/access-reauth.test.ts": 0.424,
   "test/account-session.test.ts": 1.435,
   "test/account-storage.test.ts": 0.456,
@@ -87,6 +86,7 @@
   "test/launch-map-schedule.test.ts": 0.035,
   "test/launch-review-regressions.test.ts": 0.444,
   "test/launch-selectors.test.ts": 0.468,
+  "test/launch-shot-plan.test.ts": 0.4,
   "test/launch-store.test.ts": 0.53,
   "test/launch-tier-card.test.ts": 0.659,
   "test/launch-tiers.test.ts": 0.5,
@@ -193,5 +193,6 @@
   "test/viirs-alpha.test.ts": 0.476,
   "test/webkit-floor.test.ts": 1.864,
   "test/webkit-gate.test.ts": 0.792,
-  "test/wx.test.ts": 0.441
+  "test/wx.test.ts": 0.441,
+  "test/orbit-sight.test.ts": 0.4
 }

@@ -412,10 +412,18 @@ main.view-map { padding-top: 0; }
 .card.launch-tier {
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto;
-  grid-template-areas: "name" "summary" "reason" "actions";
+  grid-template-areas: "name" "summary" "reason" "plan" "actions";
   overflow-wrap: anywhere;
 }
 .launch-tier > p { grid-area: reason; }
+.launch-tier > .launch-plan { grid-area: plan; }
+.launch-plan { display: grid; gap: 0.3rem; font-size: 0.86rem; line-height: 1.4; }
+.launch-plan > p { margin: 0; }
+.launch-plan [data-shot-plan="title"] { font-weight: 600; }
+.launch-plan [data-shot-plan="title"] ~ [data-shot-plan="title"] { margin-top: 0.5rem; }
+.launch-plan [data-shot-plan="honesty"], .launch-plan [data-shot-plan="more"] { color: var(--text-dim); }
+.launch-plan .launch-fact { display: block; }
+.launch-plan .launch-fact-label { margin-right: 0.4em; }
 .launch-name {
   background: none;
   border: 0;
@@ -1863,6 +1871,16 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   color: var(--text-dim);
   font-size: 0.7rem;
   margin-left: auto;
+}
+.satellite-picker-notes .sat-row-note {
+  margin-top: 0.3rem;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.satellite-picker-notes .sat-row-note.error {
+  color: #ff7070;
 }
 .satellite-picker-custom {
   margin-top: 0.5rem;
@@ -3929,6 +3947,49 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   font-weight: 600;
   line-height: 1.4;
   overflow-wrap: anywhere;
+}
+
+[data-iss-launch-verdict],
+[data-iss-launch-plan],
+[data-iss-launch-note] {
+  margin-top: 0.3rem;
+}
+
+[data-iss-launch-plan] {
+  display: grid;
+  gap: 0.15rem;
+}
+
+[data-iss-launch-card] [data-iss-launch-plan] p,
+[data-iss-launch-card] [data-iss-launch-note] {
+  font-size: 0.76rem;
+  font-weight: 400;
+}
+
+[data-iss-launch-plan-open] {
+  min-height: 44px;
+  margin-top: 0.35rem;
+}
+
+[data-iss-launch-plan-link] {
+  cursor: pointer;
+}
+
+[data-iss-launch-plan-link]::after {
+  content: ' \203A';
+  color: #ffd45c;
+}
+
+[data-iss-scene][data-iss-short] [data-iss-launch-plan],
+[data-iss-scene][data-iss-launch-place='below'] [data-iss-launch-verdict],
+[data-iss-scene][data-iss-launch-place='below'] [data-iss-launch-plan],
+[data-iss-scene][data-iss-launch-place='below'] [data-iss-launch-note],
+[data-iss-scene][data-iss-launch-place='below'] [data-iss-launch-plan-open],
+[data-iss-scene][data-iss-launch-place='over'] [data-iss-launch-verdict],
+[data-iss-scene][data-iss-launch-place='over'] [data-iss-launch-plan],
+[data-iss-scene][data-iss-launch-place='over'] [data-iss-launch-note],
+[data-iss-scene][data-iss-launch-place='over'] [data-iss-launch-plan-open] {
+  display: none;
 }
 
 [data-iss-launch-name] {

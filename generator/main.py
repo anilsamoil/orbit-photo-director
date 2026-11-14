@@ -100,7 +100,7 @@ from .tle_sources import (
     TleSources,
     parse_three_line_iss,
 )
-from .tracked import unavailable_artifact_text, write_tracked_artifact
+from .tracked import load_tracked_specs, unavailable_artifact_text, write_tracked_artifact
 from .water_mask import load_water_mask
 
 # Hard-fail threshold: above this TLE age, sgp4 predictions degrade so badly
@@ -1358,11 +1358,14 @@ def _run_tick_body(settings: Settings, n: datetime) -> dict[str, Any]:
             log.warning("cupola windows failed (%s); manifest omits cupola_windows", exc)
 
     tracked_path = v_dir / "tracked.json"
+    tracked_specs = load_tracked_specs(settings.repo_root / "tracked-objects.json")
     try:
-        write_tracked_artifact(settings.cache_dir, n, tracked_path, sources=tle_sources)
+        write_tracked_artifact(
+            settings.cache_dir, n, tracked_path, sources=tle_sources, specs=tracked_specs
+        )
     except OSError as exc:
         log.warning("tracked objects failed (%s); publishing the no-data state", exc)
-        tracked_path.write_text(unavailable_artifact_text())
+        tracked_path.write_text(unavailable_artifact_text(tracked_specs))
 
     # 6. Manifest
     artifacts_block: dict[str, Path] = {
