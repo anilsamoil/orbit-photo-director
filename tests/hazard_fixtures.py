@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "frontend/test/fixtures"
 NOTICES = FIXTURES / "notices"
 GOLDEN = FIXTURES / "hazards-v2-2026-11-13.json"
-V1_STARSHIP = ROOT / "frontend/public/hazards/v1/0f867f0c-5422-4d44-93b8-d7faaae7019b.json"
+V1_STARSHIP = FIXTURES / "hazards-v1-starship-flight15.json"
 SCENARIO_NOW = datetime(2026, 11, 13, 23, 40, tzinfo=UTC)
 STARSHIP = "0f867f0c-5422-4d44-93b8-d7faaae7019b"
 VULCAN = "ef9850ad-1096-425b-9d27-f7bbd186e61a"

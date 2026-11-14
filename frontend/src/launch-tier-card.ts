@@ -1,5 +1,5 @@
 import { launchCatalog } from './launch-catalog';
-import { hazardNotesFor, subscribeHazardNotes, type HazardNote } from './launch-hazards';
+import { HAZARD_LABEL, hazardFactText, hazardNotesFor, subscribeHazardNotes, type HazardNote } from './launch-hazards';
 import { tierScheduleFacts, tierWindowText, tierWord, type TierLaunch } from './launch-tiers';
 
 function row(container: HTMLElement, label: string, value: string): void {
@@ -60,7 +60,7 @@ function hazardNoteBlock(eventId: string): HTMLElement | null {
   const block = document.createElement('div');
   block.dataset.hazardNote = '1';
   const summary = document.createElement('p');
-  summary.textContent = 'Published hazard areas \u2014 not a flight path or navigation guidance.';
+  summary.textContent = `${HAZARD_LABEL}.`;
   block.append(summary);
   for (const note of notes) block.append(hazardFact(note));
   return block;
@@ -73,7 +73,7 @@ function hazardFact(note: HazardNote): HTMLParagraphElement {
   const when = Number.isFinite(start) && Number.isFinite(end)
     ? tierWindowText(start, end)
     : `${note.windowStart} to ${note.windowEnd}`;
-  line.textContent = `${note.noticeId} area ${note.areaId}, ${note.domain} ${note.restriction}. ${when} Checked ${note.checkedAt}. ${note.qualification} `;
+  line.textContent = `${hazardFactText(note, when)} `;
   const link = document.createElement('a');
   link.href = note.sourceUrl;
   link.target = '_blank';
@@ -127,11 +127,11 @@ export function openTierDetails(launch: TierLaunch): void {
     why.textContent = current.why;
     const track = document.createElement('p');
     track.dataset.tierTrack = '1';
-    const note = current.corridor ? null : hazardNoteBlock(current.eventId);
+    const note = hazardNoteBlock(current.eventId);
     track.textContent = current.corridor
       ? current.corridor.points.map((point) => `${point.lat.toFixed(2)}, ${point.lon.toFixed(2)}`).join(' → ')
       : note
-        ? 'Published hazard areas \u2014 not a flight path or navigation guidance.'
+        ? `${HAZARD_LABEL}.`
         : 'Pad only';
     content.append(why, track);
     if (note) content.append(note);

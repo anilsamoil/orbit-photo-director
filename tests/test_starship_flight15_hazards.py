@@ -8,7 +8,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-HAZARD = ROOT / "frontend/public/hazards/v1/0f867f0c-5422-4d44-93b8-d7faaae7019b.json"
+HAZARD = ROOT / "frontend/test/fixtures/hazards-v1-starship-flight15.json"
 NAVAREA = ROOT / "frontend/test/fixtures/notices/navarea-iv-1080-26.txt"
 LNM = ROOT / "frontend/test/fixtures/notices/uscg-lnm-45-2026-starship-flight15.txt"
 TFR = ROOT / "frontend/test/fixtures/notices/faa-tfr-6-7129.xml"

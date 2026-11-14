@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -8,13 +8,13 @@ import { renderMapLaunchBrief } from '../src/launch-map-brief';
 import {
   activeHazardFeatures,
   HAZARD_LABEL,
+  HAZARD_PATH,
   loadPublishedHazards,
   parseHazardBundle,
   publishHazardNotes,
-  STARSHIP_FLIGHT15_EVENT_ID,
-  STARSHIP_FLIGHT15_HAZARD_PATH,
   type HazardBundle,
   type HazardNotice,
+  type LaunchHazards,
 } from '../src/launch-hazards';
 import { parseLaunchArtifact } from '../src/launch-schema';
 import { renderTierCard, openTierDetails } from '../src/launch-tier-card';
@@ -42,8 +42,13 @@ import type { VendorDouble } from './vendor-map-double';
 import { createVendorDouble } from './vendor-map-double';
 import capturedCatalog from './fixtures/starship-catalog-2026-11-10.json' with { type: 'json' };
 
+const STARSHIP_FLIGHT15_EVENT_ID = '0f867f0c-5422-4d44-93b8-d7faaae7019b';
+const VULCAN_EVENT_ID = 'ef9850ad-1096-425b-9d27-f7bbd186e61a';
+const USSF_317_EVENT_ID = '76617033-4dc0-4448-b50c-e5b0d5a18539';
 const ROOT = resolve(__dirname, '..');
-const HAZARD_FILE = resolve(ROOT, 'public/hazards/v1/0f867f0c-5422-4d44-93b8-d7faaae7019b.json');
+const HAZARD_FILE = resolve(ROOT, 'test/fixtures/hazards-v2-2026-11-13.json');
+const SCHEMA_1_FILE = resolve(ROOT, 'test/fixtures/hazards-v1-starship-flight15.json');
+const USCG_FILE = resolve(ROOT, 'test/fixtures/notices/uscg-space-ops-2026-11-13.geojson');
 const NAVAREA_FILE = resolve(ROOT, 'test/fixtures/notices/navarea-iv-1080-26.txt');
 const LNM_FILE = resolve(ROOT, 'test/fixtures/notices/uscg-lnm-45-2026-starship-flight15.txt');
 const TFR_FILE = resolve(ROOT, 'test/fixtures/notices/faa-tfr-6-7129.xml');
@@ -180,8 +185,14 @@ function sameRing(stored: number[][], expected: readonly [number, number][]): bo
   return forward || reversed;
 }
 
-function featureRing(bundle: HazardBundle, areaId: string): number[][] {
-  const feature = bundle.geojson.features.find((entry) => entry.properties?.area_id === areaId);
+function launchOf(bundle: HazardBundle, eventId = STARSHIP_FLIGHT15_EVENT_ID): LaunchHazards {
+  const launch = bundle.launches.find((entry) => entry.event_id === eventId);
+  if (!launch) throw new Error(eventId);
+  return launch;
+}
+
+function featureRing(bundle: HazardBundle, areaId: string, eventId = STARSHIP_FLIGHT15_EVENT_ID): number[][] {
+  const feature = launchOf(bundle, eventId).geojson.features.find((entry) => entry.properties?.area_id === areaId);
   if (!feature || feature.geometry.type !== 'Polygon') throw new Error(areaId);
   return feature.geometry.coordinates[0] as number[][];
 }
@@ -210,9 +221,9 @@ function coordinatesMatch(
   const windows = navareaWindows(navarea);
   if (JSON.stringify(windows) !== JSON.stringify(lnmWindows(lnm))) return false;
   const listed = (notice: HazardNotice) => notice.windows.map((window) => ({ start: window.start, end: window.end }));
-  const areaNotice = bundle.notices.find((notice) => notice.area_id === 'A');
-  const highNotice = bundle.notices.find((notice) => notice.area_id === 'B');
-  const padNotice = bundle.notices.find((notice) => notice.area_id === '6/7129');
+  const areaNotice = launchOf(bundle).notices.find((notice) => notice.area_id === 'A');
+  const highNotice = launchOf(bundle).notices.find((notice) => notice.area_id === 'B');
+  const padNotice = launchOf(bundle).notices.find((notice) => notice.area_id === '6/7129');
   if (!areaNotice || !highNotice || !padNotice) return false;
   if (JSON.stringify(listed(areaNotice)) !== JSON.stringify(windows)) return false;
   if (JSON.stringify(listed(highNotice)) !== JSON.stringify(windows)) return false;
@@ -247,17 +258,49 @@ type StarshipItem = {
   reasons: string[];
 };
 
+type HazardFileLaunch = {
+  event_id: string;
+  notices: {
+    notice_id: string;
+    area_id: string;
+    checked_at: string;
+    valid_until: string;
+    source_sha256: string;
+    cross_check_sha256?: string;
+    instructions: string[];
+    also: string[];
+  }[];
+  geojson: { features: { properties: { area_id: string }; geometry: { type: string; coordinates: number[][][] } }[] };
+};
+
 type HazardFile = {
+  schema_version: number;
   revision: string;
-  checked_at: string;
-  valid_until: string;
+  generated_at: string;
   status?: string;
-  notices: { area_id: string }[];
-  geojson: { features: { properties: { area_id: string } }[] };
+  launches: HazardFileLaunch[];
 };
 
 function hazardFile(): HazardFile {
   return JSON.parse(readFileSync(HAZARD_FILE, 'utf8')) as HazardFile;
+}
+
+function entryOf(file: HazardFile, eventId = STARSHIP_FLIGHT15_EVENT_ID): HazardFileLaunch {
+  const launch = file.launches.find((entry) => entry.event_id === eventId);
+  if (!launch) throw new Error(eventId);
+  return launch;
+}
+
+function without(file: HazardFile, areaId: string): HazardFile {
+  const launch = entryOf(file);
+  launch.notices = launch.notices.filter((notice) => notice.area_id !== areaId);
+  launch.geojson.features = launch.geojson.features.filter((feature) => feature.properties.area_id !== areaId);
+  return file;
+}
+
+function reviewed(file: HazardFile, checkedAt: string, eventId = STARSHIP_FLIGHT15_EVENT_ID): HazardFile {
+  for (const notice of entryOf(file, eventId).notices) notice.checked_at = checkedAt;
+  return file;
 }
 
 function jsonResponse(body: unknown, status = 200): Promise<Response> {
@@ -353,17 +396,15 @@ describe('Starship Flight 15 hazard notices', () => {
   const bundle = rawBundle();
 
   it('matches every vertex to the notice text, the LNM cross-check, and the FAA XML', () => {
-    expect(bundle.event_id).toBe(STARSHIP_FLIGHT15_EVENT_ID);
+    expect(launchOf(bundle).event_id).toBe(STARSHIP_FLIGHT15_EVENT_ID);
     expect(bundle.label).toBe(HAZARD_LABEL);
     expect(coordinatesMatch(bundle, navarea, lnm, tfrXml)).toBe(true);
-    const raw = JSON.parse(readFileSync(HAZARD_FILE, 'utf8')) as {
-      notices: { source_sha256: string; cross_check_sha256?: string; area_id: string }[];
-    };
+    const raw = entryOf(hazardFile());
     expect(raw.notices.find((notice) => notice.area_id === 'A')?.source_sha256).toBe(sha256(readFileSync(NAVAREA_FILE)));
-    expect(raw.notices.find((notice) => notice.area_id === 'A')?.cross_check_sha256).toBe(sha256(readFileSync(LNM_FILE)));
+    expect(raw.notices.find((notice) => notice.area_id === 'A')?.cross_check_sha256).toBe(sha256(readFileSync(USCG_FILE)));
     expect(raw.notices.find((notice) => notice.area_id === '6/7129')?.source_sha256).toBe(sha256(readFileSync(TFR_FILE)));
-    expect(bundle.geojson.features.every((feature) => feature.geometry.type === 'Polygon')).toBe(true);
-    expect(JSON.stringify(bundle.geojson)).not.toContain('LineString');
+    expect(bundle.launches.every((launch) => launch.geojson.features.every((feature) => feature.geometry.type === 'Polygon'))).toBe(true);
+    expect(JSON.stringify(bundle)).not.toContain('LineString');
   });
 
   it('rejects a hazard file whose area A vertex moved', () => {
@@ -381,14 +422,12 @@ describe('Starship Flight 15 hazard notices', () => {
   });
 
   it('rejects an open ring and a centreline instead of drawing either', () => {
-    const raw = JSON.parse(readFileSync(HAZARD_FILE, 'utf8')) as {
-      geojson: { features: { geometry: { type: string; coordinates: number[][][] } }[] };
-    };
-    const open = structuredClone(raw);
-    open.geojson.features[0]?.geometry.coordinates[0]?.pop();
+    const open = hazardFile();
+    expect(parseHazardBundle(open)).not.toBeNull();
+    entryOf(open).geojson.features[0]?.geometry.coordinates[0]?.pop();
     expect(parseHazardBundle(open)).toBeNull();
-    const line = structuredClone(raw);
-    const geometry = line.geojson.features[0]?.geometry;
+    const line = hazardFile();
+    const geometry = entryOf(line, VULCAN_EVENT_ID).geojson.features[0]?.geometry;
     if (!geometry) throw new Error('missing geometry');
     geometry.type = 'LineString';
     expect(parseHazardBundle(line)).toBeNull();
@@ -409,18 +448,17 @@ describe('Starship Flight 15 hazard notices', () => {
     if (!tiers) throw new Error('expected a current catalog');
     expect(tiers.find(STARSHIP_FLIGHT15_EVENT_ID)?.corridor).toBeNull();
     expect(buildTierMapFeatures(tiers, now).lines).toEqual([]);
-    expect(activeHazardFeatures(bundle, now, ATTEMPT)).toEqual([]);
+    expect(activeHazardFeatures(bundle, STARSHIP_FLIGHT15_EVENT_ID, now, ATTEMPT)).toEqual([]);
     expect(JSON.stringify(parsed.items.find((entry) => entry.event_id === STARSHIP_FLIGHT15_EVENT_ID))).toBe(before);
-    const file = JSON.parse(readFileSync(HAZARD_FILE, 'utf8')) as Record<string, unknown>;
-    expect(file.shots).toBeUndefined();
-    expect(file.direction).toBeUndefined();
-    expect(file.tier).toBeUndefined();
-    expect(file.azimuth_deg).toBeUndefined();
+    const file = readFileSync(HAZARD_FILE, 'utf8');
+    for (const field of ['shots', 'direction', 'tier', 'azimuth_deg', 'trajectory']) {
+      expect(file).not.toContain(`"${field}"`);
+    }
   });
 
   it('shows polygons only inside an attempt window and not in the gaps', () => {
     const ids = (now: number, attempt: { startMs: number; endMs: number } | null = ATTEMPT) =>
-      activeHazardFeatures(bundle, now, attempt).map((feature) => feature.properties?.area_id);
+      activeHazardFeatures(bundle, STARSHIP_FLIGHT15_EVENT_ID, now, attempt).map((feature) => feature.properties?.area_id);
     expect(ids(Date.parse('2026-11-13T22:29:59Z'))).toEqual([]);
     expect(ids(Date.parse('2026-11-13T22:30:00Z'))).toEqual(['6/7129']);
     expect(ids(Date.parse('2026-11-13T22:44:59Z'))).toEqual(['6/7129']);
@@ -435,7 +473,7 @@ describe('Starship Flight 15 hazard notices', () => {
     expect(ids(Date.parse('2026-11-19T23:10:00Z'), last)).toEqual([]);
     expect(ids(Date.parse('2026-11-20T00:40:00Z'), last)).toEqual([]);
     expect(ids(Date.parse('2026-11-13T22:50:00Z'), null)).toEqual([]);
-    const shown = activeHazardFeatures(bundle, Date.parse('2026-11-13T22:50:00Z'), ATTEMPT);
+    const shown = activeHazardFeatures(bundle, STARSHIP_FLIGHT15_EVENT_ID, Date.parse('2026-11-13T22:50:00Z'), ATTEMPT);
     expect(shown.every((feature) => feature.properties?.label === HAZARD_LABEL)).toBe(true);
     expect(shown.find((feature) => feature.properties?.area_id === 'B')?.properties?.fill_opacity).toBe(0.18);
     expect(shown.find((feature) => feature.properties?.area_id === 'A')?.properties?.fill_opacity).toBe(0.12);
@@ -445,8 +483,9 @@ describe('Starship Flight 15 hazard notices', () => {
   it('keeps the hazard file out of the service-worker precache', () => {
     const vite = readFileSync(resolve(ROOT, 'vite.config.ts'), 'utf8');
     expect(vite).toContain("'**/hazards/**'");
-    expect(STARSHIP_FLIGHT15_HAZARD_PATH.endsWith('.json')).toBe(true);
-    expect(STARSHIP_FLIGHT15_HAZARD_PATH.endsWith('.geojson')).toBe(false);
+    expect(HAZARD_PATH).toBe('/hazards/v2/launches.json');
+    expect(/\/hazards\/.*\.json(\?.*)?$/.test(HAZARD_PATH)).toBe(true);
+    expect(existsSync(resolve(ROOT, 'public/hazards'))).toBe(false);
     const patterns = /globPatterns:\s*\[[^\]]+\]/.exec(vite)?.[0] ?? '';
     expect(patterns).not.toContain('hazards');
     expect(patterns).not.toContain('**/*.json');
@@ -555,8 +594,8 @@ describe('catalog attempt after the map pin drops', () => {
     ));
     await store.refresh();
     expect(store.attempt(STARSHIP_FLIGHT15_EVENT_ID, now)).toBeNull();
-    expect(activeHazardFeatures(rawBundle(), now, store.attempt(STARSHIP_FLIGHT15_EVENT_ID, now))).toEqual([]);
-    expect(activeHazardFeatures(rawBundle(), now, ATTEMPT).length).toBeGreaterThan(0);
+    expect(activeHazardFeatures(rawBundle(), STARSHIP_FLIGHT15_EVENT_ID, now, store.attempt(STARSHIP_FLIGHT15_EVENT_ID, now))).toEqual([]);
+    expect(activeHazardFeatures(rawBundle(), STARSHIP_FLIGHT15_EVENT_ID, now, ATTEMPT).length).toBeGreaterThan(0);
     const tiers = store.read(now);
     if (!tiers) throw new Error('expected a current catalog');
     expect(tiers.mapPins.some((pin) => pin.eventId === STARSHIP_FLIGHT15_EVENT_ID)).toBe(false);
@@ -569,7 +608,7 @@ describe('catalog attempt after the map pin drops', () => {
 });
 
 describe('hazard fetch', () => {
-  it('refuses HTML, a miss, and a body for a different event', async () => {
+  it('refuses HTML, a miss, a schema 1 body, and a file with one malformed launch', async () => {
     const html = vi.fn(async () => new Response('<html></html>', {
       status: 200,
       headers: { 'content-type': 'text/html' },
@@ -577,14 +616,23 @@ describe('hazard fetch', () => {
     expect(await loadPublishedHazards(html)).toEqual({ kind: 'withdrawn' });
     const missing = vi.fn(async () => new Response('nope', { status: 404, headers: { 'content-type': 'application/json' } }));
     expect(await loadPublishedHazards(missing)).toEqual({ kind: 'withdrawn' });
-    const body = JSON.parse(readFileSync(HAZARD_FILE, 'utf8')) as { event_id: string };
-    body.event_id = 'other-event';
-    const wrong = vi.fn(async () => new Response(JSON.stringify(body), {
+    const old = vi.fn(async () => new Response(readFileSync(SCHEMA_1_FILE, 'utf8'), {
       status: 200,
       headers: { 'content-type': 'application/json' },
     }));
-    expect(await loadPublishedHazards(wrong)).toEqual({ kind: 'withdrawn' });
-    expect(html).toHaveBeenCalledWith(STARSHIP_FLIGHT15_HAZARD_PATH, expect.objectContaining({
+    expect(await loadPublishedHazards(old)).toEqual({ kind: 'withdrawn' });
+    const damaged = hazardFile();
+    entryOf(damaged, VULCAN_EVENT_ID).notices[0]!.checked_at = 'yesterday';
+    expect(await loadPublishedHazards(() => jsonResponse(damaged))).toEqual({ kind: 'withdrawn' });
+    const withdrawn = await loadPublishedHazards(() => jsonResponse({ schema_version: 2, status: 'withdrawn' }));
+    expect(withdrawn).toEqual({ kind: 'withdrawn' });
+    const current = await loadPublishedHazards(() => jsonResponse(hazardFile()));
+    expect(current.kind === 'current' && current.bundle.launches.map((launch) => launch.event_id)).toEqual([
+      STARSHIP_FLIGHT15_EVENT_ID, USSF_317_EVENT_ID, VULCAN_EVENT_ID,
+    ]);
+    const none = await loadPublishedHazards(() => jsonResponse({ ...hazardFile(), launches: [] }));
+    expect(none.kind === 'current' && none.bundle.launches).toEqual([]);
+    expect(html).toHaveBeenCalledWith(HAZARD_PATH, expect.objectContaining({
       cache: 'no-store',
       redirect: 'error',
     }));
@@ -613,7 +661,7 @@ describe('hazards and the Watch pin share one cutoff', () => {
     expect(store.read(cutoff)?.mapPins.some((pin) => pin.eventId === STARSHIP_FLIGHT15_EVENT_ID)).toBe(false);
     expect(store.attempt(STARSHIP_FLIGHT15_EVENT_ID, cutoff)).toBeNull();
     expect(painted(vendor)).toEqual([]);
-    expect(activeHazardFeatures(rawBundle(), cutoff, ATTEMPT).length).toBeGreaterThan(0);
+    expect(activeHazardFeatures(rawBundle(), STARSHIP_FLIGHT15_EVENT_ID, cutoff, ATTEMPT).length).toBeGreaterThan(0);
   });
 
   it('hides polygons when the launch is cancelled or its NET leaves the map horizon', async () => {
@@ -628,7 +676,7 @@ describe('hazards and the Watch pin share one cutoff', () => {
     setMapLaunchMode(true);
     syncLaunchHazards(now);
     expect(painted(vendor)).toEqual([]);
-    expect(activeHazardFeatures(rawBundle(), now, ATTEMPT)).toHaveLength(3);
+    expect(activeHazardFeatures(rawBundle(), STARSHIP_FLIGHT15_EVENT_ID, now, ATTEMPT)).toHaveLength(3);
 
     const slipped = await catalogStore(now, (item) => {
       item.schedule.net = '2026-11-21T22:45:00Z';
@@ -679,26 +727,30 @@ describe('hazard file freshness', () => {
 
     await reloadLaunchHazards(() => jsonResponse('missing', 404));
     expect(painted(vendor)).toEqual([]);
-    expect(activeHazardFeatures(rawBundle(), now, ATTEMPT)).toHaveLength(3);
+    expect(activeHazardFeatures(rawBundle(), STARSHIP_FLIGHT15_EVENT_ID, now, ATTEMPT)).toHaveLength(3);
 
     await reloadLaunchHazards(() => jsonResponse(current));
     expect(painted(vendor)).toHaveLength(3);
     const expired = hazardFile();
-    expired.valid_until = '2026-11-13T22:00:00Z';
+    for (const notice of entryOf(expired).notices) notice.valid_until = '2026-11-13T22:00:00Z';
     await reloadLaunchHazards(() => jsonResponse(expired));
     expect(painted(vendor)).toEqual([]);
 
     await reloadLaunchHazards(() => jsonResponse(current));
-    const replaced = hazardFile();
+    const gone = hazardFile();
+    gone.launches = gone.launches.filter((launch) => launch.event_id !== STARSHIP_FLIGHT15_EVENT_ID);
+    await reloadLaunchHazards(() => jsonResponse(gone));
+    expect(painted(vendor)).toEqual([]);
+
+    await reloadLaunchHazards(() => jsonResponse(current));
+    const replaced = without(hazardFile(), 'B');
     replaced.revision = 'replaced-revision';
-    replaced.notices = replaced.notices.filter((notice) => notice.area_id !== 'B');
-    replaced.geojson.features = replaced.geojson.features.filter((feature) => feature.properties.area_id !== 'B');
     await reloadLaunchHazards(() => jsonResponse(replaced));
     expect(painted(vendor).map((feature) => feature.properties?.area_id).sort()).toEqual(['6/7129', 'A']);
 
     await reloadLaunchHazards(async () => new Response('down', { status: 503 }));
     expect(painted(vendor).map((feature) => feature.properties?.area_id).sort()).toEqual(['6/7129', 'A']);
-    expect(current.checked_at).toBe('2026-11-13T10:02:00Z');
+    expect(entryOf(current).notices.map((notice) => notice.checked_at)).toEqual(Array(3).fill('2026-11-13T10:02:00Z'));
   });
 
   it('does not latch an initial failure, and a stale reply cannot replace a newer one', async () => {
@@ -716,10 +768,8 @@ describe('hazard file freshness', () => {
     const first = reloadLaunchHazards(() => new Promise((resolve) => {
       releaseFirst = resolve;
     }));
-    const replaced = hazardFile();
+    const replaced = without(hazardFile(), 'B');
     replaced.revision = 'newer-revision';
-    replaced.notices = replaced.notices.filter((notice) => notice.area_id !== 'B');
-    replaced.geojson.features = replaced.geojson.features.filter((feature) => feature.properties.area_id !== 'B');
     const second = reloadLaunchHazards(() => new Promise((resolve) => {
       releaseSecond = resolve;
     }));
@@ -767,7 +817,7 @@ describe('hazard file freshness', () => {
     setMapLaunchMode(true);
     syncLaunchHazards(now);
     expect(painted(vendor)).toEqual([]);
-    expect(activeHazardFeatures(rawBundle(), now, ATTEMPT).length).toBeGreaterThan(0);
+    expect(activeHazardFeatures(rawBundle(), STARSHIP_FLIGHT15_EVENT_ID, now, ATTEMPT).length).toBeGreaterThan(0);
     const later = await catalogStore(now, (item) => {
       item.schedule.net = '2026-11-19T22:45:00Z';
     });
@@ -781,8 +831,8 @@ describe('hazard file freshness', () => {
       startMs: Date.parse('2026-11-19T22:45:00Z'),
       endMs: Date.parse('2026-11-20T00:00:00Z'),
     };
-    expect(activeHazardFeatures(bundle, Date.parse('2026-11-19T22:50:00Z'), backup)).toEqual([]);
-    expect(activeHazardFeatures(bundle, Date.parse('2026-11-13T22:50:00Z'), ATTEMPT)).toHaveLength(3);
+    expect(activeHazardFeatures(bundle, STARSHIP_FLIGHT15_EVENT_ID, Date.parse('2026-11-19T22:50:00Z'), backup)).toEqual([]);
+    expect(activeHazardFeatures(bundle, STARSHIP_FLIGHT15_EVENT_ID, Date.parse('2026-11-13T22:50:00Z'), ATTEMPT)).toHaveLength(3);
   });
 
   it('repaints moved geometry when the feature ids stay the same', async () => {
@@ -792,10 +842,8 @@ describe('hazard file freshness', () => {
     const before = painted(vendor).find((feature) => feature.properties?.area_id === 'A');
     if (!before || before.geometry.type !== 'Polygon') throw new Error('missing area A');
     const oldLon = before.geometry.coordinates[0]?.[0]?.[0];
-    const moved = JSON.parse(JSON.stringify(hazardFile())) as {
-      geojson: { features: { properties: { area_id: string }; geometry: { coordinates: number[][][] } }[] };
-    };
-    const area = moved.geojson.features.find((feature) => feature.properties.area_id === 'A');
+    const moved = hazardFile();
+    const area = entryOf(moved).geojson.features.find((feature) => feature.properties.area_id === 'A');
     const point = area?.geometry.coordinates[0]?.[0];
     if (!point || oldLon === undefined) throw new Error('missing vertex');
     point[0] = oldLon + 0.25;
@@ -833,11 +881,9 @@ describe('hazard file freshness', () => {
     };
     const first = await show(hazardFile());
     expect(first).toContain('Checked 2026-11-13T10:02:00Z');
-    expect(first).toContain('SFC-UNL');
-    expect(first).toContain('international waters');
-    const amended = hazardFile();
-    amended.checked_at = '2026-11-13T23:00:00Z';
-    const second = await show(amended);
+    expect(first).toContain('SFC-UNL.');
+    expect(first).toContain('EXCLUDING AIRSPACE OVER INTERNATIONAL WATERS.');
+    const second = await show(reviewed(hazardFile(), '2026-11-13T23:00:00Z'));
     expect(second).toContain('Checked 2026-11-13T23:00:00Z');
     expect(second).not.toContain('Checked 2026-11-13T10:02:00Z');
   });
@@ -935,8 +981,9 @@ describe('hazard notice facts', () => {
     expect(noteText).toMatch(/CST|CDT/);
     expect(noteText).toContain('Checked 2026-11-13T10:02:00Z');
     expect(noteText).toContain('three hours prior to the earliest launch');
-    expect(noteText).toContain('SFC-UNL');
-    expect(noteText).toContain('international waters');
+    expect(noteText).toContain('Mariners should avoid waters within the defined hazard areas during the scheduled launch window.');
+    expect(noteText).toContain('SFC-UNL.');
+    expect(noteText).toContain('EXCLUDING AIRSPACE OVER INTERNATIONAL WATERS.');
     expect(brief.querySelector('[data-hazard-note] a')?.textContent).toMatch(/^https:\/\//);
   });
 });
@@ -1107,5 +1154,207 @@ describe('hazard focus', () => {
     const fit = vendor.cameraCalls.find((call) => call.method === 'fitBounds');
     const padding = fit?.args[1] as { padding: { left: number } };
     expect(padding.padding.left).toBeGreaterThanOrEqual(520);
+  });
+});
+
+describe('hazard areas for every catalog launch', () => {
+  const VULCAN_NOW = Date.parse('2026-11-14T17:40:00Z');
+  const VULCAN_ATTEMPT = { startMs: Date.parse('2026-11-14T17:32:00Z'), endMs: Date.parse('2026-11-14T18:01:00Z') };
+  const FALCON_NOW = Date.parse('2026-11-18T03:30:00Z');
+  const FALCON_ATTEMPT = { startMs: Date.parse('2026-11-18T03:14:00Z'), endMs: Date.parse('2026-11-18T07:14:00Z') };
+  const VULCAN_PIN: TierLaunch = {
+    ...STARSHIP_PIN,
+    eventId: VULCAN_EVENT_ID,
+    name: 'Vulcan VC6L | Amazon Leo (LV-01)',
+    rocket: 'Vulcan VC6L',
+    site: { name: 'Cape Canaveral SFS, FL, USA', lat: 28.58341025, lon: -80.58303644, pad: 'Space Launch Complex 41' },
+  };
+
+  function areaIds(features: GeoJSON.Feature[]): string[] {
+    return features.map((feature) => String(feature.properties?.area_id)).sort();
+  }
+
+  function parsed(file: HazardFile): HazardBundle {
+    const bundle = parseHazardBundle(file);
+    if (!bundle) throw new Error('hazard file did not parse');
+    return bundle;
+  }
+
+  function sameWindows(file: HazardFile, eventId: string): HazardFile {
+    const windows = [{ start: '2026-11-13T22:45:00Z', end: '2026-11-14T00:40:00Z' }];
+    for (const notice of entryOf(file, eventId).notices) Object.assign(notice, { windows });
+    return file;
+  }
+
+  function bothPins(): void {
+    vi.spyOn(launchCatalog, 'read').mockReturnValue({
+      highlights: [],
+      mapPins: [STARSHIP_PIN, VULCAN_PIN],
+      find: (eventId: string) => (eventId === VULCAN_EVENT_ID ? VULCAN_PIN : STARSHIP_PIN),
+    } as unknown as TierCatalog);
+    vi.spyOn(launchCatalog, 'attempt').mockReturnValue(ATTEMPT);
+  }
+
+  it('matches the Vulcan and Vandenberg vertices to their notice text', () => {
+    const bundle = rawBundle();
+    const vulcan = readFileSync(resolve(ROOT, 'test/fixtures/notices/navarea-iv-1099-26.txt'), 'utf8');
+    const expected = {
+      A: pairsBetween(vulcan, 'A. ', 'B. '),
+      B: pairsBetween(vulcan, 'B. ', 'C. '),
+      C: pairsBetween(vulcan, 'C. ', '2. CANCEL'),
+    };
+    expect([expected.A.length, expected.B.length, expected.C.length]).toEqual([12, 4, 6]);
+    for (const area of ['A', 'B', 'C'] as const) {
+      expect(sameRing(featureRing(bundle, area, VULCAN_EVENT_ID), expected[area])).toBe(true);
+    }
+    const cape = tfrVertices(readFileSync(resolve(ROOT, 'test/fixtures/notices/faa-tfr-6-7111.xml'), 'utf8'));
+    expect(cape).toHaveLength(36);
+    expect(sameRing(featureRing(bundle, '6/7111', VULCAN_EVENT_ID), cape)).toBe(true);
+    const bulletin = readFileSync(resolve(ROOT, 'test/fixtures/notices/navarea-xii-in-force-2026-11-13.txt'), 'utf8');
+    const falcon = bulletin.slice(bulletin.indexOf('NAVAREA XII 801/26.'), bulletin.indexOf('NAVAREA XII 799/26.'));
+    const chunks = falcon.split('IN AREA BOUND BY').slice(1);
+    expect(chunks).toHaveLength(3);
+    ['A', 'B', 'C'].forEach((area, index) => {
+      const pairs = pairsBetween(chunks[index] ?? '', '', index < 2 ? `${'BC'[index]}. ` : '2. CANCEL');
+      expect(sameRing(featureRing(bundle, area, USSF_317_EVENT_ID), pairs)).toBe(true);
+    });
+    const shifted = structuredClone(bundle);
+    const vertex = featureRing(shifted, 'C', VULCAN_EVENT_ID)[2];
+    if (!vertex || vertex[1] === undefined) throw new Error('vertex');
+    vertex[1] += 0.01;
+    expect(sameRing(featureRing(shifted, 'C', VULCAN_EVENT_ID), expected.C)).toBe(false);
+    expect(sameRing(featureRing(bundle, 'A', VULCAN_EVENT_ID), pairsBetween(vulcan.replace('31-23.00N', '31-24.00N'), 'A. ', 'B. '))).toBe(false);
+  });
+
+  it('paints each launch in its own window under its own event id', () => {
+    const bundle = rawBundle();
+    const vulcan = activeHazardFeatures(bundle, VULCAN_EVENT_ID, VULCAN_NOW, VULCAN_ATTEMPT);
+    expect(areaIds(vulcan)).toEqual(['6/7111', 'A', 'B', 'C']);
+    expect(vulcan.every((feature) => feature.properties?.event_id === VULCAN_EVENT_ID)).toBe(true);
+    const airspace = vulcan.find((feature) => feature.properties?.area_id === '6/7111')?.properties;
+    expect(airspace?.also).toBe('TFR 6/7112');
+    expect(airspace?.qualification).toBe('SFC-FL180. EXCLUDING AIRSPACE BEYOND 12 MILE COASTAL LIMIT OVER INTERNATIONAL WATERS.');
+    expect(vulcan.find((feature) => feature.properties?.area_id === 'C')?.properties?.qualification).toBe('');
+    expect(activeHazardFeatures(bundle, VULCAN_EVENT_ID, Date.parse('2026-11-14T17:21:59Z'), VULCAN_ATTEMPT)).toEqual([]);
+    expect(areaIds(activeHazardFeatures(bundle, VULCAN_EVENT_ID, Date.parse('2026-11-14T17:22:00Z'), VULCAN_ATTEMPT))).toEqual(['6/7111']);
+    expect(activeHazardFeatures(bundle, VULCAN_EVENT_ID, Date.parse('2026-11-14T19:11:00Z'), VULCAN_ATTEMPT)).toEqual([]);
+    expect(activeHazardFeatures(bundle, STARSHIP_FLIGHT15_EVENT_ID, VULCAN_NOW, VULCAN_ATTEMPT)).toEqual([]);
+    expect(activeHazardFeatures(bundle, VULCAN_EVENT_ID, NOV13, ATTEMPT)).toEqual([]);
+    expect(activeHazardFeatures(bundle, 'not-in-the-file', VULCAN_NOW, VULCAN_ATTEMPT)).toEqual([]);
+    const typo = { startMs: Date.parse('2026-11-16T16:50:00Z'), endMs: Date.parse('2026-11-16T18:28:00Z') };
+    expect(activeHazardFeatures(parsed(reviewed(hazardFile(), '2026-11-16T12:00:00Z', VULCAN_EVENT_ID)), VULCAN_EVENT_ID, Date.parse('2026-11-16T17:00:00Z'), typo)).toEqual([]);
+  });
+
+  it('drops only the notice whose own review is older than two days', () => {
+    expect(activeHazardFeatures(rawBundle(), USSF_317_EVENT_ID, FALCON_NOW, FALCON_ATTEMPT)).toEqual([]);
+    const fresh = parsed(reviewed(hazardFile(), '2026-11-17T12:00:00Z', USSF_317_EVENT_ID));
+    const falcon = activeHazardFeatures(fresh, USSF_317_EVENT_ID, FALCON_NOW, FALCON_ATTEMPT);
+    expect(areaIds(falcon)).toEqual(['A', 'B', 'C']);
+    expect(falcon[0]?.properties?.qualification).toBe('Mariners are advised to remain clear of these areas for the duration of operations.');
+    expect(falcon.map((feature) => feature.properties?.window_end)).toEqual(['2026-11-18T07:37:00Z', '2026-11-18T07:38:00Z', '2026-11-18T07:57:00Z']);
+    const mixed = hazardFile();
+    const maritime = entryOf(mixed, VULCAN_EVENT_ID).notices.find((notice) => notice.area_id === 'B');
+    if (!maritime) throw new Error('missing area B');
+    maritime.checked_at = '2026-11-12T17:40:00Z';
+    expect(areaIds(activeHazardFeatures(parsed(mixed), VULCAN_EVENT_ID, VULCAN_NOW, VULCAN_ATTEMPT))).toEqual(['6/7111', 'A', 'C']);
+    maritime.checked_at = '2026-11-12T17:40:01Z';
+    expect(areaIds(activeHazardFeatures(parsed(mixed), VULCAN_EVENT_ID, VULCAN_NOW, VULCAN_ATTEMPT))).toEqual(['6/7111', 'A', 'B', 'C']);
+    maritime.valid_until = '2026-11-14T17:40:00Z';
+    expect(areaIds(activeHazardFeatures(parsed(mixed), VULCAN_EVENT_ID, VULCAN_NOW, VULCAN_ATTEMPT))).toEqual(['6/7111', 'A', 'C']);
+  });
+
+  it('paints every eligible launch with nothing selected and only the selected launch after a choice', () => {
+    bothPins();
+    const { vendor } = mount();
+    useHazardBundleForTest(parsed(sameWindows(hazardFile(), VULCAN_EVENT_ID)));
+    setMapLaunchMode(true);
+    syncLaunchHazards(NOV13 + 5 * 60_000);
+    expect(painted(vendor)).toHaveLength(7);
+    expect(new Set(painted(vendor).map((feature) => feature.properties?.event_id))).toEqual(new Set([STARSHIP_FLIGHT15_EVENT_ID, VULCAN_EVENT_ID]));
+    expect(focusLaunchOnMap(VULCAN_EVENT_ID)).toBe(true);
+    expect(areaIds(painted(vendor))).toEqual(['6/7111', 'A', 'B', 'C']);
+    expect(painted(vendor).every((feature) => feature.properties?.event_id === VULCAN_EVENT_ID)).toBe(true);
+    expect(focusLaunchOnMap(STARSHIP_FLIGHT15_EVENT_ID)).toBe(true);
+    expect(areaIds(painted(vendor))).toEqual(['6/7129', 'A', 'B']);
+    expect(painted(vendor).every((feature) => feature.properties?.event_id === STARSHIP_FLIGHT15_EVENT_ID)).toBe(true);
+    vi.spyOn(launchCatalog, 'read').mockReturnValue({ mapPins: [VULCAN_PIN] } as unknown as TierCatalog);
+    syncLaunchHazards(NOV13 + 5 * 60_000);
+    expect(areaIds(painted(vendor))).toEqual(['6/7111', 'A', 'B', 'C']);
+  });
+
+  it('frames the selected launch and leaves the other launch out of the fit', () => {
+    bothPins();
+    const { vendor } = mount();
+    useHazardBundleForTest(parsed(sameWindows(hazardFile(), VULCAN_EVENT_ID)));
+    setMapLaunchMode(true);
+    syncLaunchHazards(NOV13 + 5 * 60_000);
+    expect(focusLaunchOnMap(VULCAN_EVENT_ID)).toBe(true);
+    const vulcan = vendor.cameraCalls.filter((call) => call.method === 'fitBounds').at(-1)?.args[0] as { west: number; east: number; north: number };
+    expect(vulcan.west).toBeCloseTo(-80.84556, 4);
+    expect(vulcan.east).toBeCloseTo(-55.33333, 4);
+    expect(vulcan.north).toBeCloseTo(44.88333, 4);
+    expect(focusLaunchOnMap(STARSHIP_FLIGHT15_EVENT_ID)).toBe(true);
+    const starship = vendor.cameraCalls.filter((call) => call.method === 'fitBounds').at(-1)?.args[0] as { west: number; east: number };
+    expect(starship.west).toBeCloseTo(-97.21667, 4);
+    expect(starship.east).toBeCloseTo(-81.05, 4);
+  });
+
+  it('gives each card its own launch notices, with both ids where two notices publish one area', () => {
+    bothPins();
+    const { vendor, core } = mount();
+    bindAscentPad(core);
+    useHazardBundleForTest(parsed(sameWindows(hazardFile(), VULCAN_EVENT_ID)));
+    setMapLaunchMode(true);
+    syncLaunchHazards(NOV13 + 5 * 60_000);
+    const vulcan = renderTierCard(VULCAN_PIN, () => {});
+    const starship = renderTierCard(STARSHIP_PIN, () => {});
+    expect(vulcan.querySelector('button.btn')?.textContent).toBe('Show published hazard areas');
+    const text = vulcan.querySelector('[data-hazard-note]')?.textContent ?? '';
+    expect(text).toContain('TFR 6/7111 (also TFR 6/7112) area 6/7111, airspace restricted_airspace.');
+    expect(text).toContain('SFC-FL180. EXCLUDING AIRSPACE BEYOND 12 MILE COASTAL LIMIT OVER INTERNATIONAL WATERS.');
+    expect(text).toContain('NAVAREA IV 1099/26 area C, maritime hazard.');
+    expect(text).toContain('Checked 2026-11-13T23:27:32Z');
+    expect(text).not.toContain('1080/26');
+    expect(vulcan.querySelectorAll('[data-hazard-note] a')).toHaveLength(4);
+    const other = starship.querySelector('[data-hazard-note]')?.textContent ?? '';
+    expect(other).toContain('NAVAREA IV 1080/26 area A, maritime hazard.');
+    expect(other).not.toContain('1099/26');
+    expect(other).not.toContain('6/7111');
+    const feature = painted(vendor).find((item) => item.properties?.area_id === '6/7111');
+    if (!feature) throw new Error('missing Cape airspace');
+    vendor.fireLayer('click', 'launch-hazard-fill-layer', {
+      point: { x: 2, y: 2 },
+      lngLat: [-80.5, 28.6],
+      features: [{ properties: feature.properties, geometry: feature.geometry }],
+    });
+    const popup = vendor.popups.at(-1)?.content.textContent ?? '';
+    expect(popup).toContain(HAZARD_LABEL);
+    expect(popup).toContain('TFR 6/7111 (also TFR 6/7112) area 6/7111, airspace restricted_airspace.');
+    expect(popup).toContain('SFC-FL180.');
+    expect(focusLaunchOnMap(STARSHIP_FLIGHT15_EVENT_ID)).toBe(true);
+    expect(renderTierCard(VULCAN_PIN, () => {}).querySelector('[data-hazard-note]')).toBeNull();
+    expect(renderTierCard(VULCAN_PIN, () => {}).querySelector('button.btn')?.textContent).toBe('Show launch site');
+  });
+
+  it('refuses a file over the size limit or with more notices than the map accepts', async () => {
+    const big = hazardFile();
+    const launch = entryOf(big, VULCAN_EVENT_ID);
+    const notice = launch.notices[0];
+    const feature = launch.geojson.features[0];
+    if (!notice || !feature) throw new Error('missing notice');
+    for (let index = 0; index < 13; index += 1) {
+      launch.notices.push({ ...notice, area_id: `X${index}` });
+      launch.geojson.features.push({ ...feature, properties: { ...feature.properties, area_id: `X${index}` } });
+    }
+    expect(launch.notices).toHaveLength(17);
+    expect(parseHazardBundle(big)).toBeNull();
+    launch.notices.pop();
+    launch.geojson.features.pop();
+    expect(parseHazardBundle(big)).not.toBeNull();
+    const padded = { ...hazardFile(), padding: 'x'.repeat(256 * 1024) };
+    expect(await loadPublishedHazards(() => jsonResponse(padded))).toEqual({ kind: 'withdrawn' });
+    const twice = hazardFile();
+    twice.launches.push(entryOf(twice));
+    expect(parseHazardBundle(twice)).toBeNull();
   });
 });
