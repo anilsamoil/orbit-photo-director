@@ -7,13 +7,15 @@ import {
   orbitPeriodSeconds,
   parseTracked,
   recordsFromArtifact,
+  reentered,
   type TrackedElements,
+  type TrackedObject,
   type TrackedUnavailable,
 } from '../src/tracked';
 
 const LOOKUP = {
   names: ['STARSHIP', 'SHIP'],
-  patterns: ['^STARSHIP(?:[\\s-]|$)', '^SHIP[\\s-]+\\d+\\b'],
+  patterns: ['^STARSHIP(?:[\\s-]|$)(?!.*\\bDEB\\b)', '^SHIP[\\s-]+\\d+\\b(?!.*\\bDEB\\b)'],
   max_age_hours: 12,
 };
 
@@ -76,6 +78,33 @@ describe('tracked artifact', () => {
   it('reads the lookup of an object the operator added', () => {
     const row = { ...UNAVAILABLE, id: 'ship-40', label: 'Ship 40', lookup: { names: [], patterns: [], max_age_hours: 48, catnr: 67002, intldes: '2026-211A' } };
     expect(parseTracked({ objects: [row] })).toEqual([row]);
+  });
+
+  it('reads the other live objects of a row, skipping one that is not an element set', () => {
+    const { state: _s, id: _i, label: _l, color: _c, lookup: _k, ...primary } = ELEMENTS;
+    const body: TrackedObject = { ...primary, name: 'STARSHIP S41 R/B', norad: 2, from_cache: true };
+    const row = { ...ELEMENTS, also: [body] };
+
+    expect(parseTracked({ objects: [row] })).toEqual([row]);
+    expect(parseTracked({ objects: [{ ...ELEMENTS, also: [body, { ...body, line2: 'not a tle' }, 'junk'] }] })).toEqual([row]);
+    expect(parseTracked({ objects: [{ ...ELEMENTS, also: [] }] })).toEqual([ELEMENTS]);
+    expect(parseTracked({ objects: [{ ...ELEMENTS, also: 'junk' }] })).toEqual([ELEMENTS]);
+  });
+
+  it('reads a reentered status row', () => {
+    const row = { ...UNAVAILABLE, reason: 'reentered' };
+    expect(parseTracked({ objects: [row] })).toEqual([row]);
+  });
+
+  it('calls a set reentered once a perigee under 80 km has had one revolution to come round', () => {
+    const low = '2 90010  26.5000 270.0000 0200000  90.0000 270.0000 16.40000000    17';
+    const periodMs = (86_400_000 / 16.4);
+
+    expect(reentered(low, 0, periodMs - 1_000)).toBe(false);
+    expect(reentered(low, 0, periodMs + 1_000)).toBe(true);
+    expect(reentered(ELEMENTS.line2, 0, 12 * 3_600_000)).toBe(false);
+    expect(reentered(low.replace('0200000', '02x0000'), 0, periodMs + 1_000)).toBe(false);
+    expect(reentered('2 short', 0, periodMs + 1_000)).toBe(false);
   });
 
   it('takes one orbit from the element set mean motion', () => {

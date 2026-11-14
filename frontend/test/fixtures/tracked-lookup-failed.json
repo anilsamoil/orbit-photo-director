@@ -12,8 +12,8 @@
           "SHIP"
         ],
         "patterns": [
-          "^STARSHIP(?:[\\s-]|$)",
-          "^SHIP[\\s-]+\\d+\\b"
+          "^STARSHIP(?:[\\s-]|$)(?!.*\\bDEB\\b)",
+          "^SHIP[\\s-]+\\d+\\b(?!.*\\bDEB\\b)"
         ],
         "max_age_hours": 12.0
       }

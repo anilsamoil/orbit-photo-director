@@ -1,6 +1,6 @@
 import { tleEpochMs } from './iss-sgp4';
 import { rememberIssTle } from './iss-tle';
-import type { TrackedLookup, TrackedRecord } from './tracked';
+import { reentered, type TrackedLookup, type TrackedRecord } from './tracked';
 
 /** Multi-satellite tracking (v1.6.0.0 — Pettit feedback #6).
  *
@@ -111,18 +111,22 @@ export type LookupFailure = 'timeout' | 'network' | 'http' | 'unreadable' | 'pub
 
 type AskFailure = Exclude<LookupFailure, 'publisher' | 'artifact'>;
 
-/** The outcome of one lookup. `not_found` and `expired` are answers from a
- *  source that replied; `failed` is a source that did not. */
+/** The outcome of one lookup. `not_found`, `expired` and `reentered` are
+ *  answers from a source that replied; `failed` is a source that did not.
+ *  `tle` is the object drawn, `also` every other live object of a published
+ *  vehicle. */
 export type OrbitLookup =
   | {
       state: 'elements';
       tle: TLEPair;
+      also?: readonly TLEPair[];
       match_count: number;
       origin: 'published' | Feed | 'cache';
       stale: boolean;
     }
   | { state: 'not_found' }
   | { state: 'expired' }
+  | { state: 'reentered' }
   | { state: 'failed'; cause: LookupFailure };
 
 /** `published` reads the artifact and the last good cache only. `ask`
@@ -131,6 +135,9 @@ export type LookupMode = 'published' | 'ask';
 
 interface CacheEntry {
   tle: TLEPair;
+  also?: TLEPair[];
+  /** True when this browser got the set from CelesTrak itself. */
+  asked?: boolean;
   match_count?: number;
   fetchedAtMs: number;
 }
@@ -139,13 +146,17 @@ function cacheKey(meta: SatelliteMeta): string {
   return `opd-tle-${metaKey(meta)}`;
 }
 
+function isPair(tle: TLEPair | undefined): tle is TLEPair {
+  return typeof tle?.line1 === 'string' && typeof tle.line2 === 'string';
+}
+
 function readCache(meta: SatelliteMeta): CacheEntry | null {
   try {
     const raw = localStorage.getItem(cacheKey(meta));
     if (!raw) return null;
     const entry = JSON.parse(raw) as CacheEntry;
-    if (typeof entry?.tle?.line1 !== 'string' || typeof entry.tle.line2 !== 'string') return null;
-    return entry;
+    if (!isPair(entry?.tle)) return null;
+    return { ...entry, also: Array.isArray(entry.also) ? entry.also.filter(isPair) : [] };
   } catch {
     return null;
   }
@@ -272,18 +283,89 @@ function worstCause(replies: readonly Reply[]): AskFailure | null {
   return CAUSE_ORDER.find((cause) => causes.includes(cause)) ?? null;
 }
 
-function ageHours(tle: TLEPair, nowMs: number): number {
-  const epoch = tleEpochMs(tle);
-  return epoch === null ? Number.POSITIVE_INFINITY : (nowMs - epoch) / HOUR_MS;
-}
-
 function fromCache(entry: CacheEntry, stale: boolean): OrbitLookup {
   return { state: 'elements', tle: entry.tle, match_count: entry.match_count ?? 1, origin: 'cache', stale };
 }
 
-function keep(meta: SatelliteMeta, tle: TLEPair, matchCount: number, nowMs: number): void {
-  writeCache(meta, { tle, match_count: matchCount, fetchedAtMs: nowMs });
+function keep(meta: SatelliteMeta, tle: TLEPair, matchCount: number, nowMs: number, also: TLEPair[] = [], asked = false): void {
+  writeCache(meta, { tle, also, asked, match_count: matchCount, fetchedAtMs: nowMs });
   if (meta.resolution.kind === 'catnr' && meta.resolution.catnr === 25544) rememberIssTle(tle);
+}
+
+/** A set as a feed sent it. One read back from this browser's cache has no feed. */
+type Candidate = { tle: TLEPair; feed?: Feed };
+
+const order = (a: number, b: number): number => (a === b ? 0 : a < b ? -1 : 1);
+
+/** Ships before rocket bodies, then the newest launch, then the higher
+ *  catalog number. Epoch is left out, so the first object does not flip
+ *  between two live ships as each gets a fresh set. A blank designator is a
+ *  launch not yet catalogued, which is the newest. */
+function rank({ name, line1 }: TLEPair): [number, number, number, number] {
+  const launch = /^(\d{2})(\d{3})/.exec(line1.slice(9, 17).trim());
+  const year = launch ? Number(launch[1]) + (Number(launch[1]) < 57 ? 2000 : 1900) : Infinity;
+  const number = launch ? Number(launch[2]) : Infinity;
+  return [/\bR\/B\b/i.test(name) ? 0 : 1, year, number, Number(line1.slice(2, 7)) || 0];
+}
+
+function byRank(a: Candidate, b: Candidate): number {
+  const ra = rank(a.tle);
+  const rb = rank(b.tle);
+  return order(rb[0], ra[0]) || order(rb[1], ra[1]) || order(rb[2], ra[2]) || order(rb[3], ra[3]);
+}
+
+function newestPerObject<T extends Candidate>(sets: readonly T[]): { set: T; epochMs: number }[] {
+  const newest = new Map<string, { set: T; epochMs: number }>();
+  for (const set of sets) {
+    const epochMs = tleEpochMs(set.tle);
+    if (epochMs === null) continue;
+    const catalog = set.tle.line1.slice(2, 7);
+    const held = newest.get(catalog);
+    const wins = !held || epochMs > held.epochMs || (epochMs === held.epochMs && set.feed === 'supgp' && held.set.feed !== 'supgp');
+    if (wins) newest.set(catalog, { set, epochMs });
+  }
+  return [...newest.values()];
+}
+
+/** The objects of a lookup that are in orbit now, the one to draw first:
+ *  the newest set of each catalog number, Supplemental GP winning a tie,
+ *  inside the lookup's age limit and not reentered. */
+export function liveObjects<T extends Candidate>(lookup: TrackedLookup, sets: readonly T[], nowMs: number): T[] {
+  return newestPerObject(sets)
+    .filter(({ set, epochMs }) =>
+      nowMs - epochMs <= lookup.max_age_hours * HOUR_MS && !reentered(set.tle.line2, epochMs, nowMs))
+    .map(({ set }) => set)
+    .sort(byRank);
+}
+
+/** Why sets that matched a lookup draw nothing. */
+function gone(lookup: TrackedLookup, sets: readonly Candidate[], nowMs: number): OrbitLookup {
+  const young = newestPerObject(sets).some(({ epochMs }) => nowMs - epochMs <= lookup.max_age_hours * HOUR_MS);
+  return young ? { state: 'reentered' } : { state: 'expired' };
+}
+
+function drawn(live: readonly Candidate[], origin: 'published' | Feed | 'cache', stale: boolean): OrbitLookup {
+  const [first, ...rest] = live.map(({ tle }) => tle) as [TLEPair, ...TLEPair[]];
+  return {
+    state: 'elements',
+    tle: first,
+    ...(rest.length > 0 ? { also: rest } : {}),
+    match_count: live.length,
+    origin,
+    stale,
+  };
+}
+
+function keepLive(meta: SatelliteMeta, live: readonly Candidate[], nowMs: number, asked: boolean): void {
+  const [first, ...rest] = live.map(({ tle }) => tle) as [TLEPair, ...TLEPair[]];
+  keep(meta, first, live.length, nowMs, rest, asked);
+}
+
+/** `NAME (NORAD n)` for each live object that is not the one drawn. */
+export function alsoInOrbit(lookup: OrbitLookup): string | null {
+  if (lookup.state !== 'elements' || !lookup.also?.length) return null;
+  const listed = lookup.also.map((tle) => `${tle.name} (NORAD ${Number(tle.line1.slice(2, 7))})`);
+  return `Also in orbit: ${listed.join(', ')}`;
 }
 
 function publishedRow(meta: SatelliteMeta, published: readonly TrackedRecord[]): TrackedRecord | undefined {
@@ -295,11 +377,27 @@ function publishedRow(meta: SatelliteMeta, published: readonly TrackedRecord[]):
   return undefined;
 }
 
-/** What the artifact alone says about a vehicle it holds no usable element
- *  set for. A row with elements reaches here only when they are too old. */
-function publisherVerdict(row: TrackedRecord | undefined): OrbitLookup {
+type PublishedSet = { tle: TLEPair; feed: Feed; stale: boolean };
+
+/** The row's object, and for a published vehicle every other live object.
+ *  A catalog number names one object, so it never takes another in its place. */
+function publishedSets(meta: SatelliteMeta, row: TrackedRecord | undefined): PublishedSet[] {
+  if (row?.state !== 'elements') return [];
+  const objects = meta.resolution.kind === 'published' ? [row, ...(row.also ?? [])] : [row];
+  return objects.map((object) => ({
+    tle: { line1: object.line1, line2: object.line2, name: object.name },
+    feed: object.source,
+    stale: object.from_cache === true,
+  }));
+}
+
+/** What the artifact alone says about a vehicle it holds no live element
+ *  set for. */
+function publisherVerdict(meta: SatelliteMeta, row: TrackedRecord | undefined, nowMs: number): OrbitLookup {
   if (!row || (row.state === 'unavailable' && row.reason === 'unread')) return { state: 'failed', cause: 'artifact' };
-  if (row.state === 'elements' || row.reason === 'aged_out') return { state: 'expired' };
+  if (row.state === 'elements') return gone(row.lookup, publishedSets(meta, row), nowMs);
+  if (row.reason === 'aged_out') return { state: 'expired' };
+  if (row.reason === 'reentered') return { state: 'reentered' };
   if (row.reason === 'lookup_failed') return { state: 'failed', cause: 'publisher' };
   return { state: 'not_found' };
 }
@@ -311,33 +409,35 @@ async function resolvePublished(
   nowMs: number,
 ): Promise<OrbitLookup> {
   const lookup = row?.lookup;
-  const cached = readCache(meta);
-  const lastGood = cached && lookup && ageHours(cached.tle, nowMs) <= lookup.max_age_hours ? cached : null;
-  const publisherSays = publisherVerdict(row);
+  const entry = readCache(meta);
+  const publisherSays = publisherVerdict(meta, row, nowMs);
+  // A set the publisher gave is no newer than what the publisher says now,
+  // so it does not outlive a publisher that says the object is gone. A set
+  // this browser asked CelesTrak for can be newer than a resting publisher.
+  const gonePerPublisher = publisherSays.state === 'not_found' || publisherSays.state === 'reentered';
+  const trusted = entry && (entry.asked === true || !gonePerPublisher);
+  const cached: Candidate[] = trusted ? [entry.tle, ...(entry.also ?? [])].map((tle) => ({ tle })) : [];
+  const lastGood = lookup ? liveObjects(lookup, cached, nowMs) : [];
 
-  if (mode === 'published' || !lookup) return lastGood ? fromCache(lastGood, true) : publisherSays;
+  if (mode === 'published' || !lookup) return lastGood.length > 0 ? drawn(lastGood, 'cache', true) : publisherSays;
 
   const replies = await Promise.all(lookupQueries(lookup).map(ask));
-  const candidates = replies.flatMap((reply) =>
+  const matches: Candidate[] = replies.flatMap((reply) =>
     reply.kind === 'sets'
       ? reply.sets.filter((tle) => matchesLookup(lookup, tle)).map((tle) => ({ tle, feed: reply.feed }))
       : [],
   );
-  const usable = candidates.filter(({ tle }) => ageHours(tle, nowMs) <= lookup.max_age_hours);
-  if (usable.length > 0) {
-    const best = usable.reduce((a, b) => {
-      const ea = tleEpochMs(a.tle) ?? 0;
-      const eb = tleEpochMs(b.tle) ?? 0;
-      if (eb !== ea) return eb > ea ? b : a;
-      return b.feed === 'supgp' && a.feed !== 'supgp' ? b : a;
-    });
-    if (lastGood && (tleEpochMs(lastGood.tle) ?? 0) > (tleEpochMs(best.tle) ?? 0)) return fromCache(lastGood, true);
-    keep(meta, best.tle, usable.length, nowMs);
-    return { state: 'elements', tle: best.tle, match_count: usable.length, origin: best.feed, stale: false };
-  }
-  if (lastGood) return fromCache(lastGood, true);
-  if (candidates.length > 0) return { state: 'expired' };
   const cause = worstCause(replies);
+  // CelesTrak drops a decayed object. When every feed answered, an object
+  // missing from the answers is gone and must not come back from the cache.
+  const live = liveObjects(lookup, cause === null ? matches : [...matches, ...cached], nowMs);
+  const first = live[0];
+  if (first) {
+    keepLive(meta, live, nowMs, true);
+    return drawn(live, first.feed ?? 'cache', first.feed === undefined);
+  }
+  if (cause === null) forget(meta);
+  if (matches.length > 0) return gone(lookup, matches, nowMs);
   if (cause === null) return { state: 'not_found' };
   return publisherSays.state === 'failed' ? { state: 'failed', cause } : publisherSays;
 }
@@ -359,8 +459,10 @@ async function resolveDirect(meta: SatelliteMeta, param: string, value: string |
 }
 
 /** Find the orbit of one satellite. A row of `tracked.json` with elements
- *  wins while it is younger than its limit, checked here as well as by the
- *  publisher, because the artifact can sit in an open map for hours. A
+ *  wins while it is younger than its limit and has not reentered, checked
+ *  here as well as by the publisher, because the artifact can sit in an
+ *  open map for hours. When the row's own object is no longer live, the
+ *  first of its other live objects is drawn. A
  *  published object otherwise falls back to its last good element
  *  set while that is young enough, and in `ask` mode to the publisher's own
  *  CelesTrak queries. A catalog number or a name the publisher does not
@@ -372,12 +474,11 @@ export async function resolveOrbit(
   nowMs: number = Date.now(),
 ): Promise<OrbitLookup> {
   const row = publishedRow(meta, published);
-  if (row?.state === 'elements') {
-    const tle: TLEPair = { line1: row.line1, line2: row.line2, name: row.name };
-    if (ageHours(tle, nowMs) <= row.lookup.max_age_hours) {
-      keep(meta, tle, 1, nowMs);
-      return { state: 'elements', tle, match_count: 1, origin: 'published', stale: row.from_cache === true };
-    }
+  const live = row ? liveObjects(row.lookup, publishedSets(meta, row), nowMs) : [];
+  const first = live[0];
+  if (first) {
+    keepLive(meta, live, nowMs, false);
+    return drawn(live, 'published', first.stale);
   }
   const resolution = meta.resolution;
   if (resolution.kind === 'published') return resolvePublished(meta, row, mode, nowMs);
@@ -404,9 +505,11 @@ export function lookupMessage(meta: SatelliteMeta, lookup: OrbitLookup): string 
   const resolution = meta.resolution;
   if (lookup.state === 'elements') {
     if (resolution.kind === 'published') {
-      return lookup.stale
+      const also = alsoInOrbit(lookup);
+      const drawing = lookup.stale
         ? `${meta.name}: drawing the last good orbit, ${lookup.tle.name}`
         : `${meta.name}: drawing ${lookup.tle.name}`;
+      return also ? `${drawing}. ${also}` : drawing;
     }
     return 'Tracking added';
   }
@@ -414,6 +517,7 @@ export function lookupMessage(meta: SatelliteMeta, lookup: OrbitLookup): string 
     return `${meta.name}: orbit lookup failed, ${FAILURE_TEXT[lookup.cause]}. No orbit is drawn.`;
   }
   if (lookup.state === 'expired') return `${meta.name}: the last public orbit is too old to draw.`;
+  if (lookup.state === 'reentered') return `${meta.name}: the last public orbit has reentered. No orbit is drawn.`;
   if (resolution.kind === 'published') {
     return `${meta.name}: no public orbit yet. CelesTrak GP and Supplemental GP list no element set for it.`;
   }

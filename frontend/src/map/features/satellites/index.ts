@@ -254,7 +254,11 @@ export const satellites: MapFeature = {
     followPublisher();
 
     const drawnState = (): string =>
-      [...wanted].map(([key, sat]) => `${key}=${sat.lookup?.state}:${elementsOf(sat)?.tle.line1}`).join();
+      [...wanted].map(([key, sat]) => {
+        const elements = elementsOf(sat);
+        const lines = elements ? [elements.tle, ...(elements.also ?? [])].map((tle) => tle.line1) : [];
+        return `${key}=${sat.lookup?.state}:${lines.join('|')}`;
+      }).join();
 
     const recheckPublished = (): void => {
       const before = drawnState();

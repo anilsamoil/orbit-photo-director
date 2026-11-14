@@ -495,6 +495,47 @@ describe('a published vehicle', () => {
     expect(core.view().satellites).toEqual([]);
   });
 
+  it('with several objects in orbit draws one and names the others beside the row', async () => {
+    const { vendor, core } = mounted();
+    const { state: _s, id: _i, label: _l, color: _c, lookup: _k, ...ship } = ELEMENTS_ROW;
+    const body = { ...ship, name: 'STARSHIP S41 R/B', norad: 67002, line1: SHIP.line1.replace('67001U 26210A', '67002U 26210B') };
+    await publish({ ...ELEMENTS_ROW, also: [body] });
+    openPicker();
+
+    expect(noteFor('Starship')?.textContent).toBe('Starship: Also in orbit: STARSHIP S41 R/B (NORAD 67002)');
+    expect(noteFor('Starship')?.className).toBe('sat-row-note');
+    expect(rowFor('Starship').querySelector('.sat-multi-match')?.textContent).toBe('1 of 2');
+    expect(vendor.markers.filter((marker) => !marker.removed)).toHaveLength(1);
+    expect(diamond(vendor)?.element.title).toBe('Starship: STARSHIP S41');
+    expect(vendor.paintedLayers()).toEqual(['esri-labels-reference-layer', `sat-track-layer-${STARSHIP_KEY}`]);
+    expect(core.view().satellites).toHaveLength(1);
+  });
+
+  it('draws another live object of the row once its own passes 12 h in an open map', async () => {
+    const { vendor } = mounted();
+    const { state: _s, id: _i, label: _l, color: _c, lookup: _k, ...older } = ELEMENTS_ROW;
+    await publish({
+      ...ELEMENTS_ROW,
+      name: 'STARSHIP S42',
+      norad: 67003,
+      intldes: '26211A',
+      line1: SHIP.line1.replace('67001U 26210A   26124.50000000', '67003U 26211A   26124.10000000'),
+      also: [older],
+    });
+    openPicker();
+    expect(diamond(vendor)?.element.title).toBe('Starship: STARSHIP S42');
+    expect(noteFor('Starship')?.textContent).toBe('Starship: Also in orbit: STARSHIP S41 (NORAD 67001)');
+
+    vi.setSystemTime(NOW + 3 * 3_600_000);
+    vi.advanceTimersByTime(60_000);
+    await settle();
+
+    expect(diamond(vendor)?.element.title).toBe('Starship: STARSHIP S41');
+    expect(vendor.markers.filter((marker) => !marker.removed)).toHaveLength(1);
+    expect(noteFor('Starship')).toBeNull();
+    expect(askedCelestrak()).toEqual([]);
+  });
+
   it('a newer published element set replaces the marker title and the track', async () => {
     const { vendor } = mounted();
     await publish(ELEMENTS_ROW);

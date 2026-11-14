@@ -1,6 +1,7 @@
 import { setMapLaunchMode } from '../../../map-launch-mode';
 import {
   CURATED_SATELLITES,
+  alsoInOrbit,
   lookupMessage,
   metaKey,
   type OrbitLookup,
@@ -51,11 +52,13 @@ function listed(port: PickerPort): SatelliteMeta[] {
 }
 
 /** One line per wanted satellite: why nothing is drawn, or when the ISS
- *  has a line of sight to what is drawn. */
+ *  has a line of sight to what is drawn and which other objects of that
+ *  vehicle are in orbit. */
 function rowNote(meta: SatelliteMeta, row: PickerRow): HTMLElement | null {
   if (!row.lookup) return null;
   const drawn = row.lookup.state === 'elements';
-  const text = drawn ? row.sight && `${meta.name}: ${row.sight}` : lookupMessage(meta, row.lookup);
+  const about = [row.sight, alsoInOrbit(row.lookup)].filter(Boolean).join('. ');
+  const text = drawn ? about && `${meta.name}: ${about}` : lookupMessage(meta, row.lookup);
   if (!text) return null;
   const note = document.createElement('div');
   note.className = drawn ? 'sat-row-note' : 'sat-row-note error';

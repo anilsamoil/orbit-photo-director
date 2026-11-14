@@ -52,13 +52,23 @@ class ElementSet:
 
 
 @dataclass(frozen=True)
+class LiveObject:
+    elements: ElementSet
+    age_hours: float
+    from_cache: bool
+
+
+@dataclass(frozen=True)
 class TrackedElements:
+    """`elements` is the object drawn. `also` is every other live match."""
+
     id: str
     label: str
     color: str
     elements: ElementSet
     age_hours: float
     from_cache: bool
+    also: tuple[LiveObject, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -75,9 +85,14 @@ def _unavailable(spec: TrackedSpec, reason: str) -> TrackedUnavailable:
 
 TrackedRecord = TrackedElements | TrackedUnavailable
 
-_STARSHIP_NAME = re.compile(r"^STARSHIP(?:[\s-]|$)", re.IGNORECASE)
-_SHIP_NAME = re.compile(r"^SHIP[\s-]+\d+\b", re.IGNORECASE)
+_STARSHIP_NAME = re.compile(r"^STARSHIP(?:[\s-]|$)(?!.*\bDEB\b)", re.IGNORECASE)
+_SHIP_NAME = re.compile(r"^SHIP[\s-]+\d+\b(?!.*\bDEB\b)", re.IGNORECASE)
+_ROCKET_BODY = re.compile(r"\bR/B\b", re.IGNORECASE)
+_LAUNCH = re.compile(r"(\d{2})(\d{3})")
 SAME_DAY_MAX_AGE_HOURS = 12.0
+REENTRY_PERIGEE_KM = 80.0
+EARTH_MU_KM3_S2 = 398600.4418
+EARTH_RADIUS_KM = 6378.137
 
 STARSHIP = TrackedSpec(
     id="starship",
@@ -222,13 +237,51 @@ def query_urls(spec: TrackedSpec) -> list[tuple[str, str]]:
     return urls
 
 
+def reentered(element: ElementSet, now: datetime) -> bool:
+    """A perigee this low does not survive its next pass.
+
+    The set is real until then, so a suborbital flight-day set still draws
+    for its first revolution. An unreadable field counts as not reentered.
+    """
+    eccentricity = element.line2[26:33]
+    try:
+        motion = float(element.line2[52:63])
+    except ValueError:
+        return False
+    if not eccentricity.isdigit() or not math.isfinite(motion) or motion <= 0:
+        return False
+    period_s = 86400.0 / motion
+    rate = 2.0 * math.pi / period_s
+    semi_major_km = (EARTH_MU_KM3_S2 / rate**2) ** (1.0 / 3.0)
+    perigee_km = semi_major_km * (1.0 - float(f"0.{eccentricity}")) - EARTH_RADIUS_KM
+    return perigee_km < REENTRY_PERIGEE_KM and (now - element.epoch).total_seconds() > period_s
+
+
+def _rank(obj: LiveObject) -> tuple[bool, float, float, int]:
+    """Ships before rocket bodies, then the newest launch.
+
+    Epoch is left out, so the first object does not flip between two live
+    ships as each gets a fresh set. A blank designator is a launch not yet
+    catalogued, which is the newest.
+    """
+    element = obj.elements
+    launch = _LAUNCH.match(element.intldes)
+    year, number = math.inf, math.inf
+    if launch:
+        two_digit = int(launch.group(1))
+        year = two_digit + (2000 if two_digit < 57 else 1900)
+        number = int(launch.group(2))
+    return (bool(_ROCKET_BODY.search(element.name)), -year, -number, -element.norad)
+
+
 def resolve_spec(
     spec: TrackedSpec,
     cache_dir: Path,
     now: datetime,
     sources: TleSources,
 ) -> TrackedRecord:
-    candidates: list[ElementSet] = []
+    fresh: list[ElementSet] = []
+    all_answered = True
     saw_error = False
     for source, url in query_urls(spec):
         reply = sources.ask(
@@ -237,8 +290,9 @@ def resolve_spec(
             budget_s=TRACKED_QUERY_BUDGET_SECONDS,
         )
         if isinstance(reply, Answered):
-            candidates.extend(element for element in reply.value if _matches(spec, element))
+            fresh.extend(element for element in reply.value if _matches(spec, element))
             continue
+        all_answered = False
         if isinstance(reply, Throttled):
             continue
         if isinstance(reply, BackedOff):
@@ -249,44 +303,48 @@ def resolve_spec(
         log.warning("tracked query failed for %s: %s", url, reply.reason)
         saw_error = True
 
-    chosen: TrackedRecord | None = None
-    if candidates:
-        chosen = _select(spec, candidates, now)
-        if isinstance(chosen, TrackedElements):
-            kept = _newer_cached(spec, cache_dir, chosen.elements, now)
-            if kept is not None:
-                return TrackedElements(
-                    id=spec.id,
-                    label=spec.label,
-                    color=spec.color,
-                    elements=kept,
-                    age_hours=_age_hours(kept.epoch, now),
-                    from_cache=True,
-                )
-            _write_cache(_cache_path(cache_dir, spec.id), chosen.elements)
-            return chosen
+    cache_path = _cache_path(cache_dir, spec.id)
+    cached = [element for element in _read_cache(cache_path) if _matches(spec, element)]
+    # CelesTrak drops a decayed object. When every query answered, an object
+    # missing from the answers is gone and must not come back from the cache.
+    pool = [LiveObject(element, _age_hours(element.epoch, now), False) for element in fresh]
+    if not all_answered:
+        pool += [LiveObject(element, _age_hours(element.epoch, now), True) for element in cached]
 
-    cached = _read_cache(_cache_path(cache_dir, spec.id))
-    if cached is not None and _matches(spec, cached):
-        age = _age_hours(cached.epoch, now)
-        if age <= spec.max_age_hours:
-            return TrackedElements(
-                id=spec.id,
-                label=spec.label,
-                color=spec.color,
-                elements=cached,
-                age_hours=age,
-                from_cache=True,
-            )
-        if chosen is not None:
-            return chosen
+    newest: dict[int, LiveObject] = {}
+    for obj in pool:
+        held = newest.get(obj.elements.norad)
+        if held is None or _newness(obj) > _newness(held):
+            newest[obj.elements.norad] = obj
+    young = [obj for obj in newest.values() if obj.age_hours <= spec.max_age_hours]
+    live = sorted((obj for obj in young if not reentered(obj.elements, now)), key=_rank)
+
+    if live:
+        if [obj.elements for obj in live] != cached:
+            _write_cache(cache_path, [obj.elements for obj in live])
+        first = live[0]
+        return TrackedElements(
+            id=spec.id,
+            label=spec.label,
+            color=spec.color,
+            elements=first.elements,
+            age_hours=first.age_hours,
+            from_cache=first.from_cache,
+            also=tuple(live[1:]),
+        )
+    if all_answered:
+        cache_path.unlink(missing_ok=True)
+    if young:
+        return _unavailable(spec, "reentered")
+    if pool:
         return _unavailable(spec, "aged_out")
-
-    if chosen is not None:
-        return chosen
     if saw_error:
         return _unavailable(spec, "lookup_failed")
     return _unavailable(spec, "no_public_orbit")
+
+
+def _newness(obj: LiveObject) -> tuple[datetime, bool, bool]:
+    return (obj.elements.epoch, obj.elements.source == "supgp", not obj.from_cache)
 
 
 def write_tracked_artifact(
@@ -334,22 +392,6 @@ def _reply_judge(source: str):
     return judge
 
 
-def _newer_cached(
-    spec: TrackedSpec,
-    cache_dir: Path,
-    winner: ElementSet,
-    now: datetime,
-) -> ElementSet | None:
-    cached = _read_cache(_cache_path(cache_dir, spec.id))
-    if cached is None or not _matches(spec, cached):
-        return None
-    if _age_hours(cached.epoch, now) > spec.max_age_hours:
-        return None
-    if cached.epoch <= winner.epoch:
-        return None
-    return cached
-
-
 def _dump(records: list[tuple[TrackedSpec, TrackedRecord]]) -> str:
     rows = [{**_to_json(record), "lookup": lookup_json(spec)} for spec, record in records]
     return json.dumps({"objects": rows}, indent=2) + "\n"
@@ -378,12 +420,21 @@ def _to_json(record: TrackedRecord) -> dict[str, object]:
             "state": "unavailable",
             "reason": record.reason,
         }
-    element = record.elements
     payload: dict[str, object] = {
         "id": record.id,
         "label": record.label,
         "color": record.color,
         "state": "elements",
+        **_object_json(LiveObject(record.elements, record.age_hours, record.from_cache)),
+    }
+    if record.also:
+        payload["also"] = [_object_json(obj) for obj in record.also]
+    return payload
+
+
+def _object_json(obj: LiveObject) -> dict[str, object]:
+    element = obj.elements
+    payload: dict[str, object] = {
         "source": element.source,
         "name": element.name,
         "norad": element.norad,
@@ -391,9 +442,9 @@ def _to_json(record: TrackedRecord) -> dict[str, object]:
         "line1": element.line1,
         "line2": element.line2,
         "epoch": utcnow_iso(element.epoch),
-        "age_hours": round(record.age_hours, 2),
+        "age_hours": round(obj.age_hours, 2),
     }
-    if record.from_cache:
+    if obj.from_cache:
         payload["from_cache"] = True
     return payload
 
@@ -420,29 +471,6 @@ def _matches(spec: TrackedSpec, element: ElementSet) -> bool:
     return any(pattern.search(name) for pattern in spec.name_patterns)
 
 
-def _select(
-    spec: TrackedSpec,
-    candidates: list[ElementSet],
-    now: datetime,
-) -> TrackedRecord:
-    usable = [
-        element
-        for element in candidates
-        if _age_hours(element.epoch, now) <= spec.max_age_hours
-    ]
-    if not usable:
-        return _unavailable(spec, "aged_out")
-    best = max(usable, key=lambda element: (element.epoch, element.source == "supgp"))
-    return TrackedElements(
-        id=spec.id,
-        label=spec.label,
-        color=spec.color,
-        elements=best,
-        age_hours=_age_hours(best.epoch, now),
-        from_cache=False,
-    )
-
-
 def _classify(status: int, text: str) -> str:
     if status == 404:
         return "empty"
@@ -462,33 +490,40 @@ def _cache_path(cache_dir: Path, spec_id: str) -> Path:
     return cache_dir / f"tracked-{spec_id}.json"
 
 
-def _write_cache(path: Path, element: ElementSet) -> None:
+def _write_cache(path: Path, elements: list[ElementSet]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
-            {
-                "name": element.name,
-                "line1": element.line1,
-                "line2": element.line2,
-                "source": element.source,
-            }
-        )
-    )
+    objects = [
+        {
+            "name": element.name,
+            "line1": element.line1,
+            "line2": element.line2,
+            "source": element.source,
+        }
+        for element in elements
+    ]
+    path.write_text(json.dumps({"objects": objects}))
 
 
-def _read_cache(path: Path) -> ElementSet | None:
+def _read_cache(path: Path) -> list[ElementSet]:
+    """The live list of the last run. A file from before the list held one object."""
     try:
         raw = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError, UnicodeError):
-        return None
+        return []
     if not isinstance(raw, dict):
-        return None
-    try:
-        return _element(
-            str(raw["name"]),
-            str(raw["line1"]),
-            str(raw["line2"]),
-            str(raw.get("source", "gp")),
-        )
-    except (KeyError, TypeError, ValueError):
-        return None
+        return []
+    rows = raw.get("objects", [raw])
+    found: list[ElementSet] = []
+    for row in rows if isinstance(rows, list) else []:
+        try:
+            found.append(
+                _element(
+                    str(row["name"]),
+                    str(row["line1"]),
+                    str(row["line2"]),
+                    str(row.get("source", "gp")),
+                )
+            )
+        except (AttributeError, KeyError, TypeError, ValueError):
+            continue
+    return found

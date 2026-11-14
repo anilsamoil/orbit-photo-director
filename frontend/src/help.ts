@@ -316,7 +316,9 @@ const HELP_SECTIONS: HelpSection[] = [
           'orbit is published, the map draws a red diamond labeled Starship ' +
           'and a dotted track of one orbit. When none is, a line under the ' +
           'list says whether no orbit is published yet, the last one is ' +
-          'too old to draw, or the lookup failed. Unchecking the box hides ' +
+          'too old to draw or has reentered, or the lookup failed. When ' +
+          'more than one Starship object is in orbit, the newest ship is ' +
+          'drawn and that line names the others. Unchecking the box hides ' +
           'Starship. Checking it again asks CelesTrak directly.',
       },
     ],
