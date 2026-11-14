@@ -58,7 +58,7 @@ type Runtime = {
   hazardFrameKey: string;
   inputBound: boolean;
   hazardPopupContent: HTMLElement | null;
-  hazardPopupAreas: string[];
+  hazardPopupKeys: string[];
 };
 
 const state: Runtime = {
@@ -90,7 +90,7 @@ const state: Runtime = {
   hazardFrameKey: '',
   inputBound: false,
   hazardPopupContent: null,
-  hazardPopupAreas: [],
+  hazardPopupKeys: [],
 };
 
 const LAUNCH_LAYERS = [
@@ -413,25 +413,31 @@ function hazardPopup(features: { properties: Record<string, unknown> | null }[])
   return content;
 }
 
-function hazardAreaIds(features: { properties: Record<string, unknown> | null }[]): string[] {
+function hazardNoticeKey(noticeId: unknown, areaId: unknown): string | null {
+  if (typeof noticeId !== 'string' || typeof areaId !== 'string') return null;
+  if (noticeId.length === 0 || areaId.length === 0) return null;
+  return `${noticeId}\u0000${areaId}`;
+}
+
+function hazardPopupKeys(features: { properties: Record<string, unknown> | null }[]): string[] {
   return features.flatMap((feature) => {
-    const areaId = feature.properties?.area_id;
-    return typeof areaId === 'string' && areaId.length > 0 ? [areaId] : [];
+    const key = hazardNoticeKey(feature.properties?.notice_id, feature.properties?.area_id);
+    return key ? [key] : [];
   });
 }
 
-/** Keep an already-open hazard popup on the features just painted. */
+/** Keep an already-open hazard popup on the notice and area just painted. */
 function refreshHazardPopup(features: readonly GeoJSON.Feature[]): void {
   const content = state.hazardPopupContent;
-  const areas = state.hazardPopupAreas;
-  if (!content || areas.length === 0) return;
-  const shown = areas.flatMap((areaId) => {
-    const match = features.find((feature) => feature.properties?.area_id === areaId);
+  const keys = state.hazardPopupKeys;
+  if (!content || keys.length === 0) return;
+  const shown = keys.flatMap((key) => {
+    const match = features.find((feature) => hazardNoticeKey(feature.properties?.notice_id, feature.properties?.area_id) === key);
     return match ? [match] : [];
   });
-  if (shown.length !== areas.length) {
+  if (shown.length !== keys.length) {
     state.hazardPopupContent = null;
-    state.hazardPopupAreas = [];
+    state.hazardPopupKeys = [];
     state.core?.closePopup('launch');
     return;
   }
@@ -448,11 +454,11 @@ function bindHazardClicks(host: MapCore): void {
     const content = hazardPopup(event.features);
     const handle = host.openPopup({ at: event.lngLat, content, owner: 'launch' });
     state.hazardPopupContent = content;
-    state.hazardPopupAreas = hazardAreaIds(event.features);
+    state.hazardPopupKeys = hazardPopupKeys(event.features);
     handle.onClose(() => {
       if (state.hazardPopupContent !== content) return;
       state.hazardPopupContent = null;
-      state.hazardPopupAreas = [];
+      state.hazardPopupKeys = [];
     });
   });
 }
@@ -671,7 +677,7 @@ export function resetLaunchForTest(): void {
   state.userMoved = false;
   state.hazardFrameKey = '';
   state.hazardPopupContent = null;
-  state.hazardPopupAreas = [];
+  state.hazardPopupKeys = [];
   publishHazardNotes([]);
 }
 

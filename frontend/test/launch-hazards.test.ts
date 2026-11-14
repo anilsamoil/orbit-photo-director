@@ -893,6 +893,86 @@ describe('hazard file freshness', () => {
     expect(painted(vendor)).toEqual([]);
   });
 
+  const INDEPENDENT_NOTICE = 'HYDROPAC 999/26';
+
+  function withSecondAreaA(body: HazardFile): HazardFile {
+    const copy = JSON.parse(JSON.stringify(body)) as {
+      notices: Record<string, unknown>[];
+      geojson: { features: { id?: string; properties: Record<string, unknown> }[] };
+    };
+    const notice = copy.notices.find((item) => item.area_id === 'A');
+    const feature = copy.geojson.features.find((item) => item.properties.area_id === 'A');
+    if (!notice || !feature) throw new Error('missing area A');
+    copy.notices.push({ ...notice, notice_id: INDEPENDENT_NOTICE });
+    copy.geojson.features.push({
+      ...feature,
+      id: `${INDEPENDENT_NOTICE}\u0000A`,
+      properties: { ...feature.properties, notice_id: INDEPENDENT_NOTICE },
+    });
+    return copy as unknown as HazardFile;
+  }
+
+  function withoutIndependentNotice(body: HazardFile): HazardFile {
+    const copy = JSON.parse(JSON.stringify(body)) as {
+      notices: { notice_id?: string }[];
+      geojson: { features: { properties: { notice_id?: string } }[] };
+    };
+    copy.notices = copy.notices.filter((item) => item.notice_id !== INDEPENDENT_NOTICE);
+    copy.geojson.features = copy.geojson.features.filter((item) => item.properties.notice_id !== INDEPENDENT_NOTICE);
+    return copy as unknown as HazardFile;
+  }
+
+  async function openBothAreaA(vendor: VendorDouble): Promise<NonNullable<VendorDouble['popups'][number]>> {
+    await reloadLaunchHazards(() => jsonResponse(withSecondAreaA(hazardFile())));
+    const areas = painted(vendor).filter((item) => item.properties?.area_id === 'A');
+    if (areas.length !== 2) throw new Error('expected two area A notices');
+    vendor.fireLayer('click', 'launch-hazard-fill-layer', {
+      point: { x: 2, y: 2 },
+      lngLat: [-90, 24],
+      features: areas.map((feature) => ({ properties: feature.properties, geometry: feature.geometry })),
+    });
+    const popup = vendor.popups.at(-1);
+    if (!popup) throw new Error('expected an open popup');
+    return popup;
+  }
+
+  it('keeps both area A notices in the open popup when only the review time changes', async () => {
+    vi.spyOn(launchCatalog, 'read').mockReturnValue({
+      mapPins: [{ eventId: STARSHIP_FLIGHT15_EVENT_ID }],
+    } as unknown as TierCatalog);
+    vi.spyOn(launchCatalog, 'attempt').mockReturnValue(ATTEMPT);
+    const { vendor, core } = mount();
+    bindAscentPad(core);
+    setMapLaunchMode(true);
+    const popup = await openBothAreaA(vendor);
+    expect(popup.removed).toBe(false);
+    const amended = withSecondAreaA(hazardFile());
+    amended.checked_at = '2026-11-13T23:00:00Z';
+    await reloadLaunchHazards(() => jsonResponse(amended));
+    const text = popup.content.textContent ?? '';
+    expect(popup.removed).toBe(false);
+    expect(text.split('NAVAREA IV 1080/26 area A').length - 1).toBe(1);
+    expect(text.split(`${INDEPENDENT_NOTICE} area A`).length - 1).toBe(1);
+    expect(text).toContain('Checked 2026-11-13T23:00:00Z');
+    expect(text).not.toContain('Checked 2026-11-13T10:02:00Z');
+  });
+
+  it('closes the open popup when one area A notice is withdrawn', async () => {
+    vi.spyOn(launchCatalog, 'read').mockReturnValue({
+      mapPins: [{ eventId: STARSHIP_FLIGHT15_EVENT_ID }],
+    } as unknown as TierCatalog);
+    vi.spyOn(launchCatalog, 'attempt').mockReturnValue(ATTEMPT);
+    const { vendor, core } = mount();
+    bindAscentPad(core);
+    setMapLaunchMode(true);
+    const popup = await openBothAreaA(vendor);
+    expect(popup.removed).toBe(false);
+    await reloadLaunchHazards(() => jsonResponse(withoutIndependentNotice(withSecondAreaA(hazardFile()))));
+    expect(popup.removed).toBe(true);
+    const left = painted(vendor).filter((item) => item.properties?.area_id === 'A');
+    expect(left.map((item) => item.properties?.notice_id)).toEqual(['NAVAREA IV 1080/26']);
+  });
+
   it('paints the polygons when a catalog refresh finishes', async () => {
     vi.spyOn(launchCatalog, 'read').mockReturnValue({
       mapPins: [{ eventId: STARSHIP_FLIGHT15_EVENT_ID }],
