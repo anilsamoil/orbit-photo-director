@@ -315,8 +315,8 @@ const MUTATIONS = [
   {
     contract: 'unchecking a satellite forgets it for the next visit',
     file: SATELLITES,
-    find: '      publish();\n      persist();\n    };\n\n    const port',
-    replace: '      publish();\n    };\n\n    const port',
+    find: '      publish();\n      persist();\n    };\n\n    const addTyped',
+    replace: '      publish();\n    };\n\n    const addTyped',
   },
   {
     contract: 'a crew roster site popup has no Edit button',
