@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -147,7 +148,9 @@ def _spec_from_entry(entry: object) -> TrackedSpec | None:
     if not isinstance(color, str) or not _COLOR.fullmatch(color):
         return None
     max_age = entry.get("max_age_hours", ADDED_MAX_AGE_HOURS)
-    if isinstance(max_age, bool) or not isinstance(max_age, int | float) or max_age <= 0:
+    if isinstance(max_age, bool) or not isinstance(max_age, int | float):
+        return None
+    if not math.isfinite(max_age) or max_age <= 0:
         return None
     queries = tuple(name.strip().upper() for name in names)
     return TrackedSpec(

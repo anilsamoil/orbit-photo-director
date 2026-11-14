@@ -532,6 +532,9 @@ def test_an_object_added_by_name_matches_that_name_and_not_a_longer_one(tmp_path
         {"id": "zero", "label": "X", "catnr": 0},
         {"id": "starship", "label": "Impostor", "catnr": 5},
         {"id": "tint", "label": "X", "catnr": 5, "color": "red"},
+        {"id": "forever", "label": "X", "catnr": 5, "max_age_hours": float("inf")},
+        {"id": "nan", "label": "X", "catnr": 5, "max_age_hours": float("nan")},
+        {"id": "negative", "label": "X", "catnr": 5, "max_age_hours": -1},
         "not an object",
     ],
 )
