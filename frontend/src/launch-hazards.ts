@@ -325,8 +325,10 @@ export function parseHazardBundle(value: unknown): HazardBundle | null {
   };
 }
 
+/** An instantaneous attempt counts as the instant it names, also at the first moment of a window. */
 function overlaps(attempt: HazardAttempt, window: HazardWindow): boolean {
-  return attempt.startMs < window.endMs && attempt.endMs > window.startMs;
+  const attemptEnd = Math.max(attempt.endMs, attempt.startMs + 1);
+  return attempt.startMs < window.endMs && attemptEnd > window.startMs;
 }
 
 function contains(window: HazardWindow, nowMs: number): boolean {

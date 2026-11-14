@@ -252,7 +252,14 @@ for (const [name, browserType] of engines) {
       await openLaunches(page);
       const follow = page.locator('#toggle-follow-iss');
       if ((await follow.getAttribute('class'))?.includes('active')) await follow.click();
-      await page.evaluate((pad) => window.__opdMap.jumpTo({ center: pad, zoom: 3.2 }), scenario.pad);
+      await page.evaluate((pad) => {
+        const card = document.getElementById('map-launch-coverage')?.getBoundingClientRect();
+        const shift = [0, 0];
+        if (card && card.width > 1 && card.width <= window.innerWidth * 0.6) shift[0] = -card.right / 2;
+        else if (card && card.width > 1 && card.bottom <= window.innerHeight * 0.6) shift[1] = -card.bottom / 2;
+        window.__opdMap.jumpTo({ center: pad, zoom: 3.2 });
+        window.__opdMap.panBy(shift, { duration: 0 });
+      }, scenario.pad);
       await page.waitForTimeout(1500);
       const unselected = await page.evaluate(captionProbe);
       const painted = await page.evaluate(() => {
@@ -267,7 +274,7 @@ for (const [name, browserType] of engines) {
         if (details) details.open = true;
         window.__opdMap.setBearing(143.26);
       });
-      const show = page.locator('#map-launch-coverage .launch-brief-actions .btn');
+      const show = page.locator('#map-launch-coverage .launch-brief-actions .btn').first();
       if (await show.count()) await show.click();
       await page.waitForTimeout(2200);
       const caption = await page.evaluate(captionProbe);

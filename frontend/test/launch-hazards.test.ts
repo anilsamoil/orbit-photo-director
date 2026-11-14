@@ -1243,6 +1243,13 @@ describe('hazard areas for every catalog launch', () => {
     expect(activeHazardFeatures(bundle, STARSHIP_FLIGHT15_EVENT_ID, VULCAN_NOW, VULCAN_ATTEMPT)).toEqual([]);
     expect(activeHazardFeatures(bundle, VULCAN_EVENT_ID, NOV13, ATTEMPT)).toEqual([]);
     expect(activeHazardFeatures(bundle, 'not-in-the-file', VULCAN_NOW, VULCAN_ATTEMPT)).toEqual([]);
+    const instant = (iso: string) => ({ startMs: Date.parse(iso), endMs: Date.parse(iso) });
+    const atOpen = Date.parse('2026-11-14T17:32:00Z');
+    expect(areaIds(activeHazardFeatures(bundle, VULCAN_EVENT_ID, atOpen, instant('2026-11-14T17:32:00Z')))).toEqual(['6/7111', 'A', 'B', 'C']);
+    expect(areaIds(activeHazardFeatures(bundle, VULCAN_EVENT_ID, atOpen, instant('2026-11-14T19:10:59Z')))).toEqual(['6/7111', 'A', 'B', 'C']);
+    expect(activeHazardFeatures(bundle, VULCAN_EVENT_ID, atOpen, instant('2026-11-14T19:11:00Z'))).toEqual([]);
+    expect(areaIds(activeHazardFeatures(bundle, VULCAN_EVENT_ID, atOpen, instant('2026-11-14T17:31:59Z')))).toEqual(['6/7111']);
+    expect(activeHazardFeatures(bundle, VULCAN_EVENT_ID, atOpen, instant('2026-11-14T17:21:59Z'))).toEqual([]);
     const typo = { startMs: Date.parse('2026-11-16T16:50:00Z'), endMs: Date.parse('2026-11-16T18:28:00Z') };
     expect(activeHazardFeatures(parsed(reviewed(hazardFile(), '2026-11-16T12:00:00Z', VULCAN_EVENT_ID)), VULCAN_EVENT_ID, Date.parse('2026-11-16T17:00:00Z'), typo)).toEqual([]);
   });
