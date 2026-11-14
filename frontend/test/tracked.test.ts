@@ -17,6 +17,7 @@ const LOOKUP = {
   names: ['STARSHIP', 'SHIP'],
   patterns: ['^STARSHIP(?:[\\s-]|$)(?!.*\\bDEB\\b)', '^SHIP[\\s-]+\\d+\\b(?!.*\\bDEB\\b)'],
   max_age_hours: 12,
+  grace_hours: 72,
 };
 
 const UNAVAILABLE: TrackedUnavailable = {
@@ -76,8 +77,18 @@ describe('tracked artifact', () => {
   });
 
   it('reads the lookup of an object the operator added', () => {
-    const row = { ...UNAVAILABLE, id: 'ship-40', label: 'Ship 40', lookup: { names: [], patterns: [], max_age_hours: 48, catnr: 67002, intldes: '2026-211A' } };
+    const lookup = { names: [], patterns: [], max_age_hours: 48, grace_hours: 48, catnr: 67002, intldes: '2026-211A' };
+    const row = { ...UNAVAILABLE, id: 'ship-40', label: 'Ship 40', lookup };
     expect(parseTracked({ objects: [row] })).toEqual([row]);
+  });
+
+  it('gives a row from a publisher that predates the grace the built-in grace for its id, never one under its age limit', () => {
+    const { grace_hours: _grace, ...old } = LOOKUP;
+    expect(parseTracked({ objects: [{ ...UNAVAILABLE, lookup: old }] })).toEqual([UNAVAILABLE]);
+    expect(parseTracked({ objects: [{ ...UNAVAILABLE, lookup: { ...LOOKUP, grace_hours: 6 } }] })).toEqual([UNAVAILABLE]);
+    const added = { ...UNAVAILABLE, id: 'ship-40', label: 'Ship 40' };
+    expect(parseTracked({ objects: [{ ...added, lookup: { ...old, max_age_hours: 48 } }] }))
+      .toEqual([{ ...added, lookup: { ...LOOKUP, max_age_hours: 48, grace_hours: 48 } }]);
   });
 
   it('reads the other live objects of a row, skipping one that is not an element set', () => {

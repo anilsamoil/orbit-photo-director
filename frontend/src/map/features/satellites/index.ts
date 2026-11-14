@@ -257,7 +257,7 @@ export const satellites: MapFeature = {
       [...wanted].map(([key, sat]) => {
         const elements = elementsOf(sat);
         const lines = elements ? [elements.tle, ...(elements.also ?? [])].map((tle) => tle.line1) : [];
-        return `${key}=${sat.lookup?.state}:${lines.join('|')}`;
+        return `${key}=${sat.lookup?.state}:${elements?.stale_epoch_hours ?? ''}:${lines.join('|')}`;
       }).join();
 
     const recheckPublished = (): void => {

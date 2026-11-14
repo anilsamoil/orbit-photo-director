@@ -1,7 +1,7 @@
 """Extra vehicles published beside the ISS track.
 
-Element sets come only from CelesTrak GP or SupGP text. A miss, a stale
-epoch, or a failed lookup becomes a status row.
+Element sets come only from CelesTrak GP or SupGP text. A miss, an epoch
+past the grace, or a failed lookup becomes a status row.
 """
 
 from __future__ import annotations
@@ -28,7 +28,11 @@ TRACKED_QUERY_BUDGET_SECONDS = 15.0
 
 @dataclass(frozen=True)
 class TrackedSpec:
-    """One extra vehicle. Match by catalog number, designator, or name."""
+    """One extra vehicle. Match by catalog number, designator, or name.
+
+    A set is fresh until `max_age_hours` after its epoch and is published
+    until `grace_hours`. An unset grace is the fresh window.
+    """
 
     id: str
     label: str
@@ -38,6 +42,11 @@ class TrackedSpec:
     max_age_hours: float
     catnr: int | None = None
     intldes: str | None = None
+    last_good_hours: float | None = None
+
+    @property
+    def grace_hours(self) -> float:
+        return max(self.max_age_hours, self.last_good_hours or 0.0)
 
 
 @dataclass(frozen=True)
@@ -89,7 +98,12 @@ _STARSHIP_NAME = re.compile(r"^STARSHIP(?:[\s-]|$)(?!.*\bDEB\b)", re.IGNORECASE)
 _SHIP_NAME = re.compile(r"^SHIP[\s-]+\d+\b(?!.*\bDEB\b)", re.IGNORECASE)
 _ROCKET_BODY = re.compile(r"\bR/B\b", re.IGNORECASE)
 _LAUNCH = re.compile(r"(\d{2})(\d{3})")
-SAME_DAY_MAX_AGE_HOURS = 12.0
+# A Starship set is fresh for 12 h after its epoch. Past that it is still
+# published, and the browser labels it stale, until 72 h: a feed outage or a
+# late update must not erase a ship that still propagates and has not
+# reentered. `frontend/src/tracked.ts` mirrors both values.
+STARSHIP_FRESH_HOURS = 12.0
+STARSHIP_GRACE_HOURS = 72.0
 REENTRY_PERIGEE_KM = 80.0
 EARTH_MU_KM3_S2 = 398600.4418
 EARTH_RADIUS_KM = 6378.137
@@ -100,7 +114,8 @@ STARSHIP = TrackedSpec(
     color="#ff5c5c",
     name_patterns=(_STARSHIP_NAME, _SHIP_NAME),
     name_queries=("STARSHIP", "SHIP"),
-    max_age_hours=SAME_DAY_MAX_AGE_HOURS,
+    max_age_hours=STARSHIP_FRESH_HOURS,
+    last_good_hours=STARSHIP_GRACE_HOURS,
 )
 
 TRACKED_SPECS: tuple[TrackedSpec, ...] = (STARSHIP,)
@@ -316,8 +331,8 @@ def resolve_spec(
         held = newest.get(obj.elements.norad)
         if held is None or _newness(obj) > _newness(held):
             newest[obj.elements.norad] = obj
-    young = [obj for obj in newest.values() if obj.age_hours <= spec.max_age_hours]
-    live = sorted((obj for obj in young if not reentered(obj.elements, now)), key=_rank)
+    kept = [obj for obj in newest.values() if obj.age_hours <= spec.grace_hours]
+    live = sorted((obj for obj in kept if not reentered(obj.elements, now)), key=_rank)
 
     if live:
         if [obj.elements for obj in live] != cached:
@@ -334,12 +349,14 @@ def resolve_spec(
         )
     if all_answered:
         cache_path.unlink(missing_ok=True)
-    if young:
+    if kept:
         return _unavailable(spec, "reentered")
-    if pool:
-        return _unavailable(spec, "aged_out")
+    # A feed that failed may hold a newer set, so sets past the grace do not
+    # make this an answer.
     if saw_error:
         return _unavailable(spec, "lookup_failed")
+    if pool:
+        return _unavailable(spec, "aged_out")
     return _unavailable(spec, "no_public_orbit")
 
 
@@ -403,6 +420,7 @@ def lookup_json(spec: TrackedSpec) -> dict[str, object]:
         "names": list(spec.name_queries),
         "patterns": [pattern.pattern for pattern in spec.name_patterns],
         "max_age_hours": spec.max_age_hours,
+        "grace_hours": spec.grace_hours,
     }
     if spec.catnr is not None:
         lookup["catnr"] = spec.catnr

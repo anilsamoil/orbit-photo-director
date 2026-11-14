@@ -114,7 +114,10 @@ type AskFailure = Exclude<LookupFailure, 'publisher' | 'artifact'>;
 /** The outcome of one lookup. `not_found`, `expired` and `reentered` are
  *  answers from a source that replied; `failed` is a source that did not.
  *  `tle` is the object drawn, `also` every other live object of a published
- *  vehicle. */
+ *  vehicle. `stale` is a last good set, whatever its age.
+ *  `stale_epoch_hours` is set when the drawn set is past its fresh window.
+ *  `last_good_hours` is set when a failed lookup had only a last good set
+ *  past its grace to fall back on. */
 export type OrbitLookup =
   | {
       state: 'elements';
@@ -123,11 +126,12 @@ export type OrbitLookup =
       match_count: number;
       origin: 'published' | Feed | 'cache';
       stale: boolean;
+      stale_epoch_hours?: number;
     }
   | { state: 'not_found' }
   | { state: 'expired' }
   | { state: 'reentered' }
-  | { state: 'failed'; cause: LookupFailure };
+  | { state: 'failed'; cause: LookupFailure; last_good_hours?: number };
 
 /** `published` reads the artifact and the last good cache only. `ask`
  *  also queries CelesTrak, and is for a tap, never a timer. */
@@ -329,23 +333,39 @@ function newestPerObject<T extends Candidate>(sets: readonly T[]): { set: T; epo
 
 /** The objects of a lookup that are in orbit now, the one to draw first:
  *  the newest set of each catalog number, Supplemental GP winning a tie,
- *  inside the lookup's age limit and not reentered. */
+ *  inside the lookup's grace and not reentered. */
 export function liveObjects<T extends Candidate>(lookup: TrackedLookup, sets: readonly T[], nowMs: number): T[] {
   return newestPerObject(sets)
     .filter(({ set, epochMs }) =>
-      nowMs - epochMs <= lookup.max_age_hours * HOUR_MS && !reentered(set.tle.line2, epochMs, nowMs))
+      nowMs - epochMs <= lookup.grace_hours * HOUR_MS && !reentered(set.tle.line2, epochMs, nowMs))
     .map(({ set }) => set)
     .sort(byRank);
 }
 
 /** Why sets that matched a lookup draw nothing. */
 function gone(lookup: TrackedLookup, sets: readonly Candidate[], nowMs: number): OrbitLookup {
-  const young = newestPerObject(sets).some(({ epochMs }) => nowMs - epochMs <= lookup.max_age_hours * HOUR_MS);
-  return young ? { state: 'reentered' } : { state: 'expired' };
+  const kept = newestPerObject(sets).some(({ epochMs }) => nowMs - epochMs <= lookup.grace_hours * HOUR_MS);
+  return kept ? { state: 'reentered' } : { state: 'expired' };
 }
 
-function drawn(live: readonly Candidate[], origin: 'published' | Feed | 'cache', stale: boolean): OrbitLookup {
+/** A failed lookup, saying so when the only last good set is past its grace. */
+function failed(cause: LookupFailure, lookup: TrackedLookup | undefined, cached: readonly Candidate[], nowMs: number): OrbitLookup {
+  const epochs = newestPerObject(cached).map(({ epochMs }) => epochMs);
+  const hours = (nowMs - Math.max(...epochs)) / HOUR_MS;
+  return lookup && epochs.length > 0 && hours > lookup.grace_hours
+    ? { state: 'failed', cause, last_good_hours: Math.floor(hours) }
+    : { state: 'failed', cause };
+}
+
+function drawn(
+  lookup: TrackedLookup,
+  live: readonly Candidate[],
+  origin: 'published' | Feed | 'cache',
+  stale: boolean,
+  nowMs: number,
+): OrbitLookup {
   const [first, ...rest] = live.map(({ tle }) => tle) as [TLEPair, ...TLEPair[]];
+  const hours = (nowMs - (tleEpochMs(first) ?? nowMs)) / HOUR_MS;
   return {
     state: 'elements',
     tle: first,
@@ -353,12 +373,19 @@ function drawn(live: readonly Candidate[], origin: 'published' | Feed | 'cache',
     match_count: live.length,
     origin,
     stale,
+    ...(hours > lookup.max_age_hours ? { stale_epoch_hours: Math.floor(hours) } : {}),
   };
 }
 
 function keepLive(meta: SatelliteMeta, live: readonly Candidate[], nowMs: number, asked: boolean): void {
   const [first, ...rest] = live.map(({ tle }) => tle) as [TLEPair, ...TLEPair[]];
   keep(meta, first, live.length, nowMs, rest, asked);
+}
+
+/** The label of a drawn set that is past its fresh window. */
+export function staleOrbit(lookup: OrbitLookup): string | null {
+  if (lookup.state !== 'elements' || lookup.stale_epoch_hours === undefined) return null;
+  return `stale orbit, epoch ${lookup.stale_epoch_hours} h old`;
 }
 
 /** `NAME (NORAD n)` for each live object that is not the one drawn. */
@@ -419,7 +446,9 @@ async function resolvePublished(
   const cached: Candidate[] = trusted ? [entry.tle, ...(entry.also ?? [])].map((tle) => ({ tle })) : [];
   const lastGood = lookup ? liveObjects(lookup, cached, nowMs) : [];
 
-  if (mode === 'published' || !lookup) return lastGood.length > 0 ? drawn(lastGood, 'cache', true) : publisherSays;
+  const verdict = publisherSays.state === 'failed' ? failed(publisherSays.cause, lookup, cached, nowMs) : publisherSays;
+  if (!lookup) return verdict;
+  if (mode === 'published') return lastGood.length > 0 ? drawn(lookup, lastGood, 'cache', true, nowMs) : verdict;
 
   const replies = await Promise.all(lookupQueries(lookup).map(ask));
   const matches: Candidate[] = replies.flatMap((reply) =>
@@ -434,12 +463,12 @@ async function resolvePublished(
   const first = live[0];
   if (first) {
     keepLive(meta, live, nowMs, true);
-    return drawn(live, first.feed ?? 'cache', first.feed === undefined);
+    return drawn(lookup, live, first.feed ?? 'cache', first.feed === undefined, nowMs);
   }
   if (cause === null) forget(meta);
   if (matches.length > 0) return gone(lookup, matches, nowMs);
   if (cause === null) return { state: 'not_found' };
-  return publisherSays.state === 'failed' ? { state: 'failed', cause } : publisherSays;
+  return publisherSays.state === 'failed' ? failed(cause, lookup, cached, nowMs) : publisherSays;
 }
 
 async function resolveDirect(meta: SatelliteMeta, param: string, value: string | number, nowMs: number): Promise<OrbitLookup> {
@@ -459,12 +488,12 @@ async function resolveDirect(meta: SatelliteMeta, param: string, value: string |
 }
 
 /** Find the orbit of one satellite. A row of `tracked.json` with elements
- *  wins while it is younger than its limit and has not reentered, checked
+ *  wins while it is inside its grace and has not reentered, checked
  *  here as well as by the publisher, because the artifact can sit in an
  *  open map for hours. When the row's own object is no longer live, the
  *  first of its other live objects is drawn. A
  *  published object otherwise falls back to its last good element
- *  set while that is young enough, and in `ask` mode to the publisher's own
+ *  set while that is inside the grace, and in `ask` mode to the publisher's own
  *  CelesTrak queries. A catalog number or a name the publisher does not
  *  carry is asked of CelesTrak GP, with the 6 h cache in front. */
 export async function resolveOrbit(
@@ -476,9 +505,9 @@ export async function resolveOrbit(
   const row = publishedRow(meta, published);
   const live = row ? liveObjects(row.lookup, publishedSets(meta, row), nowMs) : [];
   const first = live[0];
-  if (first) {
+  if (row && first) {
     keepLive(meta, live, nowMs, false);
-    return drawn(live, 'published', first.stale);
+    return drawn(row.lookup, live, 'published', first.stale, nowMs);
   }
   const resolution = meta.resolution;
   if (resolution.kind === 'published') return resolvePublished(meta, row, mode, nowMs);
@@ -506,15 +535,17 @@ export function lookupMessage(meta: SatelliteMeta, lookup: OrbitLookup): string 
   if (lookup.state === 'elements') {
     if (resolution.kind === 'published') {
       const also = alsoInOrbit(lookup);
-      const drawing = lookup.stale
-        ? `${meta.name}: drawing the last good orbit, ${lookup.tle.name}`
-        : `${meta.name}: drawing ${lookup.tle.name}`;
+      const set = [lookup.stale ? `drawing the last good orbit, ${lookup.tle.name}` : `drawing ${lookup.tle.name}`, staleOrbit(lookup)];
+      const drawing = `${meta.name}: ${set.filter(Boolean).join(', ')}`;
       return also ? `${drawing}. ${also}` : drawing;
     }
     return 'Tracking added';
   }
   if (lookup.state === 'failed') {
-    return `${meta.name}: orbit lookup failed, ${FAILURE_TEXT[lookup.cause]}. No orbit is drawn.`;
+    const drawing = lookup.last_good_hours === undefined
+      ? 'No orbit is drawn.'
+      : `The last good orbit, epoch ${lookup.last_good_hours} h old, is too old to draw.`;
+    return `${meta.name}: orbit lookup failed, ${FAILURE_TEXT[lookup.cause]}. ${drawing}`;
   }
   if (lookup.state === 'expired') return `${meta.name}: the last public orbit is too old to draw.`;
   if (lookup.state === 'reentered') return `${meta.name}: the last public orbit has reentered. No orbit is drawn.`;

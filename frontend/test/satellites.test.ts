@@ -13,7 +13,7 @@ import {
   type OrbitLookup,
   type SatelliteMeta,
 } from '../src/satellites';
-import { UNPUBLISHED_TRACKED, UNREAD_TRACKED, type TrackedElements, type TrackedObject, type TrackedRecord, type TrackedUnavailable } from '../src/tracked';
+import { STARSHIP_FRESH_HOURS, STARSHIP_GRACE_HOURS, UNPUBLISHED_TRACKED, UNREAD_TRACKED, type TrackedElements, type TrackedObject, type TrackedRecord, type TrackedUnavailable } from '../src/tracked';
 
 const SAMPLE_ISS_3LE = `ISS (ZARYA)
 1 25544U 98067A   24291.00000000  .00018000  00000-0  32500-3 0  9999
@@ -215,11 +215,11 @@ describe('a published vehicle', () => {
     expect(await ask(STARSHIP, [{ ...ELEMENTS_ROW, from_cache: true }])).toMatchObject({ origin: 'published', stale: true });
   });
 
-  it('does not draw a publisher element set that has passed its 12 h limit since it was published', async () => {
+  it('does not draw a publisher element set that has passed its 72 h grace since it was published', async () => {
     const fetchMock = celestrak({}, 'No GP data found');
-    const later = NOW + 7 * 3_600_000;
+    const later = NOW + 67 * 3_600_000;
 
-    expect(await resolveOrbit(STARSHIP, [ELEMENTS_ROW], 'published', later - 3_600_000)).toMatchObject({ state: 'elements' });
+    expect(await resolveOrbit(STARSHIP, [ELEMENTS_ROW], 'published', later - 3_600_000)).toMatchObject({ state: 'elements', stale_epoch_hours: 72 });
     expect(await resolveOrbit(STARSHIP, [ELEMENTS_ROW], 'published', later)).toEqual({ state: 'expired' });
     expect(fetchMock).not.toHaveBeenCalled();
     expect(await resolveOrbit(STARSHIP, [ELEMENTS_ROW], 'ask', later)).toEqual({ state: 'not_found' });
@@ -333,8 +333,8 @@ describe('a published vehicle', () => {
     expect(await ask(STARSHIP, [AGED_ROW])).toEqual({ state: 'expired' });
   });
 
-  it('an element set older than the publisher limit of 12 h is expired, not drawn', async () => {
-    celestrak({ NAME: body('STARSHIP S39', '67001', '26210A', '26316.90000000') });
+  it('an element set older than the publisher grace of 72 h is expired, not drawn', async () => {
+    celestrak({ NAME: body('STARSHIP S39', '67001', '26210A', '26314.70000000') });
 
     expect(await ask(STARSHIP)).toEqual({ state: 'expired' });
   });
@@ -345,7 +345,7 @@ describe('a published vehicle', () => {
     expect(await ask(STARSHIP)).toMatchObject({ state: 'elements' });
   });
 
-  it('keeps the last good element set through a failed lookup until it is 12 h old', async () => {
+  it('keeps the last good element set through a failed lookup, fresh while it is under 12 h old', async () => {
     celestrak({ NAME: body('STARSHIP S39') });
     await ask(STARSHIP);
     const fetchMock = celestrak({}, 'throw');
@@ -358,7 +358,7 @@ describe('a published vehicle', () => {
       stale: true,
     });
     expect(await resolveOrbit(STARSHIP, [FAILED_ROW], 'ask', NOW + 3_600_000)).toMatchObject({ origin: 'cache', stale: true });
-    expect(await resolveOrbit(STARSHIP, [FAILED_ROW], 'published', NOW + 7 * 3_600_000)).toEqual({ state: 'failed', cause: 'publisher' });
+    expect(await resolveOrbit(STARSHIP, [FAILED_ROW], 'published', NOW + 7 * 3_600_000)).toMatchObject({ origin: 'cache', stale_epoch_hours: 13 });
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
@@ -378,7 +378,7 @@ describe('a published vehicle', () => {
       ...FAILED_ROW,
       id: 'ship-40',
       label: 'Ship 40',
-      lookup: { names: [], patterns: [], max_age_hours: 48, catnr: 67002, intldes: '2026-211A' },
+      lookup: { names: [], patterns: [], max_age_hours: 48, grace_hours: 48, catnr: 67002, intldes: '2026-211A' },
     };
     const fetchMock = celestrak({ 'INTDES=2026-211A': body('OBJECT A', '67002', '26211A') });
 
@@ -424,7 +424,7 @@ function tap(at = FLIGHT_DAY, published: readonly TrackedRecord[] = [FAILED_ROW]
 
 describe('several Starship objects in the feeds', () => {
   it('draws the next flight and does not list the aged-out one', async () => {
-    celestrak({ NAME: aged('SHIP 90', 30) + aged('SHIP 91', 1) });
+    celestrak({ NAME: aged('SHIP 90', 80) + aged('SHIP 91', 1) });
 
     expect(await tap()).toMatchObject({ tle: { name: 'SHIP 91' }, match_count: 1 });
     expect(drawnNames(await tap())).toEqual(['SHIP 91']);
@@ -503,6 +503,103 @@ describe('several Starship objects in the feeds', () => {
   });
 });
 
+describe('the fresh window and the last good grace', () => {
+  const HOUR = 3_600_000;
+  const EPOCH = FLIGHT_DAY - HOUR;
+  const FRESH = EPOCH + STARSHIP_FRESH_HOURS * HOUR;
+  const GRACE = EPOCH + STARSHIP_GRACE_HOURS * HOUR;
+  const NOTHING = 'Starship: no public orbit yet. CelesTrak GP and Supplemental GP list no element set for it.';
+
+  /** SHIP 91 is the last good set, epoch one hour before FLIGHT_DAY, and
+   *  all four NAME requests fail from then on. */
+  async function outage(name = 'SHIP 91'): Promise<ReturnType<typeof celestrak>> {
+    celestrak({ NAME: aged(name, 1) });
+    expect(drawnNames(await tap())).toEqual([name]);
+    return celestrak({}, 'throw');
+  }
+
+  it('is 12 h and 72 h, as the publisher has them', () => {
+    expect([STARSHIP_FRESH_HOURS, STARSHIP_GRACE_HOURS]).toEqual([12, 72]);
+    expect(FAILED_ROW.lookup).toMatchObject({ max_age_hours: 12, grace_hours: 72 });
+  });
+
+  it.each(['published', 'ask'] as const)('through an outage, %s mode draws the last good set fresh, then stale, then reports a failed lookup', async (mode) => {
+    const fetchMock = await outage();
+    const at = (nowMs: number): Promise<OrbitLookup> => resolveOrbit(STARSHIP, [FAILED_ROW], mode, nowMs);
+
+    const fresh = await at(FRESH - 1000);
+    expect(fresh).toMatchObject({ tle: { name: 'SHIP 91' }, origin: 'cache', stale: true });
+    expect(fresh).not.toHaveProperty('stale_epoch_hours');
+
+    const justStale = await at(FRESH + 1000);
+    expect(justStale).toMatchObject({ tle: { name: 'SHIP 91' }, origin: 'cache', stale_epoch_hours: 12 });
+    expect(lookupMessage(STARSHIP, justStale)).toBe('Starship: drawing the last good orbit, SHIP 91, stale orbit, epoch 12 h old');
+
+    const lastStale = await at(GRACE - 1000);
+    expect(lastStale).toMatchObject({ tle: { name: 'SHIP 91' }, origin: 'cache', stale_epoch_hours: 71 });
+    expect(lookupMessage(STARSHIP, lastStale)).toContain('stale orbit, epoch 71 h old');
+
+    const lapsed = await at(GRACE + 1000);
+    expect(lapsed).toEqual({ state: 'failed', cause: mode === 'ask' ? 'network' : 'publisher', last_good_hours: 72 });
+    expect(lookupMessage(STARSHIP, lapsed)).toContain('orbit lookup failed');
+    expect(lookupMessage(STARSHIP, lapsed)).toContain('The last good orbit, epoch 72 h old, is too old to draw.');
+    expect(lookupMessage(STARSHIP, lapsed)).not.toBe(NOTHING);
+    expect(fetchMock).toHaveBeenCalledTimes(mode === 'ask' ? 16 : 0);
+  });
+
+  it('an outage with no last good set is a failed lookup, not a miss', async () => {
+    celestrak({}, 'throw');
+
+    expect(await tap()).toEqual({ state: 'failed', cause: 'network' });
+    expect(lookupMessage(STARSHIP, await tap())).toBe('Starship: orbit lookup failed, CelesTrak could not be reached from this browser. No orbit is drawn.');
+  });
+
+  it('drops a last good set that reenters inside the grace', async () => {
+    await outage('SHIP 92');
+
+    expect(await tap(FLIGHT_DAY + 20 * HOUR)).toEqual({ state: 'failed', cause: 'network' });
+    expect(await resolveOrbit(STARSHIP, [FAILED_ROW], 'published', FLIGHT_DAY + 20 * HOUR)).toEqual({ state: 'failed', cause: 'publisher' });
+  });
+
+  it('draws a set the feeds still list past the fresh window, labelled stale', async () => {
+    celestrak({ NAME: aged('SHIP 91', 13) });
+
+    const lookup = await tap();
+    expect(lookup).toMatchObject({ tle: { name: 'SHIP 91' }, origin: 'supgp', stale: false, stale_epoch_hours: 13 });
+    expect(lookupMessage(STARSHIP, lookup)).toBe('Starship: drawing SHIP 91, stale orbit, epoch 13 h old');
+  });
+
+  it('draws a publisher set past the fresh window, labelled stale', async () => {
+    celestrak({});
+    const lookup = await resolveOrbit(STARSHIP, [row(publishedObject('SHIP 91', 13))], 'published', FLIGHT_DAY);
+
+    expect(lookup).toMatchObject({ tle: { name: 'SHIP 91' }, origin: 'published', stale_epoch_hours: 13 });
+  });
+
+  it('a complete empty answer clears a stale last good set, and so does a publisher that confirms none', async () => {
+    await outage();
+    celestrak({}, 'No GP data found');
+    expect(await tap(FRESH + HOUR)).toEqual({ state: 'not_found' });
+    expect(localStorage.getItem('opd-tle-tracked:starship')).toBeNull();
+
+    const none: TrackedRecord = { ...FAILED_ROW, reason: 'no_public_orbit' };
+    const at = FLIGHT_DAY + 20 * HOUR;
+    expect(drawnNames(await resolveOrbit(STARSHIP, [row(publishedObject('SHIP 91', 1))], 'published', FLIGHT_DAY))).toEqual(['SHIP 91']);
+    expect(await resolveOrbit(STARSHIP, [FAILED_ROW], 'published', at)).toMatchObject({ tle: { name: 'SHIP 91' }, stale_epoch_hours: 21 });
+    expect(await resolveOrbit(STARSHIP, [none], 'published', at)).toEqual({ state: 'not_found' });
+  });
+
+  it('an operator-added object has no grace past its age limit', async () => {
+    celestrak({}, 'throw');
+    const meta: SatelliteMeta = { ...TIANGONG, name: 'Ship 40', resolution: { kind: 'published', id: 'ship-40' } };
+    const added: TrackedElements = { ...row(publishedObject('SHIP 91', 1)), id: 'ship-40', lookup: { names: [], patterns: [], max_age_hours: 48, grace_hours: 48 } };
+
+    expect(await resolveOrbit(meta, [added], 'published', FLIGHT_DAY + 46 * HOUR)).toMatchObject({ state: 'elements' });
+    expect(await resolveOrbit(meta, [added], 'published', FLIGHT_DAY + 46 * HOUR)).not.toHaveProperty('stale_epoch_hours');
+    expect(await resolveOrbit(meta, [added], 'published', FLIGHT_DAY + 48 * HOUR)).toEqual({ state: 'expired' });
+  });
+});
+
 describe('a published row with several objects', () => {
   const published = (records: TrackedRecord[], at = FLIGHT_DAY): Promise<OrbitLookup> => resolveOrbit(STARSHIP, records, 'published', at);
 
@@ -514,7 +611,7 @@ describe('a published row with several objects', () => {
   });
 
   it('draws another live object once the row\'s own has aged out in an open map', async () => {
-    const records = [row(publishedObject('SHIP 91', 10), publishedObject('SHIP 90', 2))];
+    const records = [row(publishedObject('SHIP 91', 70), publishedObject('SHIP 90', 2))];
 
     expect(drawnNames(await published(records))).toEqual(['SHIP 91', 'SHIP 90']);
     expect(drawnNames(await published(records, FLIGHT_DAY + 3 * 3_600_000))).toEqual(['SHIP 90']);
@@ -530,7 +627,7 @@ describe('a published row with several objects', () => {
   it('says reentered for a row inside its age limit that has reentered, and for a reentered status row', async () => {
     expect(await published([row(publishedObject('SHIP 92', 3))])).toEqual({ state: 'reentered' });
     expect(await published([{ ...FAILED_ROW, reason: 'reentered' }])).toEqual({ state: 'reentered' });
-    expect(await published([row(publishedObject('SHIP 92', 13))])).toEqual({ state: 'expired' });
+    expect(await published([row(publishedObject('SHIP 92', 73))])).toEqual({ state: 'expired' });
   });
 
   it('stops drawing a ship the publisher gave once the publisher says CelesTrak lists none', async () => {
@@ -552,7 +649,7 @@ describe('a published row with several objects', () => {
   it('a catalog number never takes another object of the row in its place', async () => {
     celestrak({}, 'No GP data found');
     const meta: SatelliteMeta = { ...TIANGONG, resolution: { kind: 'catnr', catnr: 90003 } };
-    const records = [row(publishedObject('SHIP 91', 13), publishedObject('SHIP 90', 2))];
+    const records = [row(publishedObject('SHIP 91', 73), publishedObject('SHIP 90', 2))];
 
     expect(await resolveOrbit(meta, records, 'ask', FLIGHT_DAY)).toEqual({ state: 'not_found' });
   });
@@ -679,6 +776,22 @@ describe('lookupMessage', () => {
     expect(lookupMessage(STARSHIP, { state: 'elements', tle, match_count: 1, origin: 'published', stale: true }))
       .toBe('Starship: drawing the last good orbit, STARSHIP S39');
     expect(lookupMessage(norad, { state: 'elements', tle, match_count: 1, origin: 'gp', stale: false })).toBe('Tracking added');
+  });
+
+  it('a drawn orbit past its fresh window says stale orbit and the epoch age', () => {
+    const tle = { line1: PUB1, line2: PUB2, name: 'SHIP 91' };
+    const [body1, body2] = lines('90004', '26310B');
+    const also = [{ line1: body1, line2: body2, name: 'SHIP 91 R/B' }];
+
+    expect(lookupMessage(STARSHIP, { state: 'elements', tle, match_count: 1, origin: 'supgp', stale: false, stale_epoch_hours: 13 }))
+      .toBe('Starship: drawing SHIP 91, stale orbit, epoch 13 h old');
+    expect(lookupMessage(STARSHIP, { state: 'elements', tle, also, match_count: 2, origin: 'cache', stale: true, stale_epoch_hours: 71 }))
+      .toBe('Starship: drawing the last good orbit, SHIP 91, stale orbit, epoch 71 h old. Also in orbit: SHIP 91 R/B (NORAD 90004)');
+  });
+
+  it('a failed lookup says so when the last good orbit is past its grace', () => {
+    expect(lookupMessage(STARSHIP, { state: 'failed', cause: 'network', last_good_hours: 72 }))
+      .toBe('Starship: orbit lookup failed, CelesTrak could not be reached from this browser. The last good orbit, epoch 72 h old, is too old to draw.');
   });
 
   it('a drawn published orbit names the other objects in orbit', () => {

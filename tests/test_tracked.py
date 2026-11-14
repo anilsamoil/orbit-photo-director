@@ -13,6 +13,8 @@ from generator.orbit import TLE
 from generator.tle_sources import TleSources
 from generator.tracked import (
     STARSHIP,
+    STARSHIP_FRESH_HOURS,
+    STARSHIP_GRACE_HOURS,
     TrackedElements,
     TrackedSpec,
     TrackedUnavailable,
@@ -66,6 +68,24 @@ def answering(tmp_path: Path, body: dict[str, str]) -> tuple[TleSources, FakeClo
         return (200, body["text"]) if body["text"] else (404, "No GP data found")
 
     return _bind(tmp_path, get)
+
+
+def unreachable(tmp_path: Path) -> TleSources:
+    """Every query fails in transport, on a clock past any rest."""
+
+    def get(url: str, timeout: float) -> tuple[int, str]:
+        del url, timeout
+        raise OSError("celestrak down")
+
+    sources, _clock = _bind(tmp_path, get, FakeClock(datetime(2027, 1, 1, tzinfo=UTC)))
+    return sources
+
+
+def seeded(tmp_path: Path, name: str) -> datetime:
+    """Caches one catalogue object as the last good set. Returns its epoch."""
+    sources, _clock = answering(tmp_path, {"text": aged(name, 0.5)})
+    assert names(resolve_spec(STARSHIP, tmp_path, FLIGHT_DAY, sources)) == [name]
+    return FLIGHT_DAY - timedelta(hours=0.5)
 
 
 def names(record: object) -> list[str]:
@@ -147,7 +167,7 @@ def test_starlink_starshield_debris_and_other_ships_are_not_starship(tmp_path: P
 
 
 def test_the_next_flight_is_drawn_and_the_aged_out_one_is_not_listed(tmp_path: Path) -> None:
-    sources, _clock = answering(tmp_path, {"text": aged("SHIP 90", 30) + aged("SHIP 91", 1)})
+    sources, _clock = answering(tmp_path, {"text": aged("SHIP 90", 80) + aged("SHIP 91", 1)})
     assert names(resolve_spec(STARSHIP, tmp_path, FLIGHT_DAY, sources)) == ["SHIP 91"]
 
 
@@ -395,9 +415,9 @@ def test_aged_out_gp_uses_a_fresher_cached_supgp_while_supgp_rests(tmp_path: Pat
     assert all("sup-gp.php" not in url for url in seen)
 
 
-def test_old_elements_age_out_without_a_line(tmp_path: Path) -> None:
+def test_elements_past_the_grace_age_out_without_a_line(tmp_path: Path) -> None:
     epoch = TLE.from_text(SAMPLE_TLE_TEXT).epoch
-    now = epoch + timedelta(hours=STARSHIP.max_age_hours + 1)
+    now = epoch + timedelta(hours=STARSHIP.grace_hours, seconds=1)
 
     def get(url: str, timeout: float) -> tuple[int, str]:
         del url, timeout
@@ -422,6 +442,74 @@ def test_element_just_inside_the_max_age_is_kept(tmp_path: Path) -> None:
     assert isinstance(record, TrackedElements)
     assert record.elements.name == "SHIP 41"
     assert record.from_cache is False
+
+
+def test_starship_is_fresh_for_12_h_and_kept_as_last_good_for_72_h() -> None:
+    assert (STARSHIP.max_age_hours, STARSHIP.grace_hours) == (12.0, 72.0)
+    assert (STARSHIP_FRESH_HOURS, STARSHIP_GRACE_HOURS) == (12.0, 72.0)
+
+
+@pytest.mark.parametrize(
+    ("age", "drawn"),
+    [
+        (timedelta(hours=STARSHIP_FRESH_HOURS, seconds=-1), True),
+        (timedelta(hours=STARSHIP_FRESH_HOURS, seconds=1), True),
+        (timedelta(hours=STARSHIP_GRACE_HOURS, seconds=-1), True),
+        (timedelta(hours=STARSHIP_GRACE_HOURS, seconds=1), False),
+    ],
+)
+def test_the_last_good_set_outlives_an_outage_until_the_grace(
+    age: timedelta, drawn: bool, tmp_path: Path
+) -> None:
+    epoch = seeded(tmp_path, "SHIP 91")
+    record = resolve_spec(STARSHIP, tmp_path, epoch + age, unreachable(tmp_path))
+    if not drawn:
+        assert isinstance(record, TrackedUnavailable)
+        assert record.reason == "lookup_failed"
+        return
+    assert names(record) == ["SHIP 91"]
+    assert isinstance(record, TrackedElements)
+    assert record.from_cache is True
+    assert record.age_hours == pytest.approx(age.total_seconds() / 3600)
+    assert (record.age_hours > STARSHIP.max_age_hours) == (age > timedelta(hours=12))
+
+
+def test_a_set_the_feeds_still_list_past_the_fresh_window_is_published_with_its_age(
+    tmp_path: Path,
+) -> None:
+    sources, _clock = answering(tmp_path, {"text": aged("SHIP 91", 13)})
+    dest = tmp_path / "tracked.json"
+    write_tracked_artifact(tmp_path, FLIGHT_DAY, dest, sources=sources)
+    (row,) = json.loads(dest.read_text())["objects"]
+    assert (row["state"], row["name"], row["age_hours"]) == ("elements", "SHIP 91", 13.0)
+    assert (row["lookup"]["max_age_hours"], row["lookup"]["grace_hours"]) == (12.0, 72.0)
+
+
+def test_a_cached_set_that_reenters_inside_the_grace_is_dropped(tmp_path: Path) -> None:
+    epoch = seeded(tmp_path, "SHIP 92")
+    record = resolve_spec(STARSHIP, tmp_path, epoch + timedelta(hours=20), unreachable(tmp_path))
+    assert isinstance(record, TrackedUnavailable)
+    assert record.reason == "reentered"
+
+
+def test_a_complete_empty_answer_clears_a_stale_last_good_set(tmp_path: Path) -> None:
+    body = {"text": aged("SHIP 91", 0.5)}
+    sources, clock = answering(tmp_path, body)
+    assert names(resolve_spec(STARSHIP, tmp_path, FLIGHT_DAY, sources)) == ["SHIP 91"]
+
+    clock.advance(2 * 3600 + 1)
+    body["text"] = ""
+    record = resolve_spec(STARSHIP, tmp_path, FLIGHT_DAY + timedelta(hours=20), sources)
+    assert isinstance(record, TrackedUnavailable)
+    assert record.reason == "no_public_orbit"
+    assert not (tmp_path / "tracked-starship.json").exists()
+
+
+def test_an_object_the_operator_added_has_no_grace_past_its_age_limit(tmp_path: Path) -> None:
+    (spec,) = load_tracked_specs(
+        _objects_file(tmp_path, [{"id": "station", "label": "Station", "catnr": 25544}])
+    )[1:]
+    assert spec.grace_hours == spec.max_age_hours == 48.0
 
 
 def test_a_ship_missing_from_every_answer_is_gone_and_a_throttled_tick_does_not_revive_it(
@@ -564,6 +652,7 @@ def test_run_tick_404_publishes_no_public_orbit(settings_in_tmp: Settings) -> No
                     r"^SHIP[\s-]+\d+\b(?!.*\bDEB\b)",
                 ],
                 "max_age_hours": 12.0,
+                "grace_hours": 72.0,
             },
         }
     ]
@@ -606,7 +695,13 @@ def test_an_object_added_by_catalog_number_is_published_with_its_lookup(tmp_path
     assert starship["reason"] == "no_public_orbit"
     assert station["state"] == "elements"
     assert station["norad"] == 25544
-    assert station["lookup"] == {"names": [], "patterns": [], "max_age_hours": 48.0, "catnr": 25544}
+    assert station["lookup"] == {
+        "names": [],
+        "patterns": [],
+        "max_age_hours": 48.0,
+        "grace_hours": 48.0,
+        "catnr": 25544,
+    }
 
 
 def test_an_object_added_by_name_matches_that_name_and_not_a_longer_one(tmp_path: Path) -> None:

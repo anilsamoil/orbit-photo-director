@@ -2,6 +2,7 @@ import { setMapLaunchMode } from '../../../map-launch-mode';
 import {
   CURATED_SATELLITES,
   alsoInOrbit,
+  staleOrbit,
   lookupMessage,
   metaKey,
   type OrbitLookup,
@@ -57,7 +58,7 @@ function listed(port: PickerPort): SatelliteMeta[] {
 function rowNote(meta: SatelliteMeta, row: PickerRow): HTMLElement | null {
   if (!row.lookup) return null;
   const drawn = row.lookup.state === 'elements';
-  const about = [row.sight, alsoInOrbit(row.lookup)].filter(Boolean).join('. ');
+  const about = [staleOrbit(row.lookup), row.sight, alsoInOrbit(row.lookup)].filter(Boolean).join('. ');
   const text = drawn ? about && `${meta.name}: ${about}` : lookupMessage(meta, row.lookup);
   if (!text) return null;
   const note = document.createElement('div');
@@ -120,7 +121,8 @@ export function renderPickerList(port: PickerPort): void {
     label.append(box, icon, name);
     const lookup = row?.lookup;
     if (lookup?.state === 'elements') {
-      if (lookup.stale) label.appendChild(badge('sat-stale', isPublished(meta) ? 'last good' : 'stale TLE'));
+      if (lookup.stale_epoch_hours !== undefined) label.appendChild(badge('sat-stale', 'stale orbit'));
+      else if (lookup.stale) label.appendChild(badge('sat-stale', isPublished(meta) ? 'last good' : 'stale TLE'));
       else if (lookup.match_count > 1) label.appendChild(badge('sat-multi-match', `1 of ${lookup.match_count}`));
     } else if (lookup) {
       label.appendChild(badge('sat-stale', 'no orbit'));

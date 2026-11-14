@@ -414,7 +414,7 @@ describe('a published vehicle', () => {
       .toBe('Starship: orbit lookup failed, this browser could not load the published orbit list. No orbit is drawn.');
   });
 
-  it('stops being drawn in an open map once its element set passes 12 h, with no new publisher run', async () => {
+  it('in an open map is labelled stale once its element set passes 12 h, and stops being drawn past 72 h, with no new publisher run', async () => {
     const { vendor, core } = mounted();
     await publish(ELEMENTS_ROW);
     openPicker();
@@ -424,8 +424,16 @@ describe('a published vehicle', () => {
     vi.advanceTimersByTime(60_000);
     await settle();
     expect(diamond(vendor)?.removed).toBe(false);
+    expect(rowFor('Starship').querySelector('.sat-stale')).toBeNull();
 
     vi.setSystemTime(NOW + 12 * 3_600_000);
+    vi.advanceTimersByTime(60_000);
+    await settle();
+    expect(diamond(vendor)?.removed).toBe(false);
+    expect(rowFor('Starship').querySelector('.sat-stale')?.textContent).toBe('stale orbit');
+    expect(noteFor('Starship')?.textContent).toContain('Starship: stale orbit, epoch 12 h old');
+
+    vi.setSystemTime(NOW + 72 * 3_600_000);
     vi.advanceTimersByTime(60_000);
     await settle();
 
@@ -486,7 +494,7 @@ describe('a published vehicle', () => {
     await publish({ ...FAILED_ROW, reason: 'aged_out' });
     expect(diamond(vendor)?.removed).toBe(false);
 
-    vi.setSystemTime(NOW + 12 * 3_600_000);
+    vi.setSystemTime(NOW + 72 * 3_600_000);
     await publish({ ...FAILED_ROW, reason: 'aged_out' });
 
     expect(diamond(vendor)?.removed).toBe(true);
@@ -511,7 +519,7 @@ describe('a published vehicle', () => {
     expect(core.view().satellites).toHaveLength(1);
   });
 
-  it('draws another live object of the row once its own passes 12 h in an open map', async () => {
+  it('draws another live object of the row once its own passes 72 h in an open map', async () => {
     const { vendor } = mounted();
     const { state: _s, id: _i, label: _l, color: _c, lookup: _k, ...older } = ELEMENTS_ROW;
     await publish({
@@ -519,12 +527,12 @@ describe('a published vehicle', () => {
       name: 'STARSHIP S42',
       norad: 67003,
       intldes: '26211A',
-      line1: SHIP.line1.replace('67001U 26210A   26124.50000000', '67003U 26211A   26124.10000000'),
+      line1: SHIP.line1.replace('67001U 26210A   26124.50000000', '67003U 26211A   26121.60000000'),
       also: [older],
     });
     openPicker();
     expect(diamond(vendor)?.element.title).toBe('Starship: STARSHIP S42');
-    expect(noteFor('Starship')?.textContent).toBe('Starship: Also in orbit: STARSHIP S41 (NORAD 67001)');
+    expect(noteFor('Starship')?.textContent).toBe('Starship: stale orbit, epoch 69 h old. Also in orbit: STARSHIP S41 (NORAD 67001)');
 
     vi.setSystemTime(NOW + 3 * 3_600_000);
     vi.advanceTimersByTime(60_000);

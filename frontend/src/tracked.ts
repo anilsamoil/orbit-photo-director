@@ -1,12 +1,21 @@
 import type { Manifest } from './types';
 import { fetchArtifact } from './manifest';
 
+/** A Starship set is fresh for 12 h after its epoch. Past that it is still
+ *  drawn, labelled stale, until 72 h: a feed outage or a late update must
+ *  not erase a ship that still propagates and has not reentered.
+ *  `generator/tracked.py` holds the same two values. */
+export const STARSHIP_FRESH_HOURS = 12;
+export const STARSHIP_GRACE_HOURS = 72;
+
 /** How the publisher found this object, so a browser can repeat the same
- *  lookup against the same two feeds. */
+ *  lookup against the same two feeds. A set is fresh until `max_age_hours`
+ *  after its epoch and drawn until `grace_hours`. */
 export type TrackedLookup = {
   readonly names: readonly string[];
   readonly patterns: readonly string[];
   readonly max_age_hours: number;
+  readonly grace_hours: number;
   readonly catnr?: number;
   readonly intldes?: string;
 };
@@ -61,7 +70,8 @@ export const UNPUBLISHED_TRACKED: readonly TrackedRecord[] = [
     lookup: {
       names: ['STARSHIP', 'SHIP'],
       patterns: ['^STARSHIP(?:[\\s-]|$)(?!.*\\bDEB\\b)', '^SHIP[\\s-]+\\d+\\b(?!.*\\bDEB\\b)'],
-      max_age_hours: 12,
+      max_age_hours: STARSHIP_FRESH_HOURS,
+      grace_hours: STARSHIP_GRACE_HOURS,
     },
   },
 ];
@@ -78,14 +88,14 @@ export const UNREAD_TRACKED: readonly TrackedRecord[] = UNPUBLISHED_TRACKED.map(
   reason: 'unread',
 }));
 
-const NO_LOOKUP: TrackedLookup = { names: [], patterns: [], max_age_hours: 12 };
+const NO_LOOKUP: TrackedLookup = { names: [], patterns: [], max_age_hours: 12, grace_hours: 12 };
 
 function isStrings(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
 }
 
 /** A row from a publisher that predates `lookup` keeps the built-in rules
- *  for its id. */
+ *  for its id, and one that predates `grace_hours` the built-in grace. */
 function parseLookup(id: string, raw: unknown): TrackedLookup {
   const builtIn = UNPUBLISHED_TRACKED.find((record) => record.id === id)?.lookup ?? NO_LOOKUP;
   if (!raw || typeof raw !== 'object') return builtIn;
@@ -96,6 +106,10 @@ function parseLookup(id: string, raw: unknown): TrackedLookup {
     names: row.names,
     patterns: row.patterns,
     max_age_hours: row.max_age_hours,
+    grace_hours:
+      typeof row.grace_hours === 'number' && row.grace_hours >= row.max_age_hours
+        ? row.grace_hours
+        : Math.max(row.max_age_hours, builtIn.grace_hours),
   };
   if (typeof row.catnr === 'number' && Number.isInteger(row.catnr) && row.catnr > 0) lookup.catnr = row.catnr;
   if (typeof row.intldes === 'string' && row.intldes.length > 0) lookup.intldes = row.intldes;
