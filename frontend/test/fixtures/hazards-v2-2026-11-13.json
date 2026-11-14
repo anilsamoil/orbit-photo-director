@@ -1,0 +1,1197 @@
+{
+ "generated_at": "2026-11-13T23:40:00Z",
+ "label": "Published hazard areas \u2014 not a flight path or navigation guidance",
+ "launches": [
+  {
+   "event_id": "0f867f0c-5422-4d44-93b8-d7faaae7019b",
+   "geojson": {
+    "features": [
+     {
+      "geometry": {
+       "coordinates": [
+        [
+         [
+          -97.08333,
+          25.8
+         ],
+         [
+          -96.81667,
+          25.63333
+         ],
+         [
+          -95.31667,
+          24.6
+         ],
+         [
+          -93.48333,
+          23.26667
+         ],
+         [
+          -91.15,
+          22.26667
+         ],
+         [
+          -89.73333,
+          22.26667
+         ],
+         [
+          -89.31667,
+          22.26667
+         ],
+         [
+          -87.43333,
+          21.98333
+         ],
+         [
+          -86.7,
+          21.71667
+         ],
+         [
+          -84.9,
+          21.1
+         ],
+         [
+          -83.23333,
+          20.6
+         ],
+         [
+          -81.21667,
+          20.2
+         ],
+         [
+          -81.05,
+          20.51667
+         ],
+         [
+          -81.7,
+          20.71667
+         ],
+         [
+          -82.63333,
+          20.98333
+         ],
+         [
+          -83.81667,
+          21.43333
+         ],
+         [
+          -84.53333,
+          21.55
+         ],
+         [
+          -84.98333,
+          21.63333
+         ],
+         [
+          -85.11667,
+          21.68333
+         ],
+         [
+          -86.48333,
+          22.51667
+         ],
+         [
+          -88.48333,
+          23.35
+         ],
+         [
+          -88.86667,
+          23.53333
+         ],
+         [
+          -91.98333,
+          25.18333
+         ],
+         [
+          -93.48333,
+          25.68333
+         ],
+         [
+          -95.2,
+          26.01667
+         ],
+         [
+          -96.81667,
+          26.1
+         ],
+         [
+          -97.06667,
+          26.1
+         ],
+         [
+          -97.16667,
+          26.06667
+         ],
+         [
+          -97.21667,
+          26.03333
+         ],
+         [
+          -97.21667,
+          25.96667
+         ],
+         [
+          -97.08333,
+          25.8
+         ]
+        ]
+       ],
+       "type": "Polygon"
+      },
+      "id": "navarea-iv-1080-26-a",
+      "properties": {
+       "area_id": "A",
+       "domain": "maritime",
+       "name": "NAVAREA IV 1080/26 area A",
+       "notice_id": "NAVAREA IV 1080/26",
+       "restriction_class": "hazard"
+      },
+      "type": "Feature"
+     },
+     {
+      "geometry": {
+       "coordinates": [
+        [
+         [
+          -92.96667,
+          25.2
+         ],
+         [
+          -93.86667,
+          25.51667
+         ],
+         [
+          -95.4,
+          25.7
+         ],
+         [
+          -96.53333,
+          26.03333
+         ],
+         [
+          -96.81667,
+          26.06667
+         ],
+         [
+          -97.06667,
+          26.06667
+         ],
+         [
+          -97.16667,
+          26.06667
+         ],
+         [
+          -97.21667,
+          26.03333
+         ],
+         [
+          -97.21667,
+          25.96667
+         ],
+         [
+          -97.08333,
+          25.8
+         ],
+         [
+          -96.78333,
+          25.68333
+         ],
+         [
+          -95.08333,
+          25.03333
+         ],
+         [
+          -94.13333,
+          24.48333
+         ],
+         [
+          -93.53333,
+          24.33333
+         ],
+         [
+          -92.86667,
+          24.41667
+         ],
+         [
+          -92.71667,
+          24.75
+         ],
+         [
+          -92.96667,
+          25.2
+         ]
+        ]
+       ],
+       "type": "Polygon"
+      },
+      "id": "navarea-iv-1080-26-b",
+      "properties": {
+       "area_id": "B",
+       "domain": "maritime",
+       "name": "NAVAREA IV 1080/26 area B",
+       "notice_id": "NAVAREA IV 1080/26",
+       "restriction_class": "high_risk"
+      },
+      "type": "Feature"
+     },
+     {
+      "geometry": {
+       "coordinates": [
+        [
+         [
+          -97.0,
+          26.0
+         ],
+         [
+          -96.91666667,
+          26.0
+         ],
+         [
+          -96.91666667,
+          26.1
+         ],
+         [
+          -97.11666667,
+          26.06666667
+         ],
+         [
+          -97.2,
+          26.01666667
+         ],
+         [
+          -97.16666667,
+          25.93333333
+         ],
+         [
+          -97.0,
+          26.0
+         ]
+        ]
+       ],
+       "type": "Polygon"
+      },
+      "id": "tfr-6-7129-6-7129",
+      "properties": {
+       "area_id": "6/7129",
+       "domain": "airspace",
+       "name": "TFR 6/7129 area 6/7129",
+       "notice_id": "TFR 6/7129",
+       "restriction_class": "restricted_airspace"
+      },
+      "type": "Feature"
+     }
+    ],
+    "type": "FeatureCollection"
+   },
+   "notices": [
+    {
+     "also": [],
+     "area_id": "A",
+     "authority": "NGA",
+     "checked_at": "2026-11-13T10:02:00Z",
+     "cross_check_sha256": "524b13514f21f1e9406284e02e247d4133814323922bca216830529caba29aa3",
+     "cross_check_url": "https://navcen.uscg.gov/sites/default/files/msi/spaceOpsPoly_1.geojson",
+     "domain": "maritime",
+     "instructions": [
+      "Mariners should avoid waters within the defined hazard areas during the scheduled launch window."
+     ],
+     "notice_id": "NAVAREA IV 1080/26",
+     "restriction_class": "hazard",
+     "source_sha256": "6d1e3acdd8be8ac684a2bf8cad886e389b382faf1d3ddfab2acc54369ed4772b",
+     "source_url": "https://space-notices.com/notice/nav-warning-NAVAREA%20IV%201080%2F26",
+     "valid_until": "2026-11-20T01:40:00Z",
+     "windows": [
+      {
+       "end": "2026-11-14T00:40:00Z",
+       "start": "2026-11-13T22:45:00Z"
+      },
+      {
+       "end": "2026-11-15T00:40:00Z",
+       "start": "2026-11-14T22:45:00Z"
+      },
+      {
+       "end": "2026-11-16T00:40:00Z",
+       "start": "2026-11-15T22:45:00Z"
+      },
+      {
+       "end": "2026-11-17T00:40:00Z",
+       "start": "2026-11-16T22:45:00Z"
+      },
+      {
+       "end": "2026-11-18T00:40:00Z",
+       "start": "2026-11-17T22:45:00Z"
+      },
+      {
+       "end": "2026-11-19T00:40:00Z",
+       "start": "2026-11-18T22:45:00Z"
+      },
+      {
+       "end": "2026-11-20T00:40:00Z",
+       "start": "2026-11-19T22:45:00Z"
+      }
+     ]
+    },
+    {
+     "also": [],
+     "area_id": "B",
+     "authority": "NGA",
+     "checked_at": "2026-11-13T10:02:00Z",
+     "cross_check_sha256": "524b13514f21f1e9406284e02e247d4133814323922bca216830529caba29aa3",
+     "cross_check_url": "https://navcen.uscg.gov/sites/default/files/msi/spaceOpsPoly_1.geojson",
+     "domain": "maritime",
+     "instructions": [
+      "Mariners should avoid waters within the defined hazard areas during the scheduled launch window.",
+      "The high risk hazard area should be avoided three hours prior to the earliest launch to ensure range clearance."
+     ],
+     "notice_id": "NAVAREA IV 1080/26",
+     "restriction_class": "high_risk",
+     "source_sha256": "6d1e3acdd8be8ac684a2bf8cad886e389b382faf1d3ddfab2acc54369ed4772b",
+     "source_url": "https://space-notices.com/notice/nav-warning-NAVAREA%20IV%201080%2F26",
+     "valid_until": "2026-11-20T01:40:00Z",
+     "windows": [
+      {
+       "end": "2026-11-14T00:40:00Z",
+       "start": "2026-11-13T22:45:00Z"
+      },
+      {
+       "end": "2026-11-15T00:40:00Z",
+       "start": "2026-11-14T22:45:00Z"
+      },
+      {
+       "end": "2026-11-16T00:40:00Z",
+       "start": "2026-11-15T22:45:00Z"
+      },
+      {
+       "end": "2026-11-17T00:40:00Z",
+       "start": "2026-11-16T22:45:00Z"
+      },
+      {
+       "end": "2026-11-18T00:40:00Z",
+       "start": "2026-11-17T22:45:00Z"
+      },
+      {
+       "end": "2026-11-19T00:40:00Z",
+       "start": "2026-11-18T22:45:00Z"
+      },
+      {
+       "end": "2026-11-20T00:40:00Z",
+       "start": "2026-11-19T22:45:00Z"
+      }
+     ]
+    },
+    {
+     "also": [],
+     "area_id": "6/7129",
+     "authority": "FAA",
+     "checked_at": "2026-11-13T10:02:00Z",
+     "domain": "airspace",
+     "instructions": [
+      "SFC-UNL.",
+      "SPACE OPS AREA: ACFT OPS ARE PROHIBITIED. EXCLUDING AIRSPACE OVER INTERNATIONAL WATERS."
+     ],
+     "notice_id": "TFR 6/7129",
+     "restriction_class": "restricted_airspace",
+     "source_sha256": "4e6afeafe02df5dbe396b5d37fe7a814e6658c167cc3d511190be82a2dc495d0",
+     "source_url": "https://tfr.faa.gov/download/detail_6_7129.xml",
+     "valid_until": "2026-11-14T00:40:00Z",
+     "windows": [
+      {
+       "end": "2026-11-14T00:40:00Z",
+       "start": "2026-11-13T22:30:00Z"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "event_id": "76617033-4dc0-4448-b50c-e5b0d5a18539",
+   "geojson": {
+    "features": [
+     {
+      "geometry": {
+       "coordinates": [
+        [
+         [
+          -119.13333,
+          32.08333
+         ],
+         [
+          -119.3,
+          32.5
+         ],
+         [
+          -119.63333,
+          33.25
+         ],
+         [
+          -120.1,
+          34.2
+         ],
+         [
+          -120.3,
+          34.51667
+         ],
+         [
+          -120.63333,
+          34.66667
+         ],
+         [
+          -120.65,
+          34.6
+         ],
+         [
+          -120.61667,
+          34.45
+         ],
+         [
+          -120.56667,
+          34.31667
+         ],
+         [
+          -119.15,
+          32.08333
+         ],
+         [
+          -119.13333,
+          32.08333
+         ]
+        ]
+       ],
+       "type": "Polygon"
+      },
+      "id": "navarea-xii-801-26-a",
+      "properties": {
+       "area_id": "A",
+       "domain": "maritime",
+       "name": "NAVAREA XII 801/26 area A",
+       "notice_id": "NAVAREA XII 801/26",
+       "restriction_class": "hazard"
+      },
+      "type": "Feature"
+     },
+     {
+      "geometry": {
+       "coordinates": [
+        [
+         [
+          -118.25,
+          30.76667
+         ],
+         [
+          -118.78333,
+          31.38333
+         ],
+         [
+          -118.51667,
+          30.43333
+         ],
+         [
+          -118.2,
+          29.58333
+         ],
+         [
+          -117.9,
+          29.86667
+         ],
+         [
+          -117.65,
+          29.8
+         ],
+         [
+          -118.25,
+          30.76667
+         ]
+        ]
+       ],
+       "type": "Polygon"
+      },
+      "id": "navarea-xii-801-26-b",
+      "properties": {
+       "area_id": "B",
+       "domain": "maritime",
+       "name": "NAVAREA XII 801/26 area B",
+       "notice_id": "NAVAREA XII 801/26",
+       "restriction_class": "hazard"
+      },
+      "type": "Feature"
+     },
+     {
+      "geometry": {
+       "coordinates": [
+        [
+         [
+          -117.81667,
+          28.83333
+         ],
+         [
+          -117.35,
+          28.26667
+         ],
+         [
+          -117.31667,
+          28.25
+         ],
+         [
+          -117.31667,
+          28.83333
+         ],
+         [
+          -117.26667,
+          29.6
+         ],
+         [
+          -117.65,
+          29.8
+         ],
+         [
+          -117.9,
+          29.86667
+         ],
+         [
+          -118.2,
+          29.58333
+         ],
+         [
+          -118.13333,
+          29.4
+         ],
+         [
+          -118.03333,
+          29.25
+         ],
+         [
+          -117.98333,
+          29.03333
+         ],
+         [
+          -117.81667,
+          28.83333
+         ]
+        ]
+       ],
+       "type": "Polygon"
+      },
+      "id": "navarea-xii-801-26-c",
+      "properties": {
+       "area_id": "C",
+       "domain": "maritime",
+       "name": "NAVAREA XII 801/26 area C",
+       "notice_id": "NAVAREA XII 801/26",
+       "restriction_class": "hazard"
+      },
+      "type": "Feature"
+     }
+    ],
+    "type": "FeatureCollection"
+   },
+   "notices": [
+    {
+     "also": [],
+     "area_id": "A",
+     "authority": "NGA",
+     "checked_at": "2026-11-13T23:33:41Z",
+     "cross_check_sha256": "524b13514f21f1e9406284e02e247d4133814323922bca216830529caba29aa3",
+     "cross_check_url": "https://navcen.uscg.gov/sites/default/files/msi/spaceOpsPoly_1.geojson",
+     "domain": "maritime",
+     "instructions": [
+      "Mariners are advised to remain clear of these areas for the duration of operations."
+     ],
+     "notice_id": "NAVAREA XII 801/26",
+     "restriction_class": "hazard",
+     "source_sha256": "321c22624b9105c1ed9bafbeb5d9e7ef27d255744928dd01de9e35be256006c2",
+     "source_url": "https://www.sealagom.com/navarea/12/",
+     "valid_until": "2026-11-24T07:34:00Z",
+     "windows": [
+      {
+       "end": "2026-11-18T07:37:00Z",
+       "start": "2026-11-18T03:14:00Z"
+      },
+      {
+       "end": "2026-11-19T07:23:00Z",
+       "start": "2026-11-19T03:00:00Z"
+      },
+      {
+       "end": "2026-11-20T07:09:00Z",
+       "start": "2026-11-20T02:46:00Z"
+      },
+      {
+       "end": "2026-11-21T06:55:00Z",
+       "start": "2026-11-21T02:32:00Z"
+      },
+      {
+       "end": "2026-11-22T06:41:00Z",
+       "start": "2026-11-22T02:18:00Z"
+      },
+      {
+       "end": "2026-11-23T06:28:00Z",
+       "start": "2026-11-23T04:00:00Z"
+      },
+      {
+       "end": "2026-11-24T06:14:00Z",
+       "start": "2026-11-24T03:46:00Z"
+      }
+     ]
+    },
+    {
+     "also": [],
+     "area_id": "B",
+     "authority": "NGA",
+     "checked_at": "2026-11-13T23:33:41Z",
+     "cross_check_sha256": "524b13514f21f1e9406284e02e247d4133814323922bca216830529caba29aa3",
+     "cross_check_url": "https://navcen.uscg.gov/sites/default/files/msi/spaceOpsPoly_1.geojson",
+     "domain": "maritime",
+     "instructions": [
+      "Mariners are advised to remain clear of these areas for the duration of operations."
+     ],
+     "notice_id": "NAVAREA XII 801/26",
+     "restriction_class": "hazard",
+     "source_sha256": "321c22624b9105c1ed9bafbeb5d9e7ef27d255744928dd01de9e35be256006c2",
+     "source_url": "https://www.sealagom.com/navarea/12/",
+     "valid_until": "2026-11-24T07:34:00Z",
+     "windows": [
+      {
+       "end": "2026-11-18T07:38:00Z",
+       "start": "2026-11-18T03:14:00Z"
+      },
+      {
+       "end": "2026-11-19T07:24:00Z",
+       "start": "2026-11-19T03:00:00Z"
+      },
+      {
+       "end": "2026-11-20T07:10:00Z",
+       "start": "2026-11-20T02:46:00Z"
+      },
+      {
+       "end": "2026-11-21T06:56:00Z",
+       "start": "2026-11-21T02:32:00Z"
+      },
+      {
+       "end": "2026-11-22T06:42:00Z",
+       "start": "2026-11-22T02:18:00Z"
+      },
+      {
+       "end": "2026-11-23T06:29:00Z",
+       "start": "2026-11-23T04:00:00Z"
+      },
+      {
+       "end": "2026-11-24T06:15:00Z",
+       "start": "2026-11-24T03:46:00Z"
+      }
+     ]
+    },
+    {
+     "also": [],
+     "area_id": "C",
+     "authority": "NGA",
+     "checked_at": "2026-11-13T23:33:41Z",
+     "cross_check_sha256": "524b13514f21f1e9406284e02e247d4133814323922bca216830529caba29aa3",
+     "cross_check_url": "https://navcen.uscg.gov/sites/default/files/msi/spaceOpsPoly_1.geojson",
+     "domain": "maritime",
+     "instructions": [
+      "Mariners are advised to remain clear of these areas for the duration of operations."
+     ],
+     "notice_id": "NAVAREA XII 801/26",
+     "restriction_class": "hazard",
+     "source_sha256": "321c22624b9105c1ed9bafbeb5d9e7ef27d255744928dd01de9e35be256006c2",
+     "source_url": "https://www.sealagom.com/navarea/12/",
+     "valid_until": "2026-11-24T07:34:00Z",
+     "windows": [
+      {
+       "end": "2026-11-18T07:57:00Z",
+       "start": "2026-11-18T03:14:00Z"
+      },
+      {
+       "end": "2026-11-19T07:43:00Z",
+       "start": "2026-11-19T03:00:00Z"
+      },
+      {
+       "end": "2026-11-20T07:29:00Z",
+       "start": "2026-11-20T02:46:00Z"
+      },
+      {
+       "end": "2026-11-21T07:15:00Z",
+       "start": "2026-11-21T02:32:00Z"
+      },
+      {
+       "end": "2026-11-22T07:01:00Z",
+       "start": "2026-11-22T02:18:00Z"
+      },
+      {
+       "end": "2026-11-23T06:48:00Z",
+       "start": "2026-11-23T04:00:00Z"
+      },
+      {
+       "end": "2026-11-24T06:34:00Z",
+       "start": "2026-11-24T03:46:00Z"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "event_id": "ef9850ad-1096-425b-9d27-f7bbd186e61a",
+   "geojson": {
+    "features": [
+     {
+      "geometry": {
+       "coordinates": [
+        [
+         [
+          -80.54217,
+          28.4905
+         ],
+         [
+          -80.06667,
+          28.55
+         ],
+         [
+          -79.6,
+          28.68333
+         ],
+         [
+          -78.63333,
+          29.45
+         ],
+         [
+          -75.9,
+          32.31667
+         ],
+         [
+          -73.63333,
+          34.21667
+         ],
+         [
+          -70.9,
+          36.25
+         ],
+         [
+          -71.05,
+          36.46667
+         ],
+         [
+          -74.2,
+          34.18333
+         ],
+         [
+          -77.96667,
+          31.38333
+         ],
+         [
+          -79.88333,
+          29.8
+         ],
+         [
+          -80.63083,
+          28.65383
+         ],
+         [
+          -80.54217,
+          28.4905
+         ]
+        ]
+       ],
+       "type": "Polygon"
+      },
+      "id": "navarea-iv-1099-26-a",
+      "properties": {
+       "area_id": "A",
+       "domain": "maritime",
+       "name": "NAVAREA IV 1099/26 area A",
+       "notice_id": "NAVAREA IV 1099/26",
+       "restriction_class": "hazard"
+      },
+      "type": "Feature"
+     },
+     {
+      "geometry": {
+       "coordinates": [
+        [
+         [
+          -80.03333,
+          29.23333
+         ],
+         [
+          -79.83333,
+          29.06667
+         ],
+         [
+          -79.21667,
+          29.63333
+         ],
+         [
+          -79.43333,
+          29.81667
+         ],
+         [
+          -80.03333,
+          29.23333
+         ]
+        ]
+       ],
+       "type": "Polygon"
+      },
+      "id": "navarea-iv-1099-26-b",
+      "properties": {
+       "area_id": "B",
+       "domain": "maritime",
+       "name": "NAVAREA IV 1099/26 area B",
+       "notice_id": "NAVAREA IV 1099/26",
+       "restriction_class": "hazard"
+      },
+      "type": "Feature"
+     },
+     {
+      "geometry": {
+       "coordinates": [
+        [
+         [
+          -59.4,
+          43.63333
+         ],
+         [
+          -59.03333,
+          42.58333
+         ],
+         [
+          -57.38333,
+          42.98333
+         ],
+         [
+          -55.33333,
+          44.51667
+         ],
+         [
+          -55.68333,
+          44.88333
+         ],
+         [
+          -57.76667,
+          44.28333
+         ],
+         [
+          -59.4,
+          43.63333
+         ]
+        ]
+       ],
+       "type": "Polygon"
+      },
+      "id": "navarea-iv-1099-26-c",
+      "properties": {
+       "area_id": "C",
+       "domain": "maritime",
+       "name": "NAVAREA IV 1099/26 area C",
+       "notice_id": "NAVAREA IV 1099/26",
+       "restriction_class": "hazard"
+      },
+      "type": "Feature"
+     },
+     {
+      "geometry": {
+       "coordinates": [
+        [
+         [
+          -80.78722222,
+          28.85444444
+         ],
+         [
+          -80.84555556,
+          28.81944444
+         ],
+         [
+          -80.78361111,
+          28.63361111
+         ],
+         [
+          -80.73027778,
+          28.5225
+         ],
+         [
+          -80.69555556,
+          28.41694444
+         ],
+         [
+          -80.63305556,
+          28.41694444
+         ],
+         [
+          -80.50805556,
+          28.41694444
+         ],
+         [
+          -80.26666667,
+          28.225
+         ],
+         [
+          -80.25734983,
+          28.22706186
+         ],
+         [
+          -80.22022142,
+          28.25590147
+         ],
+         [
+          -80.18605238,
+          28.28748785
+         ],
+         [
+          -80.15510291,
+          28.3215829
+         ],
+         [
+          -80.12760965,
+          28.35792938
+         ],
+         [
+          -80.10378379,
+          28.3962528
+         ],
+         [
+          -80.08380945,
+          28.43626347
+         ],
+         [
+          -80.06784217,
+          28.47765859
+         ],
+         [
+          -80.05600764,
+          28.52012455
+         ],
+         [
+          -80.04840061,
+          28.56333926
+         ],
+         [
+          -80.04508404,
+          28.60697456
+         ],
+         [
+          -80.04608845,
+          28.65069868
+         ],
+         [
+          -80.05141156,
+          28.69417879
+         ],
+         [
+          -80.06101811,
+          28.73708351
+         ],
+         [
+          -80.07484001,
+          28.77908544
+         ],
+         [
+          -80.09277665,
+          28.81986369
+         ],
+         [
+          -80.11469555,
+          28.85910636
+         ],
+         [
+          -80.14043326,
+          28.89651293
+         ],
+         [
+          -80.16979646,
+          28.93179665
+         ],
+         [
+          -80.20256339,
+          28.96468674
+         ],
+         [
+          -80.23848542,
+          28.99493057
+         ],
+         [
+          -80.277289,
+          29.0222956
+         ],
+         [
+          -80.31867766,
+          29.04657125
+         ],
+         [
+          -80.36233436,
+          29.06757058
+         ],
+         [
+          -80.40792392,
+          29.08513178
+         ],
+         [
+          -80.4550957,
+          29.09911944
+         ],
+         [
+          -80.5,
+          29.125
+         ],
+         [
+          -80.70527778,
+          28.85444444
+         ],
+         [
+          -80.78722222,
+          28.85444444
+         ]
+        ]
+       ],
+       "type": "Polygon"
+      },
+      "id": "tfr-6-7111-6-7111",
+      "properties": {
+       "area_id": "6/7111",
+       "domain": "airspace",
+       "name": "TFR 6/7111 area 6/7111",
+       "notice_id": "TFR 6/7111",
+       "restriction_class": "restricted_airspace"
+      },
+      "type": "Feature"
+     }
+    ],
+    "type": "FeatureCollection"
+   },
+   "notices": [
+    {
+     "also": [],
+     "area_id": "A",
+     "authority": "NGA",
+     "checked_at": "2026-11-13T23:27:32Z",
+     "cross_check_sha256": "524b13514f21f1e9406284e02e247d4133814323922bca216830529caba29aa3",
+     "cross_check_url": "https://navcen.uscg.gov/sites/default/files/msi/spaceOpsPoly_1.geojson",
+     "domain": "maritime",
+     "instructions": [
+      "MARINERS ARE URGED TO AVOID WATERS WITHIN ROCKET FLIGHT TRAJECTORIES/HAZARD AREAS DURING LAUNCH WINDOWS AS DETAILED ABOVE."
+     ],
+     "notice_id": "NAVAREA IV 1099/26",
+     "restriction_class": "hazard",
+     "source_sha256": "7bfa936bab5af0d4d0e37435e7c8104e83fef7d11d2a7f5d260b7db838a3b635",
+     "source_url": "https://space-notices.com/notice/nav-warning-NAVAREA%20IV%201099%2F26",
+     "valid_until": "2026-11-19T18:24:00Z",
+     "windows": [
+      {
+       "end": "2026-11-14T19:11:00Z",
+       "start": "2026-11-14T17:32:00Z"
+      },
+      {
+       "end": "2026-11-15T18:50:00Z",
+       "start": "2026-11-15T17:11:00Z"
+      },
+      {
+       "end": "2026-11-17T18:07:00Z",
+       "start": "2026-11-17T16:28:00Z"
+      },
+      {
+       "end": "2026-11-18T17:46:00Z",
+       "start": "2026-11-18T16:07:00Z"
+      },
+      {
+       "end": "2026-11-19T17:24:00Z",
+       "start": "2026-11-19T15:46:00Z"
+      }
+     ]
+    },
+    {
+     "also": [],
+     "area_id": "B",
+     "authority": "NGA",
+     "checked_at": "2026-11-13T23:27:32Z",
+     "domain": "maritime",
+     "instructions": [],
+     "notice_id": "NAVAREA IV 1099/26",
+     "restriction_class": "hazard",
+     "source_sha256": "7bfa936bab5af0d4d0e37435e7c8104e83fef7d11d2a7f5d260b7db838a3b635",
+     "source_url": "https://space-notices.com/notice/nav-warning-NAVAREA%20IV%201099%2F26",
+     "valid_until": "2026-11-19T18:24:00Z",
+     "windows": [
+      {
+       "end": "2026-11-14T19:11:00Z",
+       "start": "2026-11-14T17:32:00Z"
+      },
+      {
+       "end": "2026-11-15T18:50:00Z",
+       "start": "2026-11-15T17:11:00Z"
+      },
+      {
+       "end": "2026-11-17T18:07:00Z",
+       "start": "2026-11-17T16:28:00Z"
+      },
+      {
+       "end": "2026-11-18T17:46:00Z",
+       "start": "2026-11-18T16:07:00Z"
+      },
+      {
+       "end": "2026-11-19T17:24:00Z",
+       "start": "2026-11-19T15:46:00Z"
+      }
+     ]
+    },
+    {
+     "also": [],
+     "area_id": "C",
+     "authority": "NGA",
+     "checked_at": "2026-11-13T23:27:32Z",
+     "domain": "maritime",
+     "instructions": [],
+     "notice_id": "NAVAREA IV 1099/26",
+     "restriction_class": "hazard",
+     "source_sha256": "7bfa936bab5af0d4d0e37435e7c8104e83fef7d11d2a7f5d260b7db838a3b635",
+     "source_url": "https://space-notices.com/notice/nav-warning-NAVAREA%20IV%201099%2F26",
+     "valid_until": "2026-11-19T18:24:00Z",
+     "windows": [
+      {
+       "end": "2026-11-14T19:11:00Z",
+       "start": "2026-11-14T17:32:00Z"
+      },
+      {
+       "end": "2026-11-15T18:50:00Z",
+       "start": "2026-11-15T17:11:00Z"
+      },
+      {
+       "end": "2026-11-17T18:07:00Z",
+       "start": "2026-11-17T16:28:00Z"
+      },
+      {
+       "end": "2026-11-18T17:46:00Z",
+       "start": "2026-11-18T16:07:00Z"
+      },
+      {
+       "end": "2026-11-19T17:24:00Z",
+       "start": "2026-11-19T15:46:00Z"
+      }
+     ]
+    },
+    {
+     "also": [
+      "TFR 6/7112"
+     ],
+     "area_id": "6/7111",
+     "authority": "FAA",
+     "checked_at": "2026-11-13T23:23:35Z",
+     "domain": "airspace",
+     "instructions": [
+      "SFC-FL180.",
+      "EXCLUDING AIRSPACE BEYOND 12 MILE COASTAL LIMIT OVER INTERNATIONAL WATERS."
+     ],
+     "notice_id": "TFR 6/7111",
+     "restriction_class": "restricted_airspace",
+     "source_sha256": "6e3498c8d47982607fedcdacdd9d488164304548aa3fbb4731b109cbbb8f4ba0",
+     "source_url": "https://tfr.faa.gov/download/detail_6_7111.xml",
+     "valid_until": "2026-11-14T19:11:00Z",
+     "windows": [
+      {
+       "end": "2026-11-14T19:11:00Z",
+       "start": "2026-11-14T17:22:00Z"
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "revision": "4c5220558ba0f083",
+ "schema_version": 2
+}
