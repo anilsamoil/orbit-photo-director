@@ -105,8 +105,11 @@ const HOUR_MS = 3_600_000;
 export type Feed = 'gp' | 'supgp';
 
 /** Why a lookup has no answer. `publisher` means the published artifact
- *  reported a failed lookup and this browser did not ask CelesTrak itself. */
-export type LookupFailure = 'timeout' | 'network' | 'http' | 'unreadable' | 'publisher';
+ *  reported a failed lookup, and `artifact` that this browser could not load
+ *  the artifact; in both, this browser did not ask CelesTrak itself. */
+export type LookupFailure = 'timeout' | 'network' | 'http' | 'unreadable' | 'publisher' | 'artifact';
+
+type AskFailure = Exclude<LookupFailure, 'publisher' | 'artifact'>;
 
 /** The outcome of one lookup. `not_found` and `expired` are answers from a
  *  source that replied; `failed` is a source that did not. */
@@ -153,6 +156,14 @@ function writeCache(meta: SatelliteMeta, entry: CacheEntry): void {
     localStorage.setItem(cacheKey(meta), JSON.stringify(entry));
   } catch {
     /* quota exhausted or storage disabled */
+  }
+}
+
+function forget(meta: SatelliteMeta): void {
+  try {
+    localStorage.removeItem(cacheKey(meta));
+  } catch {
+    /* storage disabled */
   }
 }
 
@@ -231,7 +242,7 @@ export function lookupQueries(lookup: TrackedLookup): Query[] {
 type Reply =
   | { kind: 'sets'; feed: Feed; sets: TLEPair[] }
   | { kind: 'empty' }
-  | { kind: 'error'; cause: Exclude<LookupFailure, 'publisher'> };
+  | { kind: 'error'; cause: AskFailure };
 
 async function ask({ feed, url }: Query): Promise<Reply> {
   const controller = new AbortController();
@@ -254,9 +265,9 @@ async function ask({ feed, url }: Query): Promise<Reply> {
   }
 }
 
-const CAUSE_ORDER: readonly Exclude<LookupFailure, 'publisher'>[] = ['timeout', 'network', 'http', 'unreadable'];
+const CAUSE_ORDER: readonly AskFailure[] = ['timeout', 'network', 'http', 'unreadable'];
 
-function worstCause(replies: readonly Reply[]): Exclude<LookupFailure, 'publisher'> | null {
+function worstCause(replies: readonly Reply[]): AskFailure | null {
   const causes = replies.flatMap((reply) => (reply.kind === 'error' ? [reply.cause] : []));
   return CAUSE_ORDER.find((cause) => causes.includes(cause)) ?? null;
 }
@@ -284,6 +295,15 @@ function publishedRow(meta: SatelliteMeta, published: readonly TrackedRecord[]):
   return undefined;
 }
 
+/** What the artifact alone says about a vehicle it holds no usable element
+ *  set for. A row with elements reaches here only when they are too old. */
+function publisherVerdict(row: TrackedRecord | undefined): OrbitLookup {
+  if (!row || (row.state === 'unavailable' && row.reason === 'unread')) return { state: 'failed', cause: 'artifact' };
+  if (row.state === 'elements' || row.reason === 'aged_out') return { state: 'expired' };
+  if (row.reason === 'lookup_failed') return { state: 'failed', cause: 'publisher' };
+  return { state: 'not_found' };
+}
+
 async function resolvePublished(
   meta: SatelliteMeta,
   row: TrackedRecord | undefined,
@@ -293,10 +313,7 @@ async function resolvePublished(
   const lookup = row?.lookup;
   const cached = readCache(meta);
   const lastGood = cached && lookup && ageHours(cached.tle, nowMs) <= lookup.max_age_hours ? cached : null;
-  const publisherSays: OrbitLookup =
-    !row || row.state === 'elements' || row.reason === 'lookup_failed'
-      ? { state: 'failed', cause: 'publisher' }
-      : row.reason === 'aged_out' ? { state: 'expired' } : { state: 'not_found' };
+  const publisherSays = publisherVerdict(row);
 
   if (mode === 'published' || !lookup) return lastGood ? fromCache(lastGood, true) : publisherSays;
 
@@ -334,12 +351,17 @@ async function resolveDirect(meta: SatelliteMeta, param: string, value: string |
     keep(meta, tle, reply.sets.length, nowMs);
     return { state: 'elements', tle, match_count: reply.sets.length, origin: 'gp', stale: false };
   }
-  if (cached) return fromCache(cached, true);
-  return reply.kind === 'empty' ? { state: 'not_found' } : { state: 'failed', cause: reply.cause };
+  if (reply.kind === 'empty') {
+    forget(meta);
+    return { state: 'not_found' };
+  }
+  return cached ? fromCache(cached, true) : { state: 'failed', cause: reply.cause };
 }
 
 /** Find the orbit of one satellite. A row of `tracked.json` with elements
- *  wins. A published object otherwise falls back to its last good element
+ *  wins while it is younger than its limit, checked here as well as by the
+ *  publisher, because the artifact can sit in an open map for hours. A
+ *  published object otherwise falls back to its last good element
  *  set while that is young enough, and in `ask` mode to the publisher's own
  *  CelesTrak queries. A catalog number or a name the publisher does not
  *  carry is asked of CelesTrak GP, with the 6 h cache in front. */
@@ -352,8 +374,10 @@ export async function resolveOrbit(
   const row = publishedRow(meta, published);
   if (row?.state === 'elements') {
     const tle: TLEPair = { line1: row.line1, line2: row.line2, name: row.name };
-    keep(meta, tle, 1, nowMs);
-    return { state: 'elements', tle, match_count: 1, origin: 'published', stale: row.from_cache === true };
+    if (ageHours(tle, nowMs) <= row.lookup.max_age_hours) {
+      keep(meta, tle, 1, nowMs);
+      return { state: 'elements', tle, match_count: 1, origin: 'published', stale: row.from_cache === true };
+    }
   }
   const resolution = meta.resolution;
   if (resolution.kind === 'published') return resolvePublished(meta, row, mode, nowMs);
@@ -371,14 +395,19 @@ const FAILURE_TEXT: Record<LookupFailure, string> = {
   http: 'CelesTrak answered with an error',
   unreadable: 'CelesTrak sent a reply that is not an element set',
   publisher: 'the publisher could not reach CelesTrak',
+  artifact: 'this browser could not load the published orbit list',
 };
 
-/** One sentence for the picker. A failed lookup never reads as a miss. */
+/** One sentence for the picker. A failed lookup never reads as a miss,
+ *  and a last good orbit never reads as a current one. */
 export function lookupMessage(meta: SatelliteMeta, lookup: OrbitLookup): string {
   const resolution = meta.resolution;
   if (lookup.state === 'elements') {
-    if (lookup.origin === 'cache' && lookup.stale) return `${meta.name}: drawing the last good orbit, ${lookup.tle.name}`;
-    if (resolution.kind === 'published') return `${meta.name}: drawing ${lookup.tle.name}`;
+    if (resolution.kind === 'published') {
+      return lookup.stale
+        ? `${meta.name}: drawing the last good orbit, ${lookup.tle.name}`
+        : `${meta.name}: drawing ${lookup.tle.name}`;
+    }
     return 'Tracking added';
   }
   if (lookup.state === 'failed') {

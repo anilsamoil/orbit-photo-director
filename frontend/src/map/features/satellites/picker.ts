@@ -21,6 +21,8 @@ export interface PickerPort {
   metas(): SatelliteMeta[];
   row(key: string): PickerRow | undefined;
   add(meta: SatelliteMeta): Promise<AddResult>;
+  /** Add what the operator typed. A lookup that finds nothing is not kept. */
+  addTyped(meta: SatelliteMeta): Promise<AddResult>;
   remove(key: string): void;
   resize(): void;
 }
@@ -100,6 +102,11 @@ export function renderPickerList(port: PickerPort): void {
         showStatus(status, await port.add(meta));
       } else {
         port.remove(key);
+        const status = byId('satellite-picker-status');
+        if (status && isPublished(meta)) {
+          status.textContent = `${meta.name} is hidden. Check it to look for its orbit again.`;
+          status.className = 'satellite-picker-status';
+        }
       }
       renderPickerList(port);
     });
@@ -163,11 +170,9 @@ export function bindPicker(port: PickerPort): void {
       status.textContent = 'Searching…';
       status.className = 'satellite-picker-status';
     }
-    const meta = metaForQuery(query);
-    const result = await port.add(meta);
+    const result = await port.addTyped(metaForQuery(query));
     showStatus(status, result);
     if (result.ok) input.value = '';
-    else port.remove(metaKey(meta));
     renderPickerList(port);
   };
   addButton.addEventListener('click', () => { void addTyped(); });

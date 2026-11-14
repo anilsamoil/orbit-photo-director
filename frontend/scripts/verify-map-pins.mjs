@@ -195,8 +195,8 @@ const MUTATIONS = [
   {
     contract: 'a CelesTrak request that fails is a failed lookup, not a miss',
     file: ORBIT_LOOKUP,
-    find: "  return reply.kind === 'empty' ? { state: 'not_found' } : { state: 'failed', cause: reply.cause };",
-    replace: "  return { state: 'not_found' };",
+    find: "  return cached ? fromCache(cached, true) : { state: 'failed', cause: reply.cause };",
+    replace: "  return cached ? fromCache(cached, true) : { state: 'not_found' };",
   },
   {
     contract: 'one failed feed among empty ones is a failed lookup for a published vehicle',
@@ -253,6 +253,24 @@ const MUTATIONS = [
     replace: "    reason: 'no_public_orbit',\n    lookup: {",
   },
   {
+    contract: 'a publisher element set past its age limit is not drawn',
+    file: ORBIT_LOOKUP,
+    find: '    if (ageHours(tle, nowMs) <= row.lookup.max_age_hours) {',
+    replace: '    if (row.lookup.max_age_hours > 0) {',
+  },
+  {
+    contract: 'a background lookup does not override a tap that is still asking CelesTrak',
+    file: SATELLITES,
+    find: "      if (mode === 'published' && sat.asking) return null;\n",
+    replace: '',
+  },
+  {
+    contract: 'a published orbit is age-checked every minute in an open map',
+    file: SATELLITES,
+    find: '      recheckPublished();\n',
+    replace: '',
+  },
+  {
     contract: 'an answer to an earlier lookup never replaces a later one',
     file: SATELLITES,
     find: '      if (wanted.get(key) !== sat || sat.asked !== turn) return null;',
@@ -272,8 +290,8 @@ const MUTATIONS = [
   },
   {
     contract: 'a typed satellite that cannot be looked up is not kept',
-    file: 'src/map/features/satellites/picker.ts',
-    find: '    else port.remove(metaKey(meta));',
+    file: SATELLITES,
+    find: '      if (!result.ok && !known) remove(key);',
     replace: '',
   },
   {

@@ -11,7 +11,7 @@ import {
   type OrbitLookup,
   type SatelliteMeta,
 } from '../src/satellites';
-import { UNPUBLISHED_TRACKED, type TrackedElements, type TrackedRecord, type TrackedUnavailable } from '../src/tracked';
+import { UNPUBLISHED_TRACKED, UNREAD_TRACKED, type TrackedElements, type TrackedRecord, type TrackedUnavailable } from '../src/tracked';
 
 const SAMPLE_ISS_3LE = `ISS (ZARYA)
 1 25544U 98067A   24291.00000000  .00018000  00000-0  32500-3 0  9999
@@ -213,6 +213,25 @@ describe('a published vehicle', () => {
     expect(await ask(STARSHIP, [{ ...ELEMENTS_ROW, from_cache: true }])).toMatchObject({ origin: 'published', stale: true });
   });
 
+  it('does not draw a publisher element set that has passed its 12 h limit since it was published', async () => {
+    const fetchMock = celestrak({}, 'No GP data found');
+    const later = NOW + 7 * 3_600_000;
+
+    expect(await resolveOrbit(STARSHIP, [ELEMENTS_ROW], 'published', later - 3_600_000)).toMatchObject({ state: 'elements' });
+    expect(await resolveOrbit(STARSHIP, [ELEMENTS_ROW], 'published', later)).toEqual({ state: 'expired' });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await resolveOrbit(STARSHIP, [ELEMENTS_ROW], 'ask', later)).toEqual({ state: 'not_found' });
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it('blames this browser, not the publisher, when the artifact could not be loaded', async () => {
+    celestrak({}, 'throw');
+
+    expect(await resolveOrbit(STARSHIP, UNREAD_TRACKED, 'published', NOW)).toEqual({ state: 'failed', cause: 'artifact' });
+    expect(await resolveOrbit(STARSHIP, [], 'published', NOW)).toEqual({ state: 'failed', cause: 'artifact' });
+    expect(await resolveOrbit(STARSHIP, UNREAD_TRACKED, 'ask', NOW)).toEqual({ state: 'failed', cause: 'network' });
+  });
+
   it('in published mode reports the publisher verdict and never asks CelesTrak', async () => {
     const fetchMock = celestrak({ NAME: body('STARSHIP S39') });
 
@@ -409,6 +428,17 @@ describe('a satellite by catalog number or name', () => {
     expect(await ask(TIANGONG)).toMatchObject({ tle: { name: 'STALE CSS' }, origin: 'cache', stale: true });
   });
 
+  it('stops drawing a cached TLE once CelesTrak answers that the object is gone', async () => {
+    localStorage.setItem('opd-tle-48274', JSON.stringify({
+      tle: { line1: 'old1', line2: 'old2', name: 'DECAYED' },
+      fetchedAtMs: NOW - 7 * 3_600_000,
+    }));
+    celestrak({}, 'No GP data found');
+
+    expect(await ask(TIANGONG)).toEqual({ state: 'not_found' });
+    expect(localStorage.getItem('opd-tle-48274')).toBeNull();
+  });
+
   it.each([
     ['throw', { state: 'failed', cause: 'network' }],
     [503, { state: 'failed', cause: 'http' }],
@@ -456,7 +486,10 @@ describe('lookupMessage', () => {
       .toBe('Starship: orbit lookup failed, CelesTrak sent a reply that is not an element set. No orbit is drawn.');
     expect(lookupMessage(STARSHIP, { state: 'failed', cause: 'publisher' }))
       .toBe('Starship: orbit lookup failed, the publisher could not reach CelesTrak. No orbit is drawn.');
-    expect(lookupMessage(typed, { state: 'failed', cause: 'network' })).not.toContain('No satellite found');
+    expect(lookupMessage(STARSHIP, { state: 'failed', cause: 'artifact' }))
+      .toBe('Starship: orbit lookup failed, this browser could not load the published orbit list. No orbit is drawn.');
+    expect(lookupMessage(typed, { state: 'failed', cause: 'network' }))
+      .toBe('NOSUCH: orbit lookup failed, CelesTrak could not be reached from this browser. No orbit is drawn.');
   });
 
   it('a miss says which feeds answered', () => {
@@ -472,6 +505,8 @@ describe('lookupMessage', () => {
     expect(lookupMessage(STARSHIP, { state: 'elements', tle, match_count: 1, origin: 'published', stale: false }))
       .toBe('Starship: drawing STARSHIP S39');
     expect(lookupMessage(STARSHIP, { state: 'elements', tle, match_count: 1, origin: 'cache', stale: true }))
+      .toBe('Starship: drawing the last good orbit, STARSHIP S39');
+    expect(lookupMessage(STARSHIP, { state: 'elements', tle, match_count: 1, origin: 'published', stale: true }))
       .toBe('Starship: drawing the last good orbit, STARSHIP S39');
     expect(lookupMessage(norad, { state: 'elements', tle, match_count: 1, origin: 'gp', stale: false })).toBe('Tracking added');
   });

@@ -56,10 +56,11 @@ describe('tracked artifact', () => {
     })).toBeNull();
   });
 
-  it('reads a missing or empty artifact as a failed lookup, never as no orbit', () => {
-    const failed = { ...UNAVAILABLE, reason: 'lookup_failed' };
-    expect(recordsFromArtifact(null)).toEqual([failed]);
-    expect(recordsFromArtifact({ objects: [] })).toEqual([failed]);
+  it('reads a missing or empty artifact as unread by this browser, never as no orbit or a publisher failure', () => {
+    const unread = { ...UNAVAILABLE, reason: 'unread' };
+    expect(recordsFromArtifact(null)).toEqual([unread]);
+    expect(recordsFromArtifact({ objects: [] })).toEqual([unread]);
+    expect(parseTracked({ objects: [unread] })).toBeNull();
   });
 
   it('assumes exactly what the generator publishes when it has no data', () => {

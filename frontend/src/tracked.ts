@@ -34,7 +34,8 @@ export type TrackedUnavailable = {
   readonly label: string;
   readonly color: string;
   readonly lookup: TrackedLookup;
-  readonly reason: 'no_public_orbit' | 'aged_out' | 'lookup_failed';
+  /** `unread` is never published. It is this browser failing to load the artifact. */
+  readonly reason: 'no_public_orbit' | 'aged_out' | 'lookup_failed' | 'unread';
 };
 
 export type TrackedRecord = TrackedElements | TrackedUnavailable;
@@ -43,8 +44,7 @@ const REASONS = ['no_public_orbit', 'aged_out', 'lookup_failed'] as const;
 const COLOR = /^#[0-9a-fA-F]{6}$/;
 const ID = /^[a-z0-9-]+$/;
 
-/** What the map assumes when `tracked.json` cannot be read. An unread
- *  artifact is a failed lookup, never a confirmed absence. */
+/** The generator's own no-data artifact, and the built-in lookup rules. */
 export const UNPUBLISHED_TRACKED: readonly TrackedRecord[] = [
   {
     id: 'starship',
@@ -59,6 +59,18 @@ export const UNPUBLISHED_TRACKED: readonly TrackedRecord[] = [
     },
   },
 ];
+
+/** What the map assumes when `tracked.json` cannot be read. An unread
+ *  artifact is a failed lookup by this browser, never a confirmed absence
+ *  and never the publisher's failure. */
+export const UNREAD_TRACKED: readonly TrackedRecord[] = UNPUBLISHED_TRACKED.map((record) => ({
+  id: record.id,
+  label: record.label,
+  color: record.color,
+  lookup: record.lookup,
+  state: 'unavailable',
+  reason: 'unread',
+}));
 
 const NO_LOOKUP: TrackedLookup = { names: [], patterns: [], max_age_hours: 12 };
 
@@ -105,14 +117,14 @@ export function parseTracked(raw: unknown): TrackedRecord[] | null {
 }
 
 export function recordsFromArtifact(raw: unknown): readonly TrackedRecord[] {
-  return parseTracked(raw) ?? UNPUBLISHED_TRACKED;
+  return parseTracked(raw) ?? UNREAD_TRACKED;
 }
 
 export async function loadTrackedRecords(manifest: Manifest): Promise<readonly TrackedRecord[]> {
   try {
     return recordsFromArtifact(await fetchArtifact<unknown>(manifest, 'tracked'));
   } catch {
-    return UNPUBLISHED_TRACKED;
+    return UNREAD_TRACKED;
   }
 }
 

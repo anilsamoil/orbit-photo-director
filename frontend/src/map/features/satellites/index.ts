@@ -8,7 +8,7 @@ import {
   type OrbitLookup,
   type SatelliteMeta,
 } from '../../../satellites';
-import { UNPUBLISHED_TRACKED, type TrackedRecord } from '../../../tracked';
+import { UNREAD_TRACKED, type TrackedRecord } from '../../../tracked';
 import { satTrackLayerId, satTrackSourceId } from '../../map-core/catalog';
 import type { MapCore } from '../../map-core/core';
 import type { MapFeature } from '../../map-core/feature';
@@ -32,7 +32,7 @@ const runtime: {
   core: MapCore | null;
   published: readonly TrackedRecord[];
   onPublished: (() => void) | null;
-} = { core: null, published: UNPUBLISHED_TRACKED, onPublished: null };
+} = { core: null, published: UNREAD_TRACKED, onPublished: null };
 
 /** Hand the satellites the rows of `tracked.json`. Safe before `mount`. */
 export function applyPublishedOrbits(records: readonly TrackedRecord[]): void {
@@ -62,12 +62,15 @@ export function getSatelliteTopbarReadouts(): { label: string; text: string; col
 
 /** A satellite the operator wants. `lookup` is null while the first lookup
  *  runs. Only an `elements` lookup is drawn. `asked` counts lookups, so an
- *  answer to an earlier one never replaces the answer to a later one. */
+ *  answer to an earlier one never replaces the answer to a later one.
+ *  `asking` is true while a tap's CelesTrak lookup is out; a background
+ *  lookup waits for it instead of overriding it. */
 interface Wanted {
   meta: SatelliteMeta;
   lookup: OrbitLookup | null;
   marker: MarkerHandle | null;
   asked: number;
+  asking: boolean;
 }
 
 type Elements = Extract<OrbitLookup, { state: 'elements' }>;
@@ -82,7 +85,9 @@ function elementsOf(sat: Wanted): Elements | null {
  *  sub-point, both on the map's one clock. Live, the marker ticks at 1 Hz
  *  and the window slides every minute; scrubbed, both sit at the view
  *  instant. A wanted satellite with no element set stays wanted and draws
- *  nothing; the picker says why. */
+ *  nothing; the picker says why. Every minute each published vehicle is
+ *  looked up again from the artifact and the cache, so an element set that
+ *  passes its age limit in an open map stops being drawn. */
 export const satellites: MapFeature = {
   id: 'satellites',
   mount(core: MapCore) {
@@ -143,11 +148,14 @@ export const satellites: MapFeature = {
 
     const look = async (meta: SatelliteMeta, mode: LookupMode): Promise<OrbitLookup | null> => {
       const key = metaKey(meta);
-      const sat = wanted.get(key) ?? { meta, lookup: null, marker: null, asked: 0 };
+      const sat = wanted.get(key) ?? { meta, lookup: null, marker: null, asked: 0, asking: false };
       wanted.set(key, sat);
+      if (mode === 'published' && sat.asking) return null;
       const turn = ++sat.asked;
+      sat.asking = mode === 'ask';
       const lookup = await resolveOrbit(meta, runtime.published, mode, core.clock.now());
       if (wanted.get(key) !== sat || sat.asked !== turn) return null;
+      sat.asking = false;
       const before = elementsOf(sat);
       sat.lookup = lookup;
       if (before && lookup.state === 'elements' && before.tle.name !== lookup.tle.name) {
@@ -169,6 +177,14 @@ export const satellites: MapFeature = {
       return { ok: lookup.state === 'elements', message: lookupMessage(meta, lookup) };
     };
 
+    const publishedTwin = (asked: SatelliteMeta): SatelliteMeta | undefined => {
+      const resolution = asked.resolution;
+      if (resolution.kind !== 'catnr') return undefined;
+      const row = runtime.published.find((record) =>
+        (record.state === 'elements' ? record.norad : record.lookup.catnr) === resolution.catnr);
+      return row && publishedMetas(runtime.published).find((meta) => metaKey(meta) === `tracked:${row.id}`);
+    };
+
     const remove = (key: string): void => {
       const sat = wanted.get(key);
       if (!sat) return;
@@ -177,6 +193,15 @@ export const satellites: MapFeature = {
       if (isPublished(sat.meta)) setPublishedHidden(key, true);
       publish();
       persist();
+    };
+
+    const addTyped = async (asked: SatelliteMeta): Promise<AddResult> => {
+      const meta = publishedTwin(asked) ?? asked;
+      const key = metaKey(meta);
+      const known = wanted.has(key);
+      const result = await add(meta);
+      if (!result.ok && !known) remove(key);
+      return result;
     };
 
     const port: PickerPort = {
@@ -196,6 +221,7 @@ export const satellites: MapFeature = {
         return { lookup: sat.lookup, sight };
       },
       add,
+      addTyped,
       remove,
       resize: () => core.resize(),
     };
@@ -227,7 +253,20 @@ export const satellites: MapFeature = {
     runtime.onPublished = followPublisher;
     followPublisher();
 
+    const drawnState = (): string =>
+      [...wanted].map(([key, sat]) => `${key}=${sat.lookup?.state}:${elementsOf(sat)?.tle.line1}`).join();
+
+    const recheckPublished = (): void => {
+      const before = drawnState();
+      void Promise.all(
+        [...wanted.values()].filter(({ meta }) => isPublished(meta)).map(({ meta }) => look(meta, 'published')),
+      ).then(() => {
+        if (drawnState() !== before) renderPickerList(port);
+      });
+    };
+
     core.clock.every(TRACK_REFRESH_MS, () => {
+      recheckPublished();
       if (!core.clock.isScrubbed()) paintTracks();
     });
     core.clock.every(MARKER_REFRESH_MS, () => {

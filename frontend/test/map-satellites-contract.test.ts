@@ -170,7 +170,7 @@ describe('the picker', () => {
     ]);
     expect(rows().map((row) => row.querySelector('input')!.checked)).toEqual([false, false, false, true]);
     expect(el('satellite-picker-notes').textContent)
-      .toBe('Starship: orbit lookup failed, the publisher could not reach CelesTrak. No orbit is drawn.');
+      .toBe('Starship: orbit lookup failed, this browser could not load the published orbit list. No orbit is drawn.');
     pickerButton().click();
     expect(panel().hidden).toBe(true);
     expect(pickerButton().classList.contains('active')).toBe(false);

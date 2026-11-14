@@ -4,7 +4,7 @@ import { createVendorDouble, type VendorDouble } from '../../../../test/vendor-m
 import { liveIssPositionSGP4 } from '../../../iss-sgp4';
 import { issSightWindows, sightText } from '../../../orbit-sight';
 import { resolveOrbit, type OrbitLookup, type SatelliteMeta } from '../../../satellites';
-import { UNPUBLISHED_TRACKED, type TrackedElements, type TrackedRecord, type TrackedUnavailable } from '../../../tracked';
+import { UNPUBLISHED_TRACKED, UNREAD_TRACKED, type TrackedElements, type TrackedRecord, type TrackedUnavailable } from '../../../tracked';
 import type { Track } from '../../../types';
 import { createClock } from '../../map-core/clock';
 import { createMapCore, type MapCore } from '../../map-core/core';
@@ -117,8 +117,14 @@ function statusLine(): HTMLElement {
   return document.getElementById('satellite-picker-status')!;
 }
 
-/** What the test's CelesTrak answers to every request: a body, or a refusal. */
-const feed: { answer: string | 'unreachable' } = { answer: 'unreachable' };
+/** What the test's CelesTrak answers to every request: a body, a refusal,
+ *  or nothing until `release` is called. */
+const feed: { answer: string | 'unreachable' | 'held'; held: (() => void)[] } = { answer: 'unreachable', held: [] };
+
+function release(body: string): void {
+  feed.answer = body;
+  for (const go of feed.held.splice(0)) go();
+}
 
 function askedCelestrak(): string[] {
   return vi.mocked(fetch).mock.calls.map(([url]) => String(url));
@@ -183,7 +189,9 @@ beforeEach(() => {
   vi.setSystemTime(NOW);
   pickerDom();
   feed.answer = 'unreachable';
+  feed.held = [];
   vi.stubGlobal('fetch', vi.fn(async () => {
+    if (feed.answer === 'held') await new Promise<void>((go) => feed.held.push(go));
     if (feed.answer === 'unreachable') throw new TypeError('Failed to fetch');
     return new Response(feed.answer, { status: 200 });
   }));
@@ -385,6 +393,81 @@ describe('a published vehicle', () => {
     expect(rowFor('Starship').querySelector('.sat-stale')?.textContent).toBe('last good');
   });
 
+  it('before any artifact is read, blames this browser and not the publisher', async () => {
+    mounted();
+    await publish(...UNREAD_TRACKED);
+    openPicker();
+
+    expect(noteFor('Starship')?.textContent)
+      .toBe('Starship: orbit lookup failed, this browser could not load the published orbit list. No orbit is drawn.');
+  });
+
+  it('stops being drawn in an open map once its element set passes 12 h, with no new publisher run', async () => {
+    const { vendor, core } = mounted();
+    await publish(ELEMENTS_ROW);
+    openPicker();
+    expect(diamond(vendor)?.removed).toBe(false);
+
+    vi.setSystemTime(NOW + 11 * 3_600_000);
+    vi.advanceTimersByTime(60_000);
+    await settle();
+    expect(diamond(vendor)?.removed).toBe(false);
+
+    vi.setSystemTime(NOW + 12 * 3_600_000);
+    vi.advanceTimersByTime(60_000);
+    await settle();
+
+    expect(diamond(vendor)?.removed).toBe(true);
+    expect(vendor.sources.has(`sat-track-${STARSHIP_KEY}`)).toBe(false);
+    expect(core.view().satellites).toEqual([]);
+    expect(noteFor('Starship')?.textContent).toBe('Starship: the last public orbit is too old to draw.');
+    expect(askedCelestrak()).toEqual([]);
+  });
+
+  it('a publisher run that lands while a tap is still asking CelesTrak does not throw the tap away', async () => {
+    const { vendor } = mounted();
+    await publish(FAILED_ROW);
+    openPicker();
+    await toggle('Starship');
+    feed.answer = 'held';
+    await toggle('Starship');
+    expect(feed.held).toHaveLength(4);
+
+    await publish(FAILED_ROW);
+    vi.advanceTimersByTime(60_000);
+    await settle();
+    release(`SHIP 41\n${SHIP.line1}\n${SHIP.line2}\n`);
+    await settle();
+
+    expect(diamond(vendor)?.element.title).toBe('Starship: SHIP 41');
+    expect(statusLine().textContent).toBe('Starship: drawing SHIP 41');
+  });
+
+  it('unchecking says the vehicle is hidden and how to bring it back', async () => {
+    mounted();
+    await publish(FAILED_ROW);
+    openPicker();
+    await toggle('Starship');
+
+    expect(statusLine().textContent).toBe('Starship is hidden. Check it to look for its orbit again.');
+    expect(checkboxFor('Starship').checked).toBe(false);
+    expect(noteFor('Starship')).toBeNull();
+  });
+
+  it('typing its catalog number selects the published vehicle instead of drawing it a second time', async () => {
+    const { vendor, core } = mounted();
+    await publish(ELEMENTS_ROW);
+    openPicker();
+    document.querySelector<HTMLInputElement>('#satellite-picker-input')!.value = '67001';
+    document.getElementById('satellite-picker-add')!.click();
+    await settle();
+
+    expect(statusLine().textContent).toBe('Already tracking');
+    expect(vendor.markers.filter((marker) => !marker.removed)).toHaveLength(1);
+    expect(core.view().satellites.map((sat) => sat.name)).toEqual(['Starship']);
+    expect(rowNames().some((name) => name.includes('67001'))).toBe(false);
+  });
+
   it('is erased once the publisher says the orbit aged out and the last good set is past its limit', async () => {
     const { vendor, core } = mounted();
     await publish(ELEMENTS_ROW);
@@ -507,6 +590,18 @@ describe('a typed satellite', () => {
     expect(rowNames().some((name) => name.includes('99999'))).toBe(false);
     expect(core.view().satellites).toEqual([]);
     expect(localStorage.getItem(PREF_KEYS.selectedSatellites)).toBe('[]');
+  });
+
+  it('that fails for a curated row already checked leaves that row checked', async () => {
+    mounted();
+    openPicker();
+    await toggle('Hubble');
+    expect(checkboxFor('Hubble').checked).toBe(true);
+
+    await typeAndAdd('20580');
+
+    expect(checkboxFor('Hubble').checked).toBe(true);
+    expect(localStorage.getItem(PREF_KEYS.selectedSatellites)).toBe('["20580"]');
   });
 
   it('that resolves gets a row it can be unchecked from', async () => {

@@ -314,8 +314,10 @@ const HELP_SECTIONS: HelpSection[] = [
           'Starship is not a legend row. It is the Starship checkbox under ' +
           'the satellite button, and it starts checked. When a public ' +
           'orbit is published, the map draws a red diamond labeled Starship ' +
-          'and a dotted track of one orbit. When none is, the row says ' +
-          'whether no orbit is published yet or the lookup failed.',
+          'and a dotted track of one orbit. When none is, a line under the ' +
+          'list says whether no orbit is published yet, the last one is ' +
+          'too old to draw, or the lookup failed. Unchecking the box hides ' +
+          'Starship. Checking it again asks CelesTrak directly.',
       },
     ],
   },
