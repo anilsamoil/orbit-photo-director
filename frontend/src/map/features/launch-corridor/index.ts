@@ -57,6 +57,8 @@ type Runtime = {
   userMoved: boolean;
   hazardFrameKey: string;
   inputBound: boolean;
+  hazardPopupContent: HTMLElement | null;
+  hazardPopupKeys: string[];
 };
 
 const state: Runtime = {
@@ -87,6 +89,8 @@ const state: Runtime = {
   userMoved: false,
   hazardFrameKey: '',
   inputBound: false,
+  hazardPopupContent: null,
+  hazardPopupKeys: [],
 };
 
 const LAUNCH_LAYERS = [
@@ -194,6 +198,7 @@ function paintHazards(core: MapCore, now: number): void {
   if (signature !== state.hazardSignature || !core.hasSource('launch-hazards')) {
     state.hazardSignature = signature;
     core.setGeoJson('launch-hazards', { type: 'FeatureCollection', features });
+    refreshHazardPopup(features);
   }
   paintHazardCaption();
 }
@@ -408,11 +413,53 @@ function hazardPopup(features: { properties: Record<string, unknown> | null }[])
   return content;
 }
 
+function hazardNoticeKey(noticeId: unknown, areaId: unknown): string | null {
+  if (typeof noticeId !== 'string' || typeof areaId !== 'string') return null;
+  if (noticeId.length === 0 || areaId.length === 0) return null;
+  return `${noticeId}\u0000${areaId}`;
+}
+
+function hazardPopupKeys(features: { properties: Record<string, unknown> | null }[]): string[] {
+  return features.flatMap((feature) => {
+    const key = hazardNoticeKey(feature.properties?.notice_id, feature.properties?.area_id);
+    return key ? [key] : [];
+  });
+}
+
+/** Keep an already-open hazard popup on the notice and area just painted. */
+function refreshHazardPopup(features: readonly GeoJSON.Feature[]): void {
+  const content = state.hazardPopupContent;
+  const keys = state.hazardPopupKeys;
+  if (!content || keys.length === 0) return;
+  const shown = keys.flatMap((key) => {
+    const match = features.find((feature) => hazardNoticeKey(feature.properties?.notice_id, feature.properties?.area_id) === key);
+    return match ? [match] : [];
+  });
+  if (shown.length !== keys.length) {
+    state.hazardPopupContent = null;
+    state.hazardPopupKeys = [];
+    state.core?.closePopup('launch');
+    return;
+  }
+  const next = hazardPopup(shown.map((feature) => ({
+    properties: feature.properties ? { ...feature.properties } : null,
+  })));
+  content.replaceChildren(...next.childNodes);
+}
+
 function bindHazardClicks(host: MapCore): void {
   if (state.clicksCore === host) return;
   state.clicksCore = host;
   host.onLayer('click', 'launch-hazard-fill-layer', (event) => {
-    host.openPopup({ at: event.lngLat, content: hazardPopup(event.features), owner: 'launch' });
+    const content = hazardPopup(event.features);
+    const handle = host.openPopup({ at: event.lngLat, content, owner: 'launch' });
+    state.hazardPopupContent = content;
+    state.hazardPopupKeys = hazardPopupKeys(event.features);
+    handle.onClose(() => {
+      if (state.hazardPopupContent !== content) return;
+      state.hazardPopupContent = null;
+      state.hazardPopupKeys = [];
+    });
   });
 }
 
@@ -629,6 +676,8 @@ export function resetLaunchForTest(): void {
   state.hazardArmed = false;
   state.userMoved = false;
   state.hazardFrameKey = '';
+  state.hazardPopupContent = null;
+  state.hazardPopupKeys = [];
   publishHazardNotes([]);
 }
 

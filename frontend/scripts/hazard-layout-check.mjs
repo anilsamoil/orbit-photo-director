@@ -205,6 +205,15 @@ function cardProbe() {
   };
 }
 
+function assertHazardAreas(engine, size, areas) {
+  for (const id of ['A', 'B', '6/7129']) {
+    const count = areas?.[id];
+    if (!Number.isFinite(count) || count < 1) {
+      throw new Error(`${engine} ${size}: area ${id} count is ${String(count)}`);
+    }
+  }
+}
+
 const report = [];
 const engines = [
   ['webkit', webkit],
@@ -303,16 +312,24 @@ for (const [name, browserType] of engines) {
   }
 }
 
+for (const row of report) {
+  if (row.size === 'catalog-refresh-after-404') continue;
+  try {
+    assertHazardAreas(row.engine, row.size, row.polygons?.areas);
+  } catch (error) {
+    row.areaError = error instanceof Error ? error.stack : String(error);
+  }
+}
+
 const failed = report.filter((row) => {
   const errors = (row.errors ?? []).filter((error) => !error.includes('gibs.earthdata.nasa.gov'));
   if (errors.length) return true;
   if (row.size === 'catalog-refresh-after-404') return row.clearedFetches <= row.before || row.restoredFetches <= row.clearedFetches;
   const caption = row.caption;
-  const areas = row.polygons.areas ?? {};
   const card = row.card.text ?? '';
   return caption.text !== LABEL || caption.hidden || caption.rangeText !== LABEL
     || caption.hits.length > 0 || caption.outside.length > 0 || !caption.legend
-    || areas.A < 1 || areas.B < 1 || areas['6/7129'] < 1 || row.polygons.padInside
+    || row.areaError || row.polygons.padInside
     || !card.includes('NAVAREA IV 1080/26') || !card.includes('area A') || !card.includes('maritime')
     || !card.includes('UTC') || !/CST|CDT/.test(card) || !card.includes('Checked 2026-11-13T10:02:00Z')
     || !card.includes('three hours prior to the earliest launch') || !card.includes('SFC-UNL')
@@ -321,4 +338,7 @@ const failed = report.filter((row) => {
 });
 writeFileSync(`${OUT}/hazard-layout-report.json`, JSON.stringify({ failed: failed.length, report }, null, 2));
 console.log(JSON.stringify({ failed: failed.length, report }, null, 2));
+for (const row of failed) {
+  if (row.areaError) console.error(row.areaError);
+}
 if (failed.length) process.exit(1);
