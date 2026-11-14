@@ -17,9 +17,13 @@ from generator.tracked import (
     TrackedSpec,
     TrackedUnavailable,
     canonical_intldes,
+    load_tracked_specs,
+    lookup_json,
     parse_element_sets,
     query_urls,
     resolve_spec,
+    unavailable_artifact_text,
+    write_tracked_artifact,
 )
 from tests.conftest import SAMPLE_TLE_TEXT
 from tests.tle_fakes import FakeClock, TextStream
@@ -451,5 +455,117 @@ def test_run_tick_404_publishes_no_public_orbit(settings_in_tmp: Settings) -> No
             "color": "#ff5c5c",
             "state": "unavailable",
             "reason": "no_public_orbit",
+            "lookup": {
+                "names": ["STARSHIP", "SHIP"],
+                "patterns": [r"^STARSHIP(?:[\s-]|$)", r"^SHIP[\s-]+\d+\b"],
+                "max_age_hours": 12.0,
+            },
         }
     ]
+
+
+FRONTEND_FALLBACK = (
+    Path(__file__).parent.parent / "frontend" / "test" / "fixtures" / "tracked-lookup-failed.json"
+)
+
+
+def test_the_frontend_fallback_fixture_is_the_generator_no_data_artifact() -> None:
+    assert FRONTEND_FALLBACK.read_text() == unavailable_artifact_text()
+
+
+def _objects_file(tmp_path: Path, objects: object) -> Path:
+    path = tmp_path / "tracked-objects.json"
+    path.write_text(json.dumps({"objects": objects}))
+    return path
+
+
+def test_a_missing_objects_file_tracks_only_starship(tmp_path: Path) -> None:
+    assert load_tracked_specs(tmp_path / "tracked-objects.json") == (STARSHIP,)
+
+
+def test_an_object_added_by_catalog_number_is_published_with_its_lookup(tmp_path: Path) -> None:
+    specs = load_tracked_specs(
+        _objects_file(tmp_path, [{"id": "station", "label": "Station", "catnr": 25544}])
+    )
+    assert [spec.id for spec in specs] == ["starship", "station"]
+    epoch = TLE.from_text(SAMPLE_TLE_TEXT).epoch
+
+    def get(url: str, timeout: float) -> tuple[int, str]:
+        del timeout
+        if "CATNR=25544" in url:
+            return 200, named("ISS (ZARYA)")
+        return 404, ""
+
+    sources, _clock = _bind(tmp_path, get)
+    dest = tmp_path / "tracked.json"
+    write_tracked_artifact(tmp_path, epoch + timedelta(hours=1), dest, sources=sources, specs=specs)
+    starship, station = json.loads(dest.read_text())["objects"]
+    assert starship["reason"] == "no_public_orbit"
+    assert station["state"] == "elements"
+    assert station["norad"] == 25544
+    assert station["lookup"] == {"names": [], "patterns": [], "max_age_hours": 48.0, "catnr": 25544}
+
+
+def test_an_object_added_by_name_matches_that_name_and_not_a_longer_one(tmp_path: Path) -> None:
+    specs = load_tracked_specs(
+        _objects_file(tmp_path, [{"id": "ship-39", "label": "Ship 39", "names": ["ship 39"]}])
+    )
+    spec = specs[1]
+    epoch = TLE.from_text(SAMPLE_TLE_TEXT).epoch
+    assert lookup_json(spec)["names"] == ["SHIP 39"]
+
+    def get(url: str, timeout: float) -> tuple[int, str]:
+        del url, timeout
+        return 200, named("SHIP 390") + named("SHIP 39 DEB")
+
+    sources, _clock = _bind(tmp_path, get)
+    record = resolve_spec(spec, tmp_path, epoch + timedelta(hours=1), sources)
+    assert isinstance(record, TrackedElements)
+    assert record.elements.name == "SHIP 39 DEB"
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"id": "no-way-to-find", "label": "Nothing"},
+        {"id": "Bad Id", "label": "X", "catnr": 5},
+        {"id": "zero", "label": "X", "catnr": 0},
+        {"id": "starship", "label": "Impostor", "catnr": 5},
+        {"id": "tint", "label": "X", "catnr": 5, "color": "red"},
+        "not an object",
+    ],
+)
+def test_an_unusable_entry_is_skipped(entry: object, tmp_path: Path) -> None:
+    assert load_tracked_specs(_objects_file(tmp_path, [entry])) == (STARSHIP,)
+
+
+def test_an_unreadable_objects_file_tracks_only_starship(tmp_path: Path) -> None:
+    path = tmp_path / "tracked-objects.json"
+    path.write_text("{not json")
+    assert load_tracked_specs(path) == (STARSHIP,)
+
+
+def test_run_tick_publishes_an_object_from_the_operator_file(
+    settings_in_tmp: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seed_iss(settings_in_tmp)
+    _objects_file(settings_in_tmp.repo_root, [{"id": "station", "label": "Station", "catnr": 25544}])
+    epoch = TLE.from_text(SAMPLE_TLE_TEXT).epoch
+
+    def transport(url: str, budget_s: float) -> TextStream:
+        del budget_s
+        if "CATNR=25544" in url:
+            return TextStream(named("ISS (ZARYA)"))
+        return TextStream("No GP data found")
+
+    monkeypatch.setattr("generator.tle_sources.open_http", transport)
+    manifest = run_tick(settings_in_tmp, now=epoch + timedelta(hours=1))
+    tracked = json.loads(
+        (settings_in_tmp.out_dir / "v" / manifest["version"] / "tracked.json").read_text()
+    )
+    assert [(row["id"], row["state"]) for row in tracked["objects"]] == [
+        ("starship", "unavailable"),
+        ("station", "elements"),
+    ]
+    assert tracked["objects"][1]["norad"] == 25544

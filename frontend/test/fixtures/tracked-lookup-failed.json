@@ -1,0 +1,22 @@
+{
+  "objects": [
+    {
+      "id": "starship",
+      "label": "Starship",
+      "color": "#ff5c5c",
+      "state": "unavailable",
+      "reason": "lookup_failed",
+      "lookup": {
+        "names": [
+          "STARSHIP",
+          "SHIP"
+        ],
+        "patterns": [
+          "^STARSHIP(?:[\\s-]|$)",
+          "^SHIP[\\s-]+\\d+\\b"
+        ],
+        "max_age_hours": 12.0
+      }
+    }
+  ]
+}

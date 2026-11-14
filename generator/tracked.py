@@ -68,6 +68,10 @@ class TrackedUnavailable:
     reason: str
 
 
+def _unavailable(spec: TrackedSpec, reason: str) -> TrackedUnavailable:
+    return TrackedUnavailable(spec.id, spec.label, spec.color, reason)
+
+
 TrackedRecord = TrackedElements | TrackedUnavailable
 
 _STARSHIP_NAME = re.compile(r"^STARSHIP(?:[\s-]|$)", re.IGNORECASE)
@@ -84,6 +88,80 @@ STARSHIP = TrackedSpec(
 )
 
 TRACKED_SPECS: tuple[TrackedSpec, ...] = (STARSHIP,)
+ADDED_MAX_AGE_HOURS = 48.0
+ADDED_COLOR = "#ff5c5c"
+_SPEC_ID = re.compile(r"^[a-z0-9-]+$")
+_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def load_tracked_specs(path: Path) -> tuple[TrackedSpec, ...]:
+    """The built-in vehicles plus the operator's `tracked-objects.json`.
+
+    Each entry names an object by catalog number, designator, or name. A
+    missing file adds nothing. An unreadable entry is skipped.
+    """
+    try:
+        raw = json.loads(path.read_text())
+    except FileNotFoundError:
+        return TRACKED_SPECS
+    except (OSError, json.JSONDecodeError, UnicodeError) as exc:
+        log.warning("tracked objects file %s is unreadable: %s", path, exc)
+        return TRACKED_SPECS
+    entries = raw.get("objects") if isinstance(raw, dict) else None
+    if not isinstance(entries, list):
+        log.warning("tracked objects file %s has no objects list", path)
+        return TRACKED_SPECS
+    specs = list(TRACKED_SPECS)
+    taken = {spec.id for spec in specs}
+    for entry in entries:
+        spec = _spec_from_entry(entry)
+        if spec is None or spec.id in taken:
+            log.warning("skipping tracked object entry %r", entry)
+            continue
+        taken.add(spec.id)
+        specs.append(spec)
+    return tuple(specs)
+
+
+def _spec_from_entry(entry: object) -> TrackedSpec | None:
+    if not isinstance(entry, dict):
+        return None
+    spec_id = entry.get("id")
+    label = entry.get("label")
+    if not isinstance(spec_id, str) or not _SPEC_ID.fullmatch(spec_id):
+        return None
+    if not isinstance(label, str) or not label.strip():
+        return None
+    catnr = entry.get("catnr")
+    if catnr is not None and (isinstance(catnr, bool) or not isinstance(catnr, int) or catnr <= 0):
+        return None
+    intldes = entry.get("intldes")
+    if intldes is not None and (not isinstance(intldes, str) or not intldes.strip()):
+        return None
+    names = entry.get("names", [])
+    if not isinstance(names, list) or not all(isinstance(n, str) and n.strip() for n in names):
+        return None
+    if catnr is None and intldes is None and not names:
+        return None
+    color = entry.get("color", ADDED_COLOR)
+    if not isinstance(color, str) or not _COLOR.fullmatch(color):
+        return None
+    max_age = entry.get("max_age_hours", ADDED_MAX_AGE_HOURS)
+    if isinstance(max_age, bool) or not isinstance(max_age, int | float) or max_age <= 0:
+        return None
+    queries = tuple(name.strip().upper() for name in names)
+    return TrackedSpec(
+        id=spec_id,
+        label=label.strip(),
+        color=color,
+        name_patterns=tuple(
+            re.compile(rf"^{re.escape(query)}(?:[\s-]|$)", re.IGNORECASE) for query in queries
+        ),
+        name_queries=queries,
+        max_age_hours=float(max_age),
+        catnr=catnr,
+        intldes=intldes.strip() if intldes else None,
+    )
 
 
 def canonical_intldes(value: str) -> str:
@@ -199,13 +277,13 @@ def resolve_spec(
             )
         if chosen is not None:
             return chosen
-        return TrackedUnavailable(spec.id, spec.label, spec.color, "aged_out")
+        return _unavailable(spec, "aged_out")
 
     if chosen is not None:
         return chosen
     if saw_error:
-        return TrackedUnavailable(spec.id, spec.label, spec.color, "lookup_failed")
-    return TrackedUnavailable(spec.id, spec.label, spec.color, "no_public_orbit")
+        return _unavailable(spec, "lookup_failed")
+    return _unavailable(spec, "no_public_orbit")
 
 
 def write_tracked_artifact(
@@ -213,19 +291,16 @@ def write_tracked_artifact(
     now: datetime,
     dest: Path,
     sources: TleSources | None = None,
+    specs: tuple[TrackedSpec, ...] = TRACKED_SPECS,
 ) -> None:
     client = sources if sources is not None else TleSources(cache_dir)
-    records = [_resolve_one(spec, cache_dir, now, client) for spec in TRACKED_SPECS]
+    records = [(spec, _resolve_one(spec, cache_dir, now, client)) for spec in specs]
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(_dump(records))
 
 
-def unavailable_artifact_text() -> str:
-    records = [
-        TrackedUnavailable(spec.id, spec.label, spec.color, "lookup_failed")
-        for spec in TRACKED_SPECS
-    ]
-    return _dump(records)
+def unavailable_artifact_text(specs: tuple[TrackedSpec, ...] = TRACKED_SPECS) -> str:
+    return _dump([(spec, _unavailable(spec, "lookup_failed")) for spec in specs])
 
 
 def _resolve_one(
@@ -238,7 +313,7 @@ def _resolve_one(
         return resolve_spec(spec, cache_dir, now, sources)
     except OSError as exc:
         log.warning("tracked resolve failed for %s: %s", spec.id, exc)
-        return TrackedUnavailable(spec.id, spec.label, spec.color, "lookup_failed")
+        return _unavailable(spec, "lookup_failed")
 
 
 def _reply_judge(source: str):
@@ -272,8 +347,23 @@ def _newer_cached(
     return cached
 
 
-def _dump(records: list[TrackedRecord]) -> str:
-    return json.dumps({"objects": [_to_json(record) for record in records]}, indent=2) + "\n"
+def _dump(records: list[tuple[TrackedSpec, TrackedRecord]]) -> str:
+    rows = [{**_to_json(record), "lookup": lookup_json(spec)} for spec, record in records]
+    return json.dumps({"objects": rows}, indent=2) + "\n"
+
+
+def lookup_json(spec: TrackedSpec) -> dict[str, object]:
+    """How a browser may repeat this lookup against the same two feeds."""
+    lookup: dict[str, object] = {
+        "names": list(spec.name_queries),
+        "patterns": [pattern.pattern for pattern in spec.name_patterns],
+        "max_age_hours": spec.max_age_hours,
+    }
+    if spec.catnr is not None:
+        lookup["catnr"] = spec.catnr
+    if spec.intldes:
+        lookup["intldes"] = spec.intldes
+    return lookup
 
 
 def _to_json(record: TrackedRecord) -> dict[str, object]:
@@ -338,7 +428,7 @@ def _select(
         if _age_hours(element.epoch, now) <= spec.max_age_hours
     ]
     if not usable:
-        return TrackedUnavailable(spec.id, spec.label, spec.color, "aged_out")
+        return _unavailable(spec, "aged_out")
     best = max(usable, key=lambda element: (element.epoch, element.source == "supgp"))
     return TrackedElements(
         id=spec.id,
