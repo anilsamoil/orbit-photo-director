@@ -1,6 +1,7 @@
 #!/usr/bin/env node
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +17,14 @@ const { devices } = require('playwright');
 const WHEN = Date.parse('2026-11-14T23:40:00Z');
 const EVENT = 'fixture-iss-cape';
 const SIZES = ['402x874', '874x402', '1024x768', '1180x820', '768x1024', '834x1210', '1440x900'];
+const TOGGLE_SIZES = ['402x874', '874x402', '1024x768', '1440x900'];
+const MODELED = 'ef9850ad-1096-425b-9d27-f7bbd186e61a';
+const OTHER = 'fixture-baikonur';
+const SECTOR = 'fixture-starbase';
+const CRS = 'fixture-iss-cape';
+const SITE = 'fixture-unknown';
+const HAZARD = '0f867f0c-5422-4d44-93b8-d7faaae7019b';
+const probeName = process.env.OPD_LAUNCH_PLANNER_PROBE || 'card';
 
 const origin = process.env.OPD_VERIFY_ORIGIN || 'http://127.0.0.1:41731';
 const size = String(process.env.OPD_VERIFY_VIEWPORT || '').trim();
@@ -28,7 +37,9 @@ function fail(message) {
   process.exit(1);
 }
 
-if (!SIZES.includes(size)) fail(`OPD_VERIFY_VIEWPORT must be one of ${SIZES.join(', ')}`);
+if (probeName !== 'card' && probeName !== 'toggle') fail('OPD_LAUNCH_PLANNER_PROBE must be card or toggle');
+if (probeName === 'card' && !SIZES.includes(size)) fail(`OPD_VERIFY_VIEWPORT must be one of ${SIZES.join(', ')}`);
+if (probeName === 'toggle' && !TOGGLE_SIZES.includes(size)) fail(`OPD_VERIFY_VIEWPORT must be one of ${TOGGLE_SIZES.join(', ')}`);
 
 function tiedBody() {
   const catalog = JSON.parse(readFileSync(resolve(repo, 'frontend/test/fixtures/launch-planner-tied-catalog.json'), 'utf8'));
@@ -167,6 +178,461 @@ function probe() {
   };
 }
 
+function scheduleAt(net, start, end) {
+  return { destination: null, net, precision: 'Second', status: 'Go', window_start: start, window_end: end };
+}
+
+function toggleCatalog() {
+  const catalog = JSON.parse(readFileSync(resolve(repo, 'frontend/test/fixtures/launch-planner-tied-catalog.json'), 'utf8'));
+  const starshipCatalog = JSON.parse(readFileSync(resolve(repo, 'frontend/test/fixtures/starship-catalog-2026-11-10.json'), 'utf8'));
+  const take = (id) => {
+    const item = catalog.items.find((entry) => entry.event_id === id);
+    if (!item) fail(`missing ${id}`);
+    return structuredClone(item);
+  };
+  const dropAscent = (item) => {
+    delete item.ascent;
+    return item;
+  };
+  const vulcan = take(MODELED);
+  vulcan.shots = [];
+  vulcan.tier = 'watch';
+  vulcan.schedule = scheduleAt('2026-11-14T23:46:00Z', '2026-11-14T23:45:00Z', '2026-11-14T23:59:00Z');
+  const other = take(OTHER);
+  other.shots = [];
+  other.tier = 'watch';
+  other.schedule = scheduleAt('2026-11-14T23:52:00Z', '2026-11-14T23:50:00Z', '2026-11-14T23:59:00Z');
+  const sector = take(SECTOR);
+  sector.shots = [];
+  sector.tier = 'watch';
+  sector.schedule = scheduleAt('2026-11-15T00:05:00Z', '2026-11-15T00:00:00Z', '2026-11-15T00:20:00Z');
+  const crs = dropAscent(take(CRS));
+  crs.tier = 'watch';
+  crs.name = 'Falcon 9 Block 5 | Dragon CRS-2 SpX-35';
+  crs.direction = { kind: 'iss_plane', azimuth_deg: 44.7, source: 'iss_tle_plane', off_plane_deg: 0.35 };
+  const ascentShot = crs.shots.find((shot) => shot.subject === 'ascent' && shot.track.length >= 2);
+  if (!ascentShot) fail('missing CRS corridor track');
+  ascentShot.direction = { kind: 'iss_plane', azimuth_deg: 44.7, source: 'iss_tle_plane', off_plane_deg: 0.35 };
+  crs.shots = [ascentShot];
+  crs.schedule = scheduleAt('2026-11-15T00:12:00Z', '2026-11-15T00:10:00Z', '2026-11-15T00:30:00Z');
+  const site = dropAscent(take(SITE));
+  site.shots = [];
+  site.tier = 'watch';
+  site.name = 'Site only';
+  site.direction = { kind: 'none', azimuth_deg: null, source: null, off_plane_deg: null };
+  site.schedule = scheduleAt('2026-11-15T00:18:00Z', '2026-11-15T00:15:00Z', '2026-11-15T00:30:00Z');
+  const hazardItem = starshipCatalog.items.find((entry) => entry.event_id === HAZARD);
+  if (!hazardItem) fail('missing hazard launch');
+  const hazard = dropAscent(structuredClone(hazardItem));
+  hazard.shots = [];
+  hazard.tier = 'watch';
+  hazard.direction = { kind: 'none', azimuth_deg: null, source: null, off_plane_deg: null };
+  hazard.schedule = scheduleAt('2026-11-15T00:25:00Z', '2026-11-14T23:45:00Z', '2026-11-15T00:39:00Z');
+  catalog.items = [vulcan, other, sector, crs, site, hazard];
+  catalog.coverage.received = catalog.items.length;
+  catalog.coverage.listed = catalog.items.length;
+  catalog.coverage.evaluated = catalog.items.length;
+  catalog.coverage.tier_counts = { shot: 0, likely: 0, watch: catalog.items.length, unassessed: 0, none: 0 };
+  return catalog;
+}
+
+function toggleBody() {
+  const catalog = toggleCatalog();
+  const text = JSON.stringify(catalog);
+  const sha256 = createHash('sha256').update(text).digest('hex');
+  const pointer = {
+    schema_version: 2,
+    revision: catalog.revision,
+    generated_at: catalog.generated_at,
+    valid_until: catalog.geometry_valid_until,
+    path: `launch/catalog/v/${catalog.revision}.json`,
+    sha256,
+  };
+  return { text, pointer };
+}
+
+function assertToggleCatalog(text) {
+  const file = resolve(artifacts, 'launch-brief-toggle-catalog.json');
+  mkdirSync(artifacts, { recursive: true });
+  writeFileSync(file, text);
+  const bun = existsSync(resolve(process.env.HOME || '', '.bun/bin/bun'))
+    ? resolve(process.env.HOME || '', '.bun/bin/bun')
+    : 'bun';
+  const result = spawnSync(bun, ['-e', `
+    import { readFileSync } from 'node:fs';
+    import { parseLaunchArtifact } from './src/launch-schema.ts';
+    parseLaunchArtifact(JSON.parse(readFileSync(process.env.TOGGLE_CATALOG, 'utf8')));
+    console.log('toggle catalog parsed');
+  `], {
+    cwd: resolve(repo, 'frontend'),
+    encoding: 'utf8',
+    env: { ...process.env, TOGGLE_CATALOG: file },
+  });
+  if (result.status !== 0) fail(result.stderr || result.stdout || 'toggle catalog rejected');
+}
+
+const toggleIds = { modeled: MODELED, other: OTHER, sector: SECTOR, crs: CRS, site: SITE, hazard: HAZARD };
+
+function toggleBoard(ids) {
+  const buttonOf = (id) => document.querySelector(`#map-launch-coverage [data-event-id="${id}"] .launch-brief-actions button`);
+  const describe = (id) => {
+    const button = buttonOf(id);
+    if (!button) return null;
+    return {
+      text: button.textContent,
+      pressed: button.hasAttribute('aria-pressed') ? button.getAttribute('aria-pressed') : null,
+    };
+  };
+  const primary = document.querySelector('#map-launch-coverage .map-launch-primary');
+  const summary = primary?.querySelector('summary') ?? null;
+  const map = window.__opdMap;
+  const style = map.getStyle();
+  const source = map.getSource('ascent-trajectory');
+  const raw = source && (source._data?.geojson || source._data?.data || source._data);
+  const features = raw?.features ?? [];
+  const keyOf = (feature) => {
+    const coords = feature.geometry?.type === 'LineString' ? feature.geometry.coordinates : [];
+    const flat = coords.map((pair) => `${Number(pair[0]).toFixed(4)},${Number(pair[1]).toFixed(4)}`).join(';');
+    return `${feature.id ?? ''}|${feature.properties?.event_id ?? ''}|${feature.properties?.role ?? ''}|${flat}`;
+  };
+  const caption = document.getElementById('launch-ascent-caption');
+  const pane = document.getElementById('map-pane');
+  const brief = document.getElementById('map-launch-coverage');
+  return {
+    summary: summary?.textContent ?? '',
+    open: !!primary?.open,
+    summaryFocused: document.activeElement === summary,
+    focusVisible: !!(summary && summary.matches(':focus-visible')),
+    caption: caption?.textContent ?? '',
+    captionHidden: caption ? caption.hidden : true,
+    popup: !!document.querySelector('.maplibregl-popup'),
+    sources: Object.keys(style.sources).sort(),
+    layers: style.layers.map((layer) => layer.id),
+    featureIds: features.map((feature) => feature.id ?? null),
+    featureKeys: features.map(keyOf),
+    scroll: {
+      y: window.scrollY,
+      top: document.scrollingElement ? document.scrollingElement.scrollTop : 0,
+      pane: pane ? pane.scrollTop : 0,
+      brief: brief ? brief.scrollTop : 0,
+    },
+    buttons: {
+      modeled: describe(ids.modeled),
+      other: describe(ids.other),
+      sector: describe(ids.sector),
+      crs: describe(ids.crs),
+      site: describe(ids.site),
+      hazard: describe(ids.hazard),
+    },
+  };
+}
+
+function sameList(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function crsKeys(board) {
+  return board.featureKeys.filter((key) => key.includes(`|${CRS}|corridor|`));
+}
+
+function eventRoles(board, eventId) {
+  return board.featureKeys.filter((key) => key.includes(`|${eventId}|`) && !key.includes('|corridor|'));
+}
+
+async function shotNamed(page, name) {
+  mkdirSync(evidence, { recursive: true });
+  mkdirSync(artifacts, { recursive: true });
+  await page.screenshot({ path: resolve(artifacts, name) });
+  await page.screenshot({ path: resolve(evidence, name) });
+}
+
+async function runToggle() {
+  const published = toggleBody();
+  assertToggleCatalog(published.text);
+  if (process.env.OPD_LAUNCH_PLANNER_DRY === 'catalog') {
+    console.log(`toggle catalog ${size} parsed`);
+    return;
+  }
+  const touch = contextOptions(size).hasTouch;
+  const how = touch ? 'tap' : 'click';
+  const browser = await launchWebkit();
+  isolateSnapRequests(browser, origin);
+  const problems = [];
+  try {
+    const context = await browser.newContext(contextOptions(size));
+    const page = await context.newPage();
+    await page.addInitScript((frozen) => {
+      Date.now = () => frozen;
+      localStorage.setItem('opd-map-chrome', 'shown');
+      localStorage.setItem('opd-map-launch-brief-open', '1');
+    }, WHEN);
+    await page.route('**/api/browser/session', (route) => jsonRoute(route, {
+      ok: true,
+      profile: { name: 'anil', displayName: 'Anil' },
+      profiles: [{ name: 'anil', displayName: 'Anil' }],
+    }));
+    await page.route('**/manifest.json', (route) => jsonRoute(route, manifestBody()));
+    await page.route('**/v/browser/passes.json', (route) => jsonRoute(route, []));
+    await page.route('**/v/browser/top5.json', (route) => jsonRoute(route, []));
+    await page.route('**/v/browser/track.json', (route) => jsonRoute(route, trackBody()));
+    await page.route('**/launch/catalog/latest.json', (route) => jsonRoute(route, published.pointer));
+    await page.route('**/launch/catalog/v/**', (route) => jsonRoute(route, published.text));
+    await page.route('**/launch/latest.json', (route) => jsonRoute(route, { error: 'not_found' }, 404));
+    const errors = [];
+    page.on('pageerror', (error) => errors.push(String(error)));
+    const read = () => page.evaluate(toggleBoard, toggleIds);
+    const activate = async (locator, method) => {
+      await locator.scrollIntoViewIfNeeded();
+      if (method === 'tap') await locator.tap();
+      else if (method === 'click') await locator.click();
+      else {
+        await locator.focus();
+        const before = await page.evaluate(() => ({
+          y: window.scrollY,
+          top: document.scrollingElement ? document.scrollingElement.scrollTop : 0,
+          pane: document.getElementById('map-pane')?.scrollTop ?? 0,
+          brief: document.getElementById('map-launch-coverage')?.scrollTop ?? 0,
+        }));
+        await page.keyboard.press(method === 'space' ? 'Space' : 'Enter');
+        const after = await page.evaluate(() => ({
+          y: window.scrollY,
+          top: document.scrollingElement ? document.scrollingElement.scrollTop : 0,
+          pane: document.getElementById('map-pane')?.scrollTop ?? 0,
+          brief: document.getElementById('map-launch-coverage')?.scrollTop ?? 0,
+        }));
+        return { before, after };
+      }
+      return null;
+    };
+    const openDetails = async (selector) => {
+      const details = page.locator(selector);
+      if (!(await details.evaluate((node) => node.open))) await activate(details.locator('summary'), how);
+      await page.waitForFunction((sel) => document.querySelector(sel)?.open === true, selector);
+    };
+    const control = (id) => page.locator(`#map-launch-coverage [data-event-id="${id}"] .launch-brief-actions button`);
+    await page.goto(`${origin}/?e2e&u=anil`, { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => window.__opdMap && window.__opdMap.isStyleLoaded(), null, { timeout: 30_000 });
+    const launches = page.locator('#filter-launches-map');
+    if (await launches.getAttribute('aria-pressed') !== 'true') await launches.click();
+    const follow = page.locator('#toggle-follow-iss');
+    if ((await follow.getAttribute('class'))?.includes('active')) await follow.click();
+    await page.waitForFunction((id) => (
+      document.querySelector(`#map-launch-coverage .map-launch-primary [data-event-id="${id}"] .launch-brief-actions button`)?.textContent === 'Show site and modeled ascent'
+    ), MODELED, { timeout: 20_000 });
+    await page.waitForFunction((id) => (
+      document.querySelector(`[data-event-id="${id}"] .launch-brief-actions button`)?.textContent === 'Show published hazard areas'
+    ), HAZARD, { timeout: 20_000 });
+    const baseline = await read();
+    await openDetails('#map-launch-coverage .map-launch-more');
+    await activate(control(HAZARD), how);
+    await page.waitForFunction(() => {
+      const map = window.__opdMap;
+      if (!map || map.isMoving()) return false;
+      const canvas = map.getCanvas().getBoundingClientRect();
+      return map.queryRenderedFeatures([[0, 0], [canvas.width, canvas.height]], { layers: ['launch-hazard-fill-layer'] }).length > 0;
+    }, null, { timeout: 15_000 }).catch(() => null);
+    await page.evaluate(() => {
+      const primary = document.querySelector('#map-launch-coverage .map-launch-primary');
+      const more = document.querySelector('#map-launch-coverage .map-launch-more');
+      if (primary) primary.open = false;
+      if (more) more.open = false;
+    });
+    const point = await page.evaluate(() => {
+      const map = window.__opdMap;
+      const canvas = map.getCanvas().getBoundingClientRect();
+      const blocked = (x, y) => [...document.querySelectorAll('#map-launch-coverage, .map-toolbar, .map-control-dock, .map-controls-time, #map-legend-toggle, #map-chrome-toggle, .maplibregl-ctrl-group')]
+        .some((node) => {
+          const box = node.getBoundingClientRect();
+          return box.width > 1 && box.height > 1 && x > box.left && x < box.right && y > box.top && y < box.bottom;
+        });
+      for (let y = canvas.top + 8; y < canvas.bottom - 8; y += 18) {
+        for (let x = canvas.left + 8; x < canvas.right - 8; x += 18) {
+          if (blocked(x, y)) continue;
+          const hits = map.queryRenderedFeatures([x - canvas.left, y - canvas.top], { layers: ['launch-hazard-fill-layer'] });
+          if (hits.length) return { x, y };
+        }
+      }
+      return null;
+    });
+    let hazardPopup = 'none';
+    let hazardDebug = null;
+    if (!point) {
+      hazardDebug = await page.evaluate(() => {
+        const map = window.__opdMap;
+        const source = map.getSource('launch-hazards');
+        const raw = source && (source._data?.geojson || source._data?.data || source._data);
+        const canvas = map.getCanvas().getBoundingClientRect();
+        const hits = map.queryRenderedFeatures([[0, 0], [canvas.width, canvas.height]], { layers: ['launch-hazard-fill-layer'] });
+        return {
+          features: raw?.features?.length ?? 0,
+          hits: hits.length,
+          visibility: map.getLayoutProperty('launch-hazard-fill-layer', 'visibility'),
+        };
+      });
+    }
+    if (point) {
+      if (touch) await page.touchscreen.tap(point.x, point.y);
+      else await page.mouse.click(point.x, point.y);
+      await page.waitForTimeout(600);
+      hazardPopup = (await read()).popup ? 'open' : 'closed';
+    }
+    await openDetails('#map-launch-coverage .map-launch-primary');
+    await activate(control(MODELED), how);
+    await page.waitForFunction((id) => {
+      const map = window.__opdMap;
+      const source = map.getSource('ascent-trajectory');
+      const raw = source && (source._data?.geojson || source._data?.data || source._data);
+      return (raw?.features ?? []).some((feature) => feature.properties?.event_id === id && feature.properties?.role === 'model');
+    }, MODELED, { timeout: 15_000 });
+    const shown = await read();
+    await shotNamed(page, `launch-brief-toggle-${size}-shown.png`);
+    await openDetails('#map-launch-coverage .map-launch-primary');
+    const reopened = await read();
+    await shotNamed(page, `launch-brief-toggle-${size}-hide.png`);
+    await activate(control(MODELED), how);
+    await page.waitForFunction((id) => {
+      const map = window.__opdMap;
+      const source = map.getSource('ascent-trajectory');
+      const raw = source && (source._data?.geojson || source._data?.data || source._data);
+      return !(raw?.features ?? []).some((feature) => feature.properties?.event_id === id && feature.properties?.role === 'model');
+    }, MODELED, { timeout: 15_000 });
+    const hidden = await read();
+    await shotNamed(page, `launch-brief-toggle-${size}-cleared.png`);
+    await openDetails('#map-launch-coverage .map-launch-primary');
+    await activate(control(MODELED), how);
+    await page.waitForFunction((id) => {
+      const map = window.__opdMap;
+      const source = map.getSource('ascent-trajectory');
+      const raw = source && (source._data?.geojson || source._data?.data || source._data);
+      return (raw?.features ?? []).some((feature) => feature.properties?.event_id === id && feature.properties?.role === 'model');
+    }, MODELED, { timeout: 15_000 });
+    const shownAgain = await read();
+    await openDetails('#map-launch-coverage .map-launch-more');
+    await activate(control(OTHER), how);
+    await page.waitForFunction((id) => {
+      const source = window.__opdMap.getSource('ascent-trajectory');
+      const raw = source && (source._data?.geojson || source._data?.data || source._data);
+      const features = raw?.features ?? [];
+      return features.some((feature) => feature.properties?.event_id === id && feature.properties?.role === 'model');
+    }, OTHER, { timeout: 15_000 });
+    const replaced = await read();
+    await openDetails('#map-launch-coverage .map-launch-more');
+    await activate(control(SECTOR), how);
+    await page.waitForFunction((id) => (
+      document.querySelector(`[data-event-id="${id}"] .launch-brief-actions button`)?.textContent === 'Hide assumed sector'
+    ), SECTOR, { timeout: 15_000 });
+    const sectorOn = await read();
+    await openDetails('#map-launch-coverage .map-launch-more');
+    await activate(control(SECTOR), how);
+    await page.waitForFunction((id) => (
+      document.querySelector(`[data-event-id="${id}"] .launch-brief-actions button`)?.textContent === 'Show site and assumed sector'
+    ), SECTOR, { timeout: 15_000 });
+    const sectorOff = await read();
+    let space = null;
+    if (!touch) {
+      await openDetails('#map-launch-coverage .map-launch-primary');
+      await activate(control(MODELED), 'enter');
+      await page.waitForFunction((id) => {
+        const primary = document.querySelector('#map-launch-coverage .map-launch-primary');
+        const source = window.__opdMap.getSource('ascent-trajectory');
+        const raw = source && (source._data?.geojson || source._data?.data || source._data);
+        const drawn = (raw?.features ?? []).some((feature) => feature.properties?.event_id === id && feature.properties?.role === 'model');
+        return primary && !primary.open && drawn;
+      }, MODELED, { timeout: 15_000 });
+      const byEnter = await read();
+      if (!byEnter.summaryFocused) problems.push('Enter did not focus the summary');
+      await openDetails('#map-launch-coverage .map-launch-primary');
+      await activate(control(MODELED), 'enter');
+      await page.waitForFunction((id) => (
+        document.querySelector(`[data-event-id="${id}"] .launch-brief-actions button`)?.getAttribute('aria-pressed') === 'false'
+      ), MODELED, { timeout: 15_000 });
+      await openDetails('#map-launch-coverage .map-launch-primary');
+      space = await activate(control(MODELED), 'space');
+      await page.waitForFunction((id) => {
+        const primary = document.querySelector('#map-launch-coverage .map-launch-primary');
+        const source = window.__opdMap.getSource('ascent-trajectory');
+        const raw = source && (source._data?.geojson || source._data?.data || source._data);
+        const drawn = (raw?.features ?? []).some((feature) => feature.properties?.event_id === id && feature.properties?.role === 'model');
+        return primary && !primary.open && drawn;
+      }, MODELED, { timeout: 15_000 });
+    }
+    const expectButton = (board, name, text, pressed) => {
+      const button = board.buttons[name];
+      if (!button) problems.push(`${name} button missing`);
+      else if (button.text !== text || button.pressed !== pressed) problems.push(`${name} ${button.text} pressed ${button.pressed}`);
+    };
+    if (baseline.summary !== 'Next launch · Watch') problems.push(`summary ${baseline.summary}`);
+    expectButton(baseline, 'modeled', 'Show site and modeled ascent', 'false');
+    expectButton(baseline, 'sector', 'Show site and assumed sector', 'false');
+    expectButton(baseline, 'crs', 'Show site and corridor', null);
+    expectButton(baseline, 'site', 'Show launch site', null);
+    expectButton(baseline, 'hazard', 'Show published hazard areas', null);
+    if (!crsKeys(baseline).length) problems.push('published corridor missing before show');
+    if (shown.open) problems.push('show left the brief open');
+    if (!shown.summaryFocused) problems.push('show did not focus the summary');
+    if (shown.captionHidden || !shown.caption.includes('grade')) problems.push('show dropped the caption');
+    if (!eventRoles(shown, MODELED).length) problems.push('show drew no modeled features');
+    if (shown.popup) problems.push('show left a launch popup open');
+    expectButton(reopened, 'modeled', 'Hide modeled ascent', 'true');
+    if (hidden.captionHidden !== true) problems.push('hide left the caption');
+    if (eventRoles(hidden, MODELED).length) problems.push('hide left modeled features');
+    expectButton(hidden, 'modeled', 'Show site and modeled ascent', 'false');
+    for (const board of [shown, hidden, shownAgain]) {
+      if (!sameList(board.sources, baseline.sources) || !sameList(board.layers, baseline.layers)) {
+        problems.push(`sources ${board.sources.length} layers ${board.layers.length}`);
+      }
+      if (!sameList(crsKeys(board), crsKeys(baseline))) problems.push('published corridor changed');
+    }
+    if (!sameList(shownAgain.featureIds, shown.featureIds) || !sameList(shownAgain.featureKeys, shown.featureKeys)) {
+      problems.push('feature ids changed across show hide show');
+    }
+    expectButton(replaced, 'modeled', 'Show site and modeled ascent', 'false');
+    expectButton(replaced, 'other', 'Hide modeled ascent', 'true');
+    expectButton(replaced, 'hazard', 'Show launch site', null);
+    if (eventRoles(replaced, MODELED).length || !eventRoles(replaced, OTHER).length) problems.push('other launch did not replace the drawing');
+    expectButton(sectorOn, 'sector', 'Hide assumed sector', 'true');
+    expectButton(sectorOn, 'other', 'Show site and modeled ascent', 'false');
+    expectButton(sectorOff, 'sector', 'Show site and assumed sector', 'false');
+    expectButton(sectorOff, 'hazard', 'Show published hazard areas', null);
+    if (space) {
+      const pageScroll = (box) => ({ y: box.y, top: box.top, pane: box.pane });
+      if (!sameList(pageScroll(space.before), pageScroll(space.after))) {
+        problems.push(`Space scrolled ${JSON.stringify(pageScroll(space.before))} -> ${JSON.stringify(pageScroll(space.after))}`);
+      }
+    }
+    const ignored = errors.filter((error) => !error.includes('nasa.gov') && !error.includes('gibs.earthdata'));
+    if (ignored.length) problems.push(ignored[0]);
+    const report = {
+      size,
+      how,
+      focusVisible: shown.focusVisible,
+      hazardPopup,
+      hazardDebug,
+      space,
+      sourceCount: baseline.sources.length,
+      layerCount: baseline.layers.length,
+      featureCount: shown.featureKeys.length,
+      problems,
+    };
+    writeFileSync(resolve(artifacts, `launch-brief-toggle-${size}.json`), JSON.stringify(report, null, 2));
+    if (problems.length) throw new Error(`launch brief toggle ${size}: ${problems.join('; ')}`);
+    const spaceNote = touch ? 'n/a' : '0';
+    console.log(`launch brief toggle ${size} ${how} show hide show sources ${baseline.sources.length} layers ${baseline.layers.length} features identical focus-visible ${shown.focusVisible ? 1 : 0} hazard-popup ${hazardPopup} space-scroll ${spaceNote}`);
+    await context.close();
+  } finally {
+    await browser.close();
+  }
+}
+
+if (probeName === 'toggle') {
+  try {
+    await runToggle();
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+}
+
+if (probeName === 'card') {
 const browser = await launchWebkit();
 isolateSnapRequests(browser, origin);
 try {
@@ -252,4 +718,5 @@ try {
   await context.close();
 } finally {
   await browser.close();
+}
 }
