@@ -174,6 +174,12 @@ const engines = [
   { name: 'WebKit', type: webkit, executablePath: webkit.executablePath() },
 ];
 
+/** Row 4 is Starship. The fixture feed names its one element set LOCAL
+ *  FIXTURE, so a tap leaves Starship wanted and checked with no orbit. */
+function addedStatus(row: number): string {
+  return row === 4 ? 'Starship: no public orbit yet. CelesTrak GP and Supplemental GP list no element set for it.' : 'Tracking added';
+}
+
 async function prepare(engine: typeof engines[number], target: Target) {
   const { width, height, insets } = target;
   // Each case owns the complete browser process tree, including GPU resources.
@@ -211,6 +217,7 @@ async function prepare(engine: typeof engines[number], target: Target) {
     });
     await page.addInitScript((start) => {
       localStorage.setItem('opd-map-chrome', 'shown');
+      localStorage.setItem('opd-hidden-published-satellites', '["tracked:starship"]');
       const at = new Date(Date.parse(start) + 60 * 60 * 1000).toISOString();
       const shot = JSON.stringify([{ key: `review|${at}`, target_id: 'review', target_name: 'Review fixture', closest_approach: at }]);
       localStorage.setItem('opd_shotlist_v1:review', shot);
@@ -313,7 +320,7 @@ for (const engine of engines) describe.skipIf(!existsSync(engine.executablePath)
       const initial = await geometry(page, selector);
       expect(initial.points[0]!.owns, JSON.stringify(initial)).toBe(true);
       await page.touchscreen.tap(initial.points[0]!.x, initial.points[0]!.y);
-      await page.waitForFunction(() => document.querySelector('#satellite-picker-status')!.textContent === 'Tracking added');
+      await page.waitForFunction((status) => document.querySelector('#satellite-picker-status')!.textContent === status, addedStatus(target.row));
       expect(await page.locator(`${selector} input`).isChecked()).toBe(true);
       await page.waitForTimeout(250);
       const centerEvents = await page.evaluate(() => (window as unknown as { __pickerTouch: PickerTouchState }).__pickerTouch.events);
@@ -456,11 +463,11 @@ for (const engine of engines) describe.skipIf(!existsSync(engine.executablePath)
         measured.push({ selector, ...box });
         expect.soft(box.rect.height, JSON.stringify({ selector, box })).toBeGreaterThanOrEqual(44);
         expect.soft(box.points.every((point) => point.owns), JSON.stringify({ selector, box })).toBe(true);
-        await page.waitForFunction((label) => {
+        await page.waitForFunction(({ label, status }) => {
           const input = document.querySelector(`${label} input`);
           return input instanceof HTMLInputElement && input.checked
-            && document.querySelector('#satellite-picker-status')?.textContent === 'Tracking added';
-        }, selector);
+            && document.querySelector('#satellite-picker-status')?.textContent === status;
+        }, { label: selector, status: addedStatus(index) });
         expect(await page.locator(`${selector} input`).isChecked()).toBe(true);
       }
       const input = await click(page, '#satellite-picker-input');

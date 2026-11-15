@@ -10,4 +10,5 @@ export const PREF_KEYS = {
   multiOrbitVisible: 'opd-map-multi-orbit-visible',
   bearingMode: 'opd-map-bearing-mode',
   selectedSatellites: 'opd-selected-satellites',
+  hiddenPublishedSatellites: 'opd-hidden-published-satellites',
 } as const;

@@ -25,6 +25,7 @@ import { createMapCore } from '../src/map/map-core/core';
 import {
   bindAscentPad,
   bindLaunchStore,
+  clearLaunchOnMap,
   focusLaunchOnMap,
   onHazardCatalogRefresh,
   launchHazardFillLayer,
@@ -32,6 +33,7 @@ import {
   noteLaunchCore,
   reloadLaunchHazards,
   resetLaunchForTest,
+  refreshAscentTrajectorySource,
   syncLaunchHazards,
   syncMapLaunchMode,
   useHazardBundleForTest,
@@ -42,6 +44,7 @@ import type { TierCatalog } from '../src/launch-tiers';
 import type { VendorDouble } from './vendor-map-double';
 import { createVendorDouble } from './vendor-map-double';
 import capturedCatalog from './fixtures/starship-catalog-2026-11-10.json' with { type: 'json' };
+import { catalog, NOW, plannerItem } from './launch-fixtures';
 
 const STARSHIP_FLIGHT15_EVENT_ID = '0f867f0c-5422-4d44-93b8-d7faaae7019b';
 const VULCAN_EVENT_ID = 'ef9850ad-1096-425b-9d27-f7bbd186e61a';
@@ -271,7 +274,7 @@ type HazardFileLaunch = {
     instructions: string[];
     also: string[];
   }[];
-  geojson: { features: { properties: { area_id: string }; geometry: { type: string; coordinates: number[][][] } }[] };
+  geojson: { features: { id?: string; properties: { notice_id: string; area_id: string }; geometry: { type: string; coordinates: number[][][] } }[] };
   listed: {
     authority: string;
     notice_id: string;
@@ -376,6 +379,9 @@ const STARSHIP_PIN: TierLaunch = {
     precision: 'Minute',
     status: 'TBC',
   },
+  direction: { kind: 'none' },
+  ascent: null,
+  shots: [],
   top: null,
   corridor: null,
   whenMs: NOV13,
@@ -496,6 +502,8 @@ describe('Starship Flight 15 hazard notices', () => {
     const vite = readFileSync(resolve(ROOT, 'vite.config.ts'), 'utf8');
     expect(vite).toContain("'**/hazards/**'");
     expect(HAZARD_PATH).toBe('/hazards/v2/launches.json');
+    expect(HAZARD_PATH.endsWith('.json')).toBe(true);
+    expect(HAZARD_PATH.endsWith('.geojson')).toBe(false);
     expect(/\/hazards\/.*\.json(\?.*)?$/.test(HAZARD_PATH)).toBe(true);
     expect(existsSync(resolve(ROOT, 'public/hazards'))).toBe(false);
     const patterns = /globPatterns:\s*\[[^\]]+\]/.exec(vite)?.[0] ?? '';
@@ -510,6 +518,47 @@ describe('Starship Flight 15 hazard notices', () => {
 });
 
 describe('hazard overlay on the map', () => {
+  it('keeps published hazards and cancels delayed framing when a modeled selection clears', () => {
+    const projected = tiersAt(catalog([plannerItem()]), NOW);
+    if (!projected) throw new Error('missing modeled catalog');
+    const modeled = { ...STARSHIP_PIN, ascent: plannerItem().ascent ?? null };
+    vi.spyOn(launchCatalog, 'read').mockReturnValue({ ...projected, mapPins: [modeled] });
+    vi.spyOn(launchCatalog, 'attempt').mockReturnValue(ATTEMPT);
+    const { vendor, core } = mount();
+    document.body.innerHTML = '<div id="map-pane"></div><p id="launch-hazard-caption"></p>';
+    bindAscentPad(core);
+    refreshAscentTrajectorySource();
+    setMapLaunchMode(true);
+    expect(focusLaunchOnMap(STARSHIP_FLIGHT15_EVENT_ID)).toBe(true);
+    expect(painted(vendor)).toHaveLength(3);
+    expect(clearLaunchOnMap(STARSHIP_FLIGHT15_EVENT_ID)).toBe(true);
+    expect(painted(vendor)).toHaveLength(3);
+    expect(document.getElementById('launch-hazard-caption')?.hidden).toBe(false);
+    expect(document.getElementById('launch-ascent-caption')?.hidden).toBe(true);
+    const fits = vendor.cameraCalls.filter((call) => call.method === 'fitBounds').length;
+    core.setBearing(42);
+    vendor.fire('moveend', undefined);
+    syncLaunchHazards(NOV13 + 5 * 60_000);
+    expect(vendor.cameraCalls.filter((call) => call.method === 'fitBounds')).toHaveLength(fits);
+  });
+  it('preserves published hazards until the photographer explicitly selects a modeled launch', () => {
+    const projected = tiersAt(catalog([plannerItem()]), NOW);
+    const modeled = projected?.mapPins[0];
+    if (!projected || !modeled) throw new Error('missing modeled pin');
+    vi.spyOn(launchCatalog, 'read').mockReturnValue({ ...projected, mapPins: [modeled, STARSHIP_PIN] });
+    vi.spyOn(launchCatalog, 'attempt').mockReturnValue(ATTEMPT);
+    const { vendor } = mount();
+    setMapLaunchMode(true);
+    syncLaunchHazards(NOV13 + 5 * 60_000);
+    expect(painted(vendor)).toHaveLength(3);
+    refreshAscentTrajectorySource();
+    expect(painted(vendor)).toHaveLength(3);
+    expect(focusLaunchOnMap(modeled.eventId)).toBe(true);
+    expect(painted(vendor)).toHaveLength(0);
+    expect(focusLaunchOnMap(STARSHIP_FLIGHT15_EVENT_ID)).toBe(true);
+    expect(painted(vendor)).toHaveLength(3);
+  });
+
   it('paints closed polygons inside the window and none between windows', () => {
     vi.spyOn(launchCatalog, 'read').mockReturnValue({
       mapPins: [{ eventId: STARSHIP_FLIGHT15_EVENT_ID }],
@@ -902,6 +951,133 @@ describe('hazard file freshness', () => {
     expect(second).not.toContain('Checked 2026-11-13T10:02:00Z');
   });
 
+  it('rewrites the open polygon popup when only the review time changes', async () => {
+    vi.spyOn(launchCatalog, 'read').mockReturnValue({
+      mapPins: [{ eventId: STARSHIP_FLIGHT15_EVENT_ID }],
+    } as unknown as TierCatalog);
+    vi.spyOn(launchCatalog, 'attempt').mockReturnValue(ATTEMPT);
+    const { vendor, core } = mount();
+    bindAscentPad(core);
+    setMapLaunchMode(true);
+    await reloadLaunchHazards(() => jsonResponse(hazardFile()));
+    const feature = painted(vendor).find((item) => item.properties?.area_id === '6/7129');
+    if (!feature) throw new Error('missing painted TFR');
+    vendor.fireLayer('click', 'launch-hazard-fill-layer', {
+      point: { x: 2, y: 2 },
+      lngLat: [-97.1, 26],
+      features: [{ properties: feature.properties, geometry: feature.geometry }],
+    });
+    const popup = vendor.popups.at(-1);
+    expect(popup?.removed).toBe(false);
+    expect(popup?.content.textContent).toContain('Checked 2026-11-13T10:02:00Z');
+    const amended = hazardFile();
+    reviewed(amended, '2026-11-13T23:00:00Z');
+    await reloadLaunchHazards(() => jsonResponse(amended));
+    expect(popup?.removed).toBe(false);
+    expect(vendor.popups.filter((item) => !item.removed)).toHaveLength(1);
+    expect(popup?.content.textContent).toContain('Checked 2026-11-13T23:00:00Z');
+    expect(popup?.content.textContent).not.toContain('Checked 2026-11-13T10:02:00Z');
+  });
+
+  it('closes the open polygon popup when its feature is withdrawn', async () => {
+    vi.spyOn(launchCatalog, 'read').mockReturnValue({
+      mapPins: [{ eventId: STARSHIP_FLIGHT15_EVENT_ID }],
+    } as unknown as TierCatalog);
+    vi.spyOn(launchCatalog, 'attempt').mockReturnValue(ATTEMPT);
+    const { vendor, core } = mount();
+    bindAscentPad(core);
+    setMapLaunchMode(true);
+    await reloadLaunchHazards(() => jsonResponse(hazardFile()));
+    const feature = painted(vendor).find((item) => item.properties?.area_id === '6/7129');
+    if (!feature) throw new Error('missing painted TFR');
+    vendor.fireLayer('click', 'launch-hazard-fill-layer', {
+      point: { x: 2, y: 2 },
+      lngLat: [-97.1, 26],
+      features: [{ properties: feature.properties, geometry: feature.geometry }],
+    });
+    const popup = vendor.popups.at(-1);
+    expect(popup?.removed).toBe(false);
+    await reloadLaunchHazards(() => jsonResponse('missing', 404));
+    expect(popup?.removed).toBe(true);
+    expect(painted(vendor)).toEqual([]);
+  });
+
+  const INDEPENDENT_NOTICE = 'HYDROPAC 999/26';
+
+  function withSecondAreaA(body: HazardFile): HazardFile {
+    const copy = structuredClone(body);
+    const launch = entryOf(copy);
+    const notice = launch.notices.find((item) => item.area_id === 'A');
+    const feature = launch.geojson.features.find((item) => item.properties.area_id === 'A');
+    if (!notice || !feature) throw new Error('missing area A');
+    launch.notices.push({ ...notice, notice_id: INDEPENDENT_NOTICE });
+    launch.geojson.features.push({
+      ...feature,
+      id: `${INDEPENDENT_NOTICE}\u0000A`,
+      properties: { ...feature.properties, notice_id: INDEPENDENT_NOTICE },
+    });
+    return copy;
+  }
+
+  function withoutIndependentNotice(body: HazardFile): HazardFile {
+    const copy = structuredClone(body);
+    const launch = entryOf(copy);
+    launch.notices = launch.notices.filter((item) => item.notice_id !== INDEPENDENT_NOTICE);
+    launch.geojson.features = launch.geojson.features.filter((item) => item.properties.notice_id !== INDEPENDENT_NOTICE);
+    return copy;
+  }
+
+  async function openBothAreaA(vendor: VendorDouble): Promise<NonNullable<VendorDouble['popups'][number]>> {
+    await reloadLaunchHazards(() => jsonResponse(withSecondAreaA(hazardFile())));
+    const areas = painted(vendor).filter((item) => item.properties?.area_id === 'A');
+    if (areas.length !== 2) throw new Error('expected two area A notices');
+    vendor.fireLayer('click', 'launch-hazard-fill-layer', {
+      point: { x: 2, y: 2 },
+      lngLat: [-90, 24],
+      features: areas.map((feature) => ({ properties: feature.properties, geometry: feature.geometry })),
+    });
+    const popup = vendor.popups.at(-1);
+    if (!popup) throw new Error('expected an open popup');
+    return popup;
+  }
+
+  it('keeps both area A notices in the open popup when only the review time changes', async () => {
+    vi.spyOn(launchCatalog, 'read').mockReturnValue({
+      mapPins: [{ eventId: STARSHIP_FLIGHT15_EVENT_ID }],
+    } as unknown as TierCatalog);
+    vi.spyOn(launchCatalog, 'attempt').mockReturnValue(ATTEMPT);
+    const { vendor, core } = mount();
+    bindAscentPad(core);
+    setMapLaunchMode(true);
+    const popup = await openBothAreaA(vendor);
+    expect(popup.removed).toBe(false);
+    const amended = withSecondAreaA(hazardFile());
+    reviewed(amended, '2026-11-13T23:00:00Z');
+    await reloadLaunchHazards(() => jsonResponse(amended));
+    const text = popup.content.textContent ?? '';
+    expect(popup.removed).toBe(false);
+    expect(text.split('NAVAREA IV 1080/26 area A').length - 1).toBe(1);
+    expect(text.split(`${INDEPENDENT_NOTICE} area A`).length - 1).toBe(1);
+    expect(text).toContain('Checked 2026-11-13T23:00:00Z');
+    expect(text).not.toContain('Checked 2026-11-13T10:02:00Z');
+  });
+
+  it('closes the open popup when one area A notice is withdrawn', async () => {
+    vi.spyOn(launchCatalog, 'read').mockReturnValue({
+      mapPins: [{ eventId: STARSHIP_FLIGHT15_EVENT_ID }],
+    } as unknown as TierCatalog);
+    vi.spyOn(launchCatalog, 'attempt').mockReturnValue(ATTEMPT);
+    const { vendor, core } = mount();
+    bindAscentPad(core);
+    setMapLaunchMode(true);
+    const popup = await openBothAreaA(vendor);
+    expect(popup.removed).toBe(false);
+    await reloadLaunchHazards(() => jsonResponse(withoutIndependentNotice(withSecondAreaA(hazardFile()))));
+    expect(popup.removed).toBe(true);
+    const left = painted(vendor).filter((item) => item.properties?.area_id === 'A');
+    expect(left.map((item) => item.properties?.notice_id)).toEqual(['NAVAREA IV 1080/26']);
+  });
+
   it('paints the polygons when a catalog refresh finishes', async () => {
     vi.spyOn(launchCatalog, 'read').mockReturnValue({
       mapPins: [{ eventId: STARSHIP_FLIGHT15_EVENT_ID }],
@@ -999,6 +1175,26 @@ describe('hazard notice facts', () => {
     expect(noteText).toContain('SFC-UNL.');
     expect(noteText).toContain('EXCLUDING AIRSPACE OVER INTERNATIONAL WATERS.');
     expect(brief.querySelector('[data-hazard-note] a')?.textContent).toMatch(/^https:\/\//);
+  });
+  it('keeps the latest map action and pressed state through a hazard redraw', () => {
+    const modeled = { ...STARSHIP_PIN, ascent: plannerItem().ascent ?? null };
+    vi.spyOn(launchCatalog, 'read').mockReturnValue({ highlights: [], mapPins: [modeled] } as unknown as TierCatalog);
+    vi.spyOn(launchCatalog, 'attempt').mockReturnValue(ATTEMPT);
+    const brief = document.createElement('div');
+    document.body.append(brief);
+    const previous = vi.fn();
+    const current = vi.fn();
+    renderMapLaunchBrief(brief, { artifact: null, availability: 'ready' } as never, NOV13, previous, () => false);
+    renderMapLaunchBrief(brief, { artifact: null, availability: 'ready' } as never, NOV13, current, () => true);
+    mount();
+    setMapLaunchMode(true);
+    syncLaunchHazards(NOV13 + 5 * 60_000);
+    const button = brief.querySelector<HTMLButtonElement>('.launch-brief-actions button')!;
+    expect(button.textContent).toBe('Hide modeled ascent');
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    button.click();
+    expect(current).toHaveBeenCalledWith(STARSHIP_FLIGHT15_EVENT_ID);
+    expect(previous).not.toHaveBeenCalled();
   });
 });
 
@@ -1454,6 +1650,65 @@ describe('hazard areas for every catalog launch', () => {
     expect(both.textContent).toContain('NAVAREA IV 1080/26 area B, maritime high_risk.');
     expect(both.textContent).toContain('NAVAREA IV 1099/26 area A, maritime hazard.');
     expect(both.querySelectorAll('a')).toHaveLength(3);
+  });
+
+  it('refreshes the selected launch popup and closes it when only that launch withdraws the same notice and area', async () => {
+    bothPins();
+    const { vendor, core } = mount();
+    bindAscentPad(core);
+    const file = hazardFile();
+    const starship = entryOf(file);
+    const vulcan = entryOf(file, VULCAN_EVENT_ID);
+    vulcan.notices = structuredClone(starship.notices);
+    vulcan.geojson = structuredClone(starship.geojson);
+    setMapLaunchMode(true);
+    await reloadLaunchHazards(() => jsonResponse(file));
+    const area = painted(vendor).find((feature) => feature.properties?.event_id === VULCAN_EVENT_ID && feature.properties?.area_id === 'A');
+    if (!area) throw new Error('missing Vulcan area A');
+    vendor.fireLayer('click', 'launch-hazard-fill-layer', {
+      point: { x: 2, y: 2 }, lngLat: [-90, 24],
+      features: [{ properties: area.properties, geometry: area.geometry }],
+    });
+    const popup = vendor.popups.at(-1);
+    expect(popup?.content.textContent).toContain(VULCAN_PIN.name);
+    expect(popup?.content.textContent).not.toContain(STARSHIP_PIN.name);
+    reviewed(file, '2026-11-13T23:00:00Z', VULCAN_EVENT_ID);
+    await reloadLaunchHazards(() => jsonResponse(file));
+    expect(popup?.removed).toBe(false);
+    expect(popup?.content.textContent).toContain(VULCAN_PIN.name);
+    expect(popup?.content.textContent).not.toContain(STARSHIP_PIN.name);
+    expect(popup?.content.textContent).toContain('Checked 2026-11-13T23:00:00Z');
+    expect(popup?.content.textContent).not.toContain('Checked 2026-11-13T10:02:00Z');
+    file.launches = file.launches.filter((launch) => launch.event_id !== VULCAN_EVENT_ID);
+    await reloadLaunchHazards(() => jsonResponse(file));
+    expect(popup?.removed).toBe(true);
+    expect(areaIds(painted(vendor))).toEqual(['6/7129', 'A', 'B']);
+    expect(painted(vendor).every((feature) => feature.properties?.event_id === STARSHIP_FLIGHT15_EVENT_ID)).toBe(true);
+  });
+
+  it('closes the popup when a stable feature id is reassigned to a different notice', async () => {
+    bothPins();
+    const { vendor, core } = mount();
+    bindAscentPad(core);
+    const file = hazardFile();
+    setMapLaunchMode(true);
+    await reloadLaunchHazards(() => jsonResponse(file));
+    const area = painted(vendor).find((feature) => feature.properties?.area_id === 'A');
+    if (!area) throw new Error('missing area A');
+    vendor.fireLayer('click', 'launch-hazard-fill-layer', {
+      point: { x: 2, y: 2 }, lngLat: [-90, 24],
+      features: [{ properties: area.properties, geometry: area.geometry }],
+    });
+    const popup = vendor.popups.at(-1);
+    const launch = entryOf(file);
+    const notice = launch.notices.find((item) => item.area_id === 'A');
+    const feature = launch.geojson.features.find((item) => item.properties.area_id === 'A');
+    if (!notice || !feature) throw new Error('missing area A');
+    notice.notice_id = 'NAVAREA IV 1081/26';
+    feature.properties.notice_id = notice.notice_id;
+    await reloadLaunchHazards(() => jsonResponse(file));
+    expect(popup?.removed).toBe(true);
+    expect(painted(vendor).find((item) => item.properties?.area_id === 'A')?.properties?.notice_id).toBe('NAVAREA IV 1081/26');
   });
 
   it('paints nothing for the unreadable 16 Nov window and says so on the card', () => {

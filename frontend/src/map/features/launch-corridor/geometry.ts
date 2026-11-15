@@ -59,7 +59,7 @@ export function buildLaunchMapFeatures(launchState: LaunchState, now: number): {
 }
 
 /** Pads at tier pins. A corridor line exists only when that pin has one. */
-export function buildTierMapFeatures(tiers: TierCatalog, now: number): { lines: GeoJSON.Feature[]; pads: GeoJSON.Feature[] } {
+export function buildTierMapFeatures(tiers: TierCatalog, now: number, selectedEventId: string | null = null): { lines: GeoJSON.Feature[]; pads: GeoJSON.Feature[] } {
   const lines: GeoJSON.Feature[] = [];
   const pads: GeoJSON.Feature[] = [];
   const pins = tiers.mapPins;
@@ -79,7 +79,22 @@ export function buildTierMapFeatures(tiers: TierCatalog, now: number): { lines: 
       properties,
       geometry: { type: 'Point', coordinates: [pin.site.lon, pin.site.lat] },
     });
-    if (pin.corridor) lines.push(...antimeridianSegments(pin.corridor.points, properties));
+    if (pin.corridor && (pin.direction.kind !== 'modeled' || pin.eventId === selectedEventId)) {
+      lines.push(...antimeridianSegments(pin.corridor.points, {
+        ...properties, role: 'corridor',
+        ...(pin.ascent ? { grade: pin.ascent.grade, source: pin.ascent.source } : {}),
+      }));
+    }
+    if (pin.eventId !== selectedEventId || !pin.ascent) continue;
+    for (const fan of pin.ascent.fans) {
+      const source = { ...properties, grade: pin.ascent.grade, source: pin.ascent.source, branch: fan.branch };
+      lines.push(...antimeridianSegments(fan.track, { ...source, role: 'model' }));
+      lines.push(...antimeridianSegments(fan.low_track, { ...source, role: 'edge' }));
+      lines.push(...antimeridianSegments(fan.high_track, { ...source, role: 'edge' }));
+      const low = fan.low_track.at(-1);
+      const high = fan.high_track.at(-1);
+      if (low && high) lines.push(...antimeridianSegments([low, high], { ...source, role: 'edge' }));
+    }
   }
   return { lines, pads };
 }

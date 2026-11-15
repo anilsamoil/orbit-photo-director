@@ -38,9 +38,9 @@ export function ascentTrajectoryLayer(): LineLayer {
     source: 'ascent-trajectory',
     layout: { visibility: getMapLaunchMode() ? 'visible' : 'none' },
     paint: {
-      'line-color': '#ffd45c',
-      'line-width': 3,
-      'line-opacity': 0.9,
+      'line-color': ['match', ['get', 'role'], 'edge', '#ffe69a', '#ffd45c'],
+      'line-width': ['match', ['get', 'role'], 'edge', 1.5, 'model', 2.5, 3],
+      'line-opacity': ['match', ['get', 'role'], 'edge', 0.65, 'model', 0.85, 0.9],
     },
   };
 }

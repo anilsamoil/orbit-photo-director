@@ -12,6 +12,7 @@ Status: map-first implementation approved; source validation and alerts remain g
 - [x] L1/L2/L9: explicit timing and incomplete coverage, independent orbital-direction math, read-only diagnostic with negative-path tests.
 - [x] L3 initial: unknown branch stays unknown; bounded conditional liftoff samples. Sampling is not validated photographic recall.
 - [ ] P1: L3 refinement: curated trajectory provenance, adaptive narrow-window resolution and full-window ephemeris validation before instructions.
+- [ ] P2: LP1 follow-ups. Verify inclination and site tables against primary documents; calibrate modeled early-ascent tracks, sample heading uncertainty, and model coast, insertion and deployment. LP1 adds conditional T+600 estimates and minute liftoff scans; it does not verify a flight trajectory.
 - [x] L5-L7 initial source: isolated publisher and shared Map/Queue/Upcoming reviewed; browser QA completed with two layout fixes. See `docs/launch-qa-2026-09-07.md` for limits.
 - [x] P0 local ship gate: owner approved separate cleanup of 16 existing Ruff findings; lint, all 2,695 tests, typechecks and production build pass (`4b05b0c`). Remote CI and deployment readback remain required.
 - [ ] P1: staged map-only production activation with ownership and refresh gates below. Do not develop in the watched production checkout.

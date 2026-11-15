@@ -236,6 +236,15 @@ function cardProbe() {
   };
 }
 
+function assertHazardAreas(engine, size, areas, expected) {
+  for (const id of expected) {
+    const count = areas?.[id];
+    if (!Number.isFinite(count) || count < 1) {
+      throw new Error(`${engine} ${size}: area ${id} count is ${String(count)}`);
+    }
+  }
+}
+
 const report = [];
 const engines = [
   ['webkit', webkit],
@@ -353,6 +362,16 @@ for (const [name, browserType] of engines) {
   }
 }
 
+for (const row of report) {
+  if (row.size === 'catalog-refresh-after-404') continue;
+  const scenario = SCENARIOS.find((entry) => entry.name === row.scenario);
+  try {
+    assertHazardAreas(row.engine, row.size, row.polygons?.areas, scenario.areas);
+  } catch (error) {
+    row.areaError = error instanceof Error ? error.stack : String(error);
+  }
+}
+
 const failed = report.filter((row) => {
   const errors = (row.errors ?? []).filter((error) => !error.includes('gibs.earthdata.nasa.gov'));
   if (errors.length) return true;
@@ -367,10 +386,13 @@ const failed = report.filter((row) => {
   return caption.text !== LABEL || caption.hidden || caption.rangeText !== LABEL
     || caption.hits.length > 0 || caption.outside.length > 0 || !caption.legend
     || Object.keys(areas).length !== scenario.areas.length
-    || scenario.areas.some((area) => !(areas[area] >= 1)) || row.polygons.padInside
+    || row.areaError || row.polygons.padInside
     || scenario.card.some((needle) => !card.includes(needle)) || !/CST|CDT/.test(card)
     || !row.card.hrefs.some((href) => href.startsWith('https://'));
 });
 writeFileSync(`${OUT}/hazard-layout-report.json`, JSON.stringify({ failed: failed.length, report }, null, 2));
 console.log(JSON.stringify({ failed: failed.length, report }, null, 2));
+for (const row of failed) {
+  if (row.areaError) console.error(row.areaError);
+}
 if (failed.length) process.exit(1);

@@ -23,7 +23,7 @@ import exifr from 'exifr';
 
 import type { Track } from './types';
 import { issLookupCandidates, propagateBestIssTle } from './iss-tle';
-import { CURATED_SATELLITES, fetchSatelliteTLE } from './satellites';
+import { CURATED_SATELLITES, resolveOrbit } from './satellites';
 import { downloadKml, googleEarthWebUrl, type LookupResult } from './kml';
 
 // Re-export so callers can import the type from a single module.
@@ -296,8 +296,8 @@ export function renderLookupTab(
     }
     let outcome = lookupIssPosition(ts, track, source);
     if (!outcome.ok) {
-      const live = await fetchSatelliteTLE(CURATED_SATELLITES[0]!);
-      if (live && !live.stale) outcome = lookupIssPosition(ts, track, source);
+      const live = await resolveOrbit(CURATED_SATELLITES[0]!, [], 'ask');
+      if (live.state === 'elements' && !live.stale) outcome = lookupIssPosition(ts, track, source);
     }
     if (!outcome.ok) {
       showError(outcome.issue === 'stale' ? STALE_ORBIT_MESSAGE : MALFORMED_TLE_MESSAGE);

@@ -13,7 +13,7 @@ import {
   type HazardNote,
 } from '../../../launch-hazards';
 import { tierWindowText } from '../../../launch-tiers';
-import { openTierDetails } from '../../../launch-tier-card';
+import { launchMapToggleKind, openTierDetails, refreshTierMapActions } from '../../../launch-tier-card';
 import type { TierLaunch } from '../../../launch-tiers';
 import { launchStore, type LaunchState } from '../../../launch-store';
 import { selectLaunches } from '../../../launch-selectors';
@@ -58,6 +58,8 @@ type Runtime = {
   userMoved: boolean;
   hazardFrameKey: string;
   inputBound: boolean;
+  hazardPopupContent: HTMLElement | null;
+  hazardPopupKeys: string[];
 };
 
 const state: Runtime = {
@@ -88,6 +90,8 @@ const state: Runtime = {
   userMoved: false,
   hazardFrameKey: '',
   inputBound: false,
+  hazardPopupContent: null,
+  hazardPopupKeys: [],
 };
 
 const LAUNCH_LAYERS = [
@@ -163,6 +167,29 @@ function paintHazardCaption(): void {
   node.hidden = !(getMapLaunchMode() && state.hazardFeatures.length > 0);
 }
 
+function paintAscentCaption(pin: TierLaunch | null): void {
+  const pane = document.getElementById('map-pane');
+  if (!pane) return;
+  let node = document.getElementById('launch-ascent-caption');
+  if (!node) {
+    node = document.createElement('p');
+    node.id = 'launch-ascent-caption';
+    node.className = 'launch-hazard-caption';
+    node.setAttribute('role', 'note');
+    node.style.maxHeight = '8rem';
+    node.style.overflow = 'auto';
+    node.style.pointerEvents = 'auto';
+    pane.append(node);
+  }
+  const ascent = pin?.ascent;
+  node.hidden = !getMapLaunchMode() || !pin || !ascent;
+  if (!pin || !ascent) return;
+  node.style.bottom = state.hazardFeatures.length ? 'calc(var(--map-command-height) + 5rem)' : 'calc(var(--map-command-height) + 12px)';
+  const qualification = ascent.grade === 'D' ? 'UNVERIFIED assumed site sector' : 'UNVERIFIED modeled ascent estimate';
+  const hasFan = ascent.fans.some((fan) => fan.track.length > 1 || fan.low_track.length > 1 || fan.high_track.length > 1 || (fan.low_track.length > 0 && fan.high_track.length > 0));
+  node.textContent = `${qualification} for ${pin.name}, grade ${ascent.grade}. ${hasFan ? "Only this launch's fans are shown." : 'No fan geometry is available.'} Source: ${ascent.source}`;
+}
+
 function hazardSignature(features: readonly GeoJSON.Feature[]): string {
   return features.map((feature) => {
     const ring = feature.geometry.type === 'Polygon' ? feature.geometry.coordinates[0] : undefined;
@@ -173,6 +200,9 @@ function hazardSignature(features: readonly GeoJSON.Feature[]): string {
       coords,
       String(props?.event_id ?? ''),
       String(props?.launch_name ?? ''),
+      String(props?.notice_id ?? ''),
+      String(props?.area_id ?? ''),
+      String(props?.domain ?? ''),
       String(props?.restriction_class ?? ''),
       String(props?.also ?? ''),
       String(props?.checked_at ?? ''),
@@ -213,6 +243,7 @@ function paintHazards(core: MapCore, now: number): void {
   if (signature !== state.hazardSignature || !core.hasSource('launch-hazards')) {
     state.hazardSignature = signature;
     core.setGeoJson('launch-hazards', { type: 'FeatureCollection', features });
+    refreshHazardPopup(features);
   }
   paintHazardCaption();
 }
@@ -278,14 +309,19 @@ export function refreshAscentTrajectorySource(): void {
   const now = core.clock.now();
   const tiers = launchCatalog.read(now);
   const launchState: LaunchState = launchStore.getState();
+  if (tiers && !tiers.mapPins.some((pin) => pin.eventId === state.selectedEventId)) {
+    state.selectedEventId = null;
+  }
   const { lines, pads } = tiers
-    ? buildTierMapFeatures(tiers, now)
+    ? buildTierMapFeatures(tiers, now, state.selectedEventId)
     : launchState.artifact
       ? buildLaunchMapFeatures(launchState, now)
       : buildAscentFeatures(legacyPassesInHorizon(state.passes, now));
   core.setGeoJson('ascent-trajectory', { type: 'FeatureCollection', features: lines });
   core.setGeoJson('ascent-pad', { type: 'FeatureCollection', features: pads });
   syncLaunchHazards(now);
+  paintAscentCaption(tiers?.mapPins.find((pin) => pin.eventId === state.selectedEventId) ?? null);
+  refreshTierMapActions(isLaunchShownOnMap);
 }
 
 /** Show the corridor and hide it when launch mode is off. */
@@ -301,6 +337,9 @@ export function applyAscentLaunchVisibility(): void {
       }
     }
     paintHazardCaption();
+    const tiers = launchCatalog.read(core.clock.now());
+    paintAscentCaption(tiers?.mapPins.find((pin) => pin.eventId === state.selectedEventId) ?? null);
+    refreshTierMapActions(isLaunchShownOnMap);
   } catch {}
 }
 
@@ -446,11 +485,53 @@ function hazardPopup(features: { properties: Record<string, unknown> | null }[])
   return content;
 }
 
+function hazardNoticeKey(eventId: unknown, noticeId: unknown, areaId: unknown): string | null {
+  if (typeof eventId !== 'string' || typeof noticeId !== 'string' || typeof areaId !== 'string') return null;
+  if (eventId.length === 0 || noticeId.length === 0 || areaId.length === 0) return null;
+  return `${eventId}\u0000${noticeId}\u0000${areaId}`;
+}
+
+function hazardPopupKeys(features: { properties: Record<string, unknown> | null }[]): string[] {
+  return features.flatMap((feature) => {
+    const key = hazardNoticeKey(feature.properties?.event_id, feature.properties?.notice_id, feature.properties?.area_id);
+    return key ? [key] : [];
+  });
+}
+
+/** Keep an already-open hazard popup on the launch, notice and area just painted. */
+function refreshHazardPopup(features: readonly GeoJSON.Feature[]): void {
+  const content = state.hazardPopupContent;
+  const keys = state.hazardPopupKeys;
+  if (!content || keys.length === 0) return;
+  const shown = keys.flatMap((key) => {
+    const match = features.find((feature) => hazardNoticeKey(feature.properties?.event_id, feature.properties?.notice_id, feature.properties?.area_id) === key);
+    return match ? [match] : [];
+  });
+  if (shown.length !== keys.length) {
+    state.hazardPopupContent = null;
+    state.hazardPopupKeys = [];
+    state.core?.closePopup('launch');
+    return;
+  }
+  const next = hazardPopup(shown.map((feature) => ({
+    properties: feature.properties ? { ...feature.properties } : null,
+  })));
+  content.replaceChildren(...next.childNodes);
+}
+
 function bindHazardClicks(host: MapCore): void {
   if (state.clicksCore === host) return;
   state.clicksCore = host;
   host.onLayer('click', 'launch-hazard-fill-layer', (event) => {
-    host.openPopup({ at: event.lngLat, content: hazardPopup(event.features), owner: 'launch' });
+    const content = hazardPopup(event.features);
+    const handle = host.openPopup({ at: event.lngLat, content, owner: 'launch' });
+    state.hazardPopupContent = content;
+    state.hazardPopupKeys = hazardPopupKeys(event.features);
+    handle.onClose(() => {
+      if (state.hazardPopupContent !== content) return;
+      state.hazardPopupContent = null;
+      state.hazardPopupKeys = [];
+    });
   });
 }
 
@@ -552,6 +633,8 @@ export function bindAscentPad(host: MapCore): void {
       const tiers = typeof now === 'number' ? launchCatalog.read(now) : null;
       const found = props.catalog === 'tier' && tiers ? tiers.find(eventId) : null;
       if (found && tiers?.mapPins.some((pin) => pin.eventId === eventId)) {
+        state.selectedEventId = eventId;
+        refreshAscentTrajectorySource();
         openTierDetails(found);
         return;
       }
@@ -600,11 +683,16 @@ function tierFocusPoints(pin: TierLaunch): [number, number][] {
       points.push([lon, lat]);
     }
   }
-  if (!pin.corridor) return points;
-  let longitude = pin.site.lon;
-  for (const point of pin.corridor.points) {
-    longitude += wrapLon(point.lon - longitude);
-    points.push([longitude, point.lat]);
+  const tracks = [
+    ...(pin.corridor ? [pin.corridor.points] : []),
+    ...(pin.ascent?.fans.flatMap((fan) => [fan.track, fan.low_track, fan.high_track]) ?? []),
+  ];
+  for (const track of tracks) {
+    let longitude = pin.site.lon;
+    for (const point of track) {
+      longitude += wrapLon(point.lon - longitude);
+      points.push([longitude, point.lat]);
+    }
   }
   return points;
 }
@@ -618,17 +706,20 @@ export function focusLaunchOnMap(eventId: string): boolean {
   if (tiers) {
     const pin = tiers.mapPins.find((launch) => launch.eventId === eventId);
     if (!pin) return false;
+    core.closePopup('launch');
     state.selectedEventId = eventId;
     const waiting = hazardFeaturesOf(eventId).length === 0
       && (state.hazardPending || state.hazardBundle === null);
     state.pendingFocusId = waiting ? eventId : null;
     syncLaunchHazards(now);
     fitLaunch(core, tierFocusPoints(pin), hazardFeaturesOf(eventId).length > 0);
+    if (core.hasSource('ascent-pad')) refreshAscentTrajectorySource();
     return true;
   }
   const selection = selectLaunches(launchStore.getState(), now, 'map')
     .find(({ item }) => item.event_id === eventId);
   if (!selection) return false;
+  core.closePopup('launch');
   state.selectedEventId = eventId;
   state.pendingFocusId = null;
   const { site, trajectory } = selection.item;
@@ -641,6 +732,23 @@ export function focusLaunchOnMap(eventId: string): boolean {
     }
   }
   fitLaunch(core, points, false);
+  return true;
+}
+
+export function isLaunchShownOnMap(eventId: string): boolean {
+  const core = state.core;
+  if (!core || !getMapLaunchMode() || state.selectedEventId !== eventId) return false;
+  const pin = launchCatalog.read(core.clock.now())?.mapPins.find((launch) => launch.eventId === eventId);
+  return !!pin && launchMapToggleKind(pin) !== null;
+}
+
+export function clearLaunchOnMap(eventId: string): boolean {
+  if (!isLaunchShownOnMap(eventId)) return false;
+  state.selectedEventId = null;
+  state.pendingFocusId = null;
+  state.hazardArmed = false;
+  state.core?.closePopup('launch');
+  refreshAscentTrajectorySource();
   return true;
 }
 
@@ -665,7 +773,11 @@ export function resetLaunchForTest(): void {
   state.hazardArmed = false;
   state.userMoved = false;
   state.hazardFrameKey = '';
+  state.hazardPopupContent = null;
+  state.hazardPopupKeys = [];
+  document.getElementById('launch-ascent-caption')?.remove();
   publishHazardNotes([]);
+  refreshTierMapActions(isLaunchShownOnMap);
 }
 
 /** Ascent corridor and pad. Launch mode swaps these with the target pins. */

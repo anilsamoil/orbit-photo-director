@@ -8,7 +8,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-HAZARD = ROOT / "frontend/test/fixtures/hazards-v1-starship-flight15.json"
+HAZARD = ROOT / "frontend/test/fixtures/hazards-v2-2026-11-13.json"
 NAVAREA = ROOT / "frontend/test/fixtures/notices/navarea-iv-1080-26.txt"
 LNM = ROOT / "frontend/test/fixtures/notices/uscg-lnm-45-2026-starship-flight15.txt"
 TFR = ROOT / "frontend/test/fixtures/notices/faa-tfr-6-7129.xml"
@@ -75,7 +75,9 @@ def _same_ring(stored: list[list[float]], expected: list[tuple[Decimal, Decimal]
 
 
 def _bundle() -> dict:
-    return json.loads(HAZARD.read_text())
+    bundle = json.loads(HAZARD.read_text())
+    assert bundle["schema_version"] == 2
+    return next(launch for launch in bundle["launches"] if launch["event_id"] == EVENT)
 
 
 def _ring(bundle: dict, area_id: str) -> list[list[float]]:
@@ -105,7 +107,7 @@ def _matches(bundle: dict, navarea: str, lnm: str, xml: str) -> bool:
 def test_hazard_vertices_match_the_original_notices():
     bundle = _bundle()
     assert bundle["event_id"] == EVENT
-    assert bundle["label"] == LABEL
+    assert json.loads(HAZARD.read_text())["label"] == LABEL
     assert "shots" not in bundle
     assert "direction" not in bundle
     assert "tier" not in bundle

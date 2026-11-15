@@ -37,3 +37,29 @@ Recorded after #346 (`74ce5a5`).
 `_glm_granule_urls` GETs each hour prefix once (`list-type=2`) and reads `<Key>` until the body ends. It does not read `IsTruncated` or `NextContinuationToken`, and it does not send `continuation-token`. A truncated page is treated as the full hour. This skill does not fetch NOAA.
 
 Recorded after #346 (`74ce5a5`).
+
+## Product gap: the ascent caption sits under the launch card (401)
+
+`#launch-ascent-caption` is painted at the bottom of `#map-pane`. On iPad and desktop it sits under `#map-launch-coverage`. `launch-planner.mjs` measures that overlap (`caption-under-card` and `overlap WxH`) and does not fail the drive. A pass of the seven sizes measured no overlap at 402 by 874, 304 by 114 at 874 by 402, 1024 by 768, 1180 by 820, 834 by 1210, and 1440 by 900, and 298 by 114 at 768 by 1024. Follow-up 401. A maintain run does not change the product layout.
+
+Recorded after #368 (`174d761`).
+
+## Deferred: LP1 does not verify a flight trajectory (402)
+
+`TODOS.md` P2: verify the inclination and site tables against primary documents, calibrate modeled early-ascent tracks, sample heading uncertainty, and model coast, insertion, and deployment. LP1 adds conditional T+600 estimates and minute liftoff scans. It does not verify a flight trajectory. Follow-up 402. This skill does not treat those gaps as a failed drive.
+
+Recorded after #368 (`174d761`).
+
+## Deferred: Astra P3s (404)
+
+#370 left `prove PASS, Astra and green CI on the same head` unchecked. Astra is the crs35-astra review fixture in `tests/test_launch_catalog_forecast.py` (the Oct 9 TLE copied for that review). The P3 rows in `TODOS.md` stay deferred: verified window attitude, a high-fidelity trajectory, photo ingestion, and Web Push. This toggle drive does not prove them. Do not fail the drive for that gap.
+
+Recorded after #370 (`d9516ca`).
+
+## Product gap: pointer focus draws no ring, and a hazard tap can miss (405)
+
+After a pointer, focus lands on the brief summary and `:focus-visible` is false, so no ring is painted. Measured false at 1024 by 768, 402 by 874, 874 by 402, and 1440 by 900. `launch-planner.mjs` records `focus-visible 0` and does not fail.
+
+A clear-point tap or click on a published hazard polygon is recorded and is not a pass/fail. On this pass a click opened the popup at 1440 by 900, and a tap opened it at 874 by 402. A tap at 1024 by 768 left it closed. At 402 by 874 the framed polygons had no clear point (`hazard-popup none`). Do not fail the drive when that popup stays closed.
+
+Recorded after #370 (`d9516ca`).
