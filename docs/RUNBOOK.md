@@ -98,6 +98,18 @@ ls out/clouds-fcst/*/index.json
 curl -s https://map.astroanil.dev/manifest.json | jq '.forecast_clouds'
 ```
 
+## Check the hazard publisher before scheduling it
+
+Use the intended service checkout and interpreter. Verify their revision and dependencies before running `python -m scripts.hazard_refresh --cache-dir <dedicated cache> --output <launch output>` without `--publish`. The output folder must contain a current verified launch catalog. This preflight fetches public notices and writes local artifacts, but does not confirm an upload.
+
+Require `ok=true` in the JSON result before scheduling publication. Exit code 2 and `SOURCE_STATE_INCOMPLETE` mean that at least one source has no validated last-good snapshot. A cold or damaged cache needs a successful response from all six configured sources before publication can proceed. `SOURCE_CACHE_BUSY` stops the run. Neither condition replaces the existing hazard artifact or uploads it.
+
+With complete cached snapshots, a failed source check retains its notices and original `checked_at`. The result reports `ok=false`, `degraded=true`, and `SOURCE_REFRESH_DEGRADED`, and exits 2. Inspect the per-source errors and checked times. Failed checks do not renew notice validity or the map's 48-hour review limit.
+
+The first authorized run with `--publish` uploads even after an identical dry run. A separate `.hazard-publication.json` receipt records the destination hash and revision only after upload succeeds. Failed or interrupted uploads retry on the next identical run. `written` describes a local artifact replacement. `published` describes an upload completed by that invocation. A matching receipt skips a repeat upload and assumes this publisher is the sole writer of that remote object.
+
+Only `hazards/v2/launches.json` uploads. `hazards/v2/run.json` and the receipt stay local. Rclone failures report controlled error codes and bounded safe diagnostics. Verify the first published artifact separately before relying on a scheduler. This procedure does not install or load a launchd agent.
+
 ## Adding personal targets
 
 The `targets.json` file ships with 106 curated targets (auroras, night-megacities, iconic shapes, big terrain, volcanoes, lightning belts, dynamic events, US + global communities) selected via a "social-media legibility" framework — each scores ≥7/10 on recognizability + local connection + visual contrast + caption-ability.

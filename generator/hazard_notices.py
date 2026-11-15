@@ -13,6 +13,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from urllib.parse import parse_qs, urlsplit
 from xml.etree import ElementTree
 
 MAX_WINDOW = timedelta(hours=24)
@@ -368,7 +369,7 @@ def parse_broadcast_warning(
 
 
 def parse_nga_payload(body: bytes, source_url: str) -> list[Notice]:
-    """NGA MSI ``broadcast-warn`` JSON. A row without its identifying fields is skipped."""
+    """NGA MSI ``broadcast-warn`` JSON. Unreadable rows cannot replace a snapshot."""
     if len(body) > MAX_SOURCE_BYTES:
         raise NoticeError("NGA_TOO_LARGE")
     try:
@@ -378,12 +379,19 @@ def parse_nga_payload(body: bytes, source_url: str) -> list[Notice]:
     rows = payload.get("broadcast-warn") if isinstance(payload, dict) else None
     if not isinstance(rows, list):
         raise NoticeError("NGA_SHAPE")
+    requested_areas = parse_qs(urlsplit(source_url).query).get("navArea", [])
+    requested_area = requested_areas[0] if len(requested_areas) == 1 else None
     digest = sha256_hex(body)
     notices: list[Notice] = []
     for row in rows:
         if not isinstance(row, dict):
+            raise NoticeError("NGA_ROW")
+        nav_area = str(row.get("navArea"))
+        if requested_area is not None and nav_area != requested_area:
+            raise NoticeError("NGA_ROW")
+        series = _SERIES.get(nav_area)
+        if series is None and re.fullmatch(r"(?:[1-9]|1[0-9]|2[01])", nav_area):
             continue
-        series = _SERIES.get(str(row.get("navArea")))
         number, year, text = row.get("msgNumber"), row.get("msgYear"), row.get("text")
         issue = _ISSUE.match(row["issueDate"]) if isinstance(row.get("issueDate"), str) else None
         if (
@@ -391,14 +399,15 @@ def parse_nga_payload(body: bytes, source_url: str) -> list[Notice]:
             or type(number) is not int
             or type(year) is not int
             or not isinstance(text, str)
+            or not text.strip()
             or issue is None
         ):
-            continue
+            raise NoticeError("NGA_ROW")
         day, hour, minute, month, issue_year = issue.groups()
         try:
             issued = _moment(int(issue_year), _MONTHS.index(month) + 1, int(day), hour + minute)
-        except ValueError:
-            continue
+        except ValueError as exc:
+            raise NoticeError("NGA_ROW") from exc
         notices.append(
             parse_broadcast_warning(
                 text,

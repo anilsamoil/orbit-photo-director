@@ -1269,6 +1269,7 @@ describe('hazard focus', () => {
     pane.append(surface);
     document.body.append(pane);
     const vendor = createVendorDouble();
+    vendor.setBearing(40);
     const recorded = vendor.fitBounds.bind(vendor);
     vendor.fitBounds = (box, options) => {
       recorded(box, options);
@@ -1276,20 +1277,22 @@ describe('hazard focus', () => {
       vendor.easeTo({
         center: [(box.west + box.east) / 2, (box.south + box.north) / 2],
         zoom: Math.min(options.maxZoom, Math.log2(360 / span)),
+        ...(typeof options.bearing === 'number' ? { bearing: options.bearing } : {}),
         duration: 0,
       });
     };
     const core = createMapCore(vendor, createClock(() => when));
     noteLaunchCore(core);
     bindAscentPad(core);
-    const held = (before: { lng: number; lat: number; zoom: number }) => {
+    const held = (before: { lng: number; lat: number; zoom: number; bearing: number }) => {
       const [lng, lat] = vendor.center();
       expect(lng).toBeCloseTo(before.lng, 8);
       expect(lat).toBeCloseTo(before.lat, 8);
       expect(vendor.zoom()).toBeCloseTo(before.zoom, 8);
+      expect(vendor.bearing()).toBeCloseTo(before.bearing, 8);
     };
     expect(focusLaunchOnMap(STARSHIP_FLIGHT15_EVENT_ID)).toBe(true);
-    const beforeWheel = { lng: vendor.center()[0], lat: vendor.center()[1], zoom: vendor.zoom() };
+    const beforeWheel = { lng: vendor.center()[0], lat: vendor.center()[1], zoom: vendor.zoom(), bearing: vendor.bearing() };
     surface.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true }));
     useHazardBundleForTest(rawBundle());
     syncLaunchHazards(when);
@@ -1299,7 +1302,7 @@ describe('hazard focus', () => {
     noteLaunchCore(core);
     bindAscentPad(core);
     expect(focusLaunchOnMap(STARSHIP_FLIGHT15_EVENT_ID)).toBe(true);
-    const beforeArrow = { lng: vendor.center()[0], lat: vendor.center()[1], zoom: vendor.zoom() };
+    const beforeArrow = { lng: vendor.center()[0], lat: vendor.center()[1], zoom: vendor.zoom(), bearing: vendor.bearing() };
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
     useHazardBundleForTest(rawBundle());
     syncLaunchHazards(when);

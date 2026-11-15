@@ -226,6 +226,8 @@ def match_notices(
             decision = "expired"
         elif now - sighting.checked_at >= REVIEW_MAX:
             decision = "stale"
+        elif "NUMBER_CONFLICT" in notice.problems:
+            decision, reasons = "rejected", ["NUMBER_CONFLICT"]
         elif notice.notice_id in pins:
             event_id = pins[notice.notice_id]
             decision = "matched" if event_id in known and notice.areas else "unmatched"

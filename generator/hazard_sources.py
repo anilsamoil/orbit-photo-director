@@ -1,7 +1,7 @@
 """Fetch the public hazard notice sources and keep each one's last good notices.
 
 A source that fails keeps the notices and the checked time of its last success.
-No source is asked more often than its interval, however often this runs.
+Confirmed snapshots obey source intervals. A damaged snapshot is refreshed before reuse.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ import fcntl
 import json
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -21,6 +21,9 @@ from .hazard_notices import (
     MAX_SOURCE_BYTES,
     Notice,
     NoticeError,
+    _position,
+    _ring,
+    _window,
     notice_from_record,
     notice_record,
     parse_faa_tfr,
@@ -54,7 +57,7 @@ Fetch = Callable[[str], bytes]
 
 
 class SourceError(RuntimeError):
-    """A source answered, but not with a usable document."""
+    """A source response or cached snapshot could not be used."""
 
 
 def http_fetch(url: str) -> bytes:
@@ -130,7 +133,68 @@ def _read_state(path: Path) -> dict:
     except (OSError, ValueError, UnicodeError):
         return {}
     sources = state.get("sources") if isinstance(state, dict) else None
-    return sources if isinstance(sources, dict) and state.get("schema_version") == 1 else {}
+    return sources if (
+        isinstance(sources, dict)
+        and type(state.get("schema_version")) is int
+        and state["schema_version"] == 1
+    ) else {}
+
+
+def _cached_notice(record: object) -> Notice:
+    if not isinstance(record, dict):
+        raise ValueError("notice record")
+    notice = notice_from_record(record)
+    if (
+        any(not isinstance(value, str) for value in (
+            notice.authority, notice.notice_id, notice.kind, notice.domain, notice.subject,
+            notice.source_url, notice.source_sha256,
+        ))
+        or not notice.notice_id
+        or notice.kind not in {"launch", "space_debris", "recovery", "regulated_area", "other"}
+        or notice.domain not in {"maritime", "airspace"}
+        or not re.fullmatch(r"[a-f0-9]{64}", notice.source_sha256)
+        or any(not isinstance(value, str) for value in (*notice.cancels, *notice.problems))
+        or notice_record(notice) != record
+    ):
+        raise ValueError("notice fields")
+    for area in notice.areas:
+        if (
+            not isinstance(area.area_id, str)
+            or not isinstance(area.restriction_class, str)
+            or any(not isinstance(value, str) for value in area.instructions)
+        ):
+            raise ValueError("area fields")
+        for window in area.windows:
+            _window(window.start, window.end)
+    rings = [area["ring"] for area in record["areas"]]
+    if record["outline"]:
+        rings.append(record["outline"])
+    for ring in rings:
+        if any(type(value) not in (int, float) for point in ring for value in point):
+            raise ValueError("coordinates")
+        points = [_position(lat, lon) for lon, lat in ring]
+        if tuple(points) != _ring(points):
+            raise ValueError("open ring")
+    return notice
+
+
+def _confirmed_sightings(name: str, entry: object, now: datetime) -> list[Sighting]:
+    try:
+        if not isinstance(entry, dict) or not isinstance(entry.get("notices"), list):
+            raise ValueError("source snapshot")
+        checked = _parse_iso8601_z(entry["checked_at"])
+        if checked > now:
+            raise ValueError("future confirmation")
+        notices = [_cached_notice(record) for record in entry["notices"]]
+        if any(
+            notice.authority != name.split(":")[0].upper()
+            or (name.startswith("nga:") and notice.source_url != NGA_URL.format(area=name[4:]))
+            for notice in notices
+        ):
+            raise ValueError("source authority")
+        return [Sighting(notice, checked) for notice in notices]
+    except (KeyError, TypeError, ValueError, AttributeError, OverflowError) as exc:
+        raise SourceError("SOURCE_STATE_INCOMPLETE") from exc
 
 
 def refresh_sources(
@@ -146,11 +210,16 @@ def refresh_sources(
     with (cache_dir / f"{STATE_NAME}.lock").open("a") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            return _read_state(path)
+        except BlockingIOError as exc:
+            raise SourceError("SOURCE_CACHE_BUSY") from exc
         sources = _read_state(path)
         for name in SOURCES:
             entry = sources.get(name) if isinstance(sources.get(name), dict) else {}
+            try:
+                _confirmed_sightings(name, entry, now)
+            except SourceError:
+                if "checked_at" in entry or "notices" in entry or entry.get("error") is None:
+                    entry = {}
             attempted = entry.get("attempted_at")
             if isinstance(attempted, str):
                 try:
@@ -183,15 +252,9 @@ def refresh_sources(
         return sources
 
 
-def sightings_from_state(sources: dict) -> list[Sighting]:
-    """Every notice a source has confirmed, with the time of that confirmation."""
+def sightings_from_state(sources: Mapping[str, object], now: datetime) -> list[Sighting]:
+    """All required sources must have confirmed, fully decoded snapshots."""
     found: list[Sighting] = []
     for name in SOURCES:
-        entry = sources.get(name)
-        if not isinstance(entry, dict) or not isinstance(entry.get("checked_at"), str):
-            continue
-        checked = _parse_iso8601_z(entry["checked_at"])
-        found.extend(
-            Sighting(notice_from_record(record), checked) for record in entry.get("notices", [])
-        )
+        found.extend(_confirmed_sightings(name, sources.get(name), now))
     return found

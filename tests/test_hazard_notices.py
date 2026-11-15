@@ -8,6 +8,7 @@ from decimal import Decimal
 
 import pytest
 
+from generator.hazard_match import Sighting, build_bundle
 from generator.hazard_notices import (
     NoticeError,
     notice_from_record,
@@ -245,17 +246,48 @@ def test_archived_nga_answer_holds_the_falcon_9_cape_canaveral_warning():
     assert prohibited.kind == "other" and prohibited.cancels == ("NAVAREA IV 326/23",)
 
 
-def test_nga_rows_without_their_identity_are_skipped_and_a_wrong_document_is_refused():
+def test_nga_rows_from_an_unsupported_area_are_skipped_and_a_wrong_document_is_refused():
     payload = json.loads((fx.NOTICES / fx.NGA_2023).read_bytes())
     rows = payload["broadcast-warn"][:4]
-    rows[0] = {**rows[0], "issueDate": "yesterday"}
-    rows[1] = {**rows[1], "navArea": "Z"}
-    rows[2] = {**rows[2], "issueDate": "310933Z FEB 2023"}
-    notices = parse_nga_payload(json.dumps({"broadcast-warn": [*rows, "text"]}).encode(), "https://msi.nga.mil/x")
+    irrelevant = {**rows[1], "navArea": "1"}
+    notices = parse_nga_payload(json.dumps({"broadcast-warn": [irrelevant, rows[3]]}).encode(), "https://msi.nga.mil/x")
     assert [notice.notice_id for notice in notices] == ["NAVAREA IV 1217/23"]
     for body, code in ((b"<html>", "NGA_NOT_JSON"), (b"[]", "NGA_SHAPE"), (b" " * 4_000_001, "NGA_TOO_LARGE")):
         with pytest.raises(NoticeError, match=code):
             parse_nga_payload(body, "https://msi.nga.mil/x")
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("issueDate", "yesterday"),
+    ("issueDate", "310933Z FEB 2023"),
+    ("issueDate", None),
+    ("msgNumber", "1231"),
+    ("msgYear", None),
+    ("text", None),
+    ("text", ""),
+    ("navArea", "Z"),
+    ("navArea", None),
+])
+def test_nga_refuses_unreadable_launch_rows(field, value):
+    rows = json.loads((fx.NOTICES / fx.NGA_2023).read_bytes())["broadcast-warn"]
+    launch = next(row for row in rows if row["msgNumber"] == 1231)
+    body = json.dumps({"broadcast-warn": [{**launch, field: value}]}).encode()
+    with pytest.raises(NoticeError, match="NGA_ROW"):
+        parse_nga_payload(body, "https://msi.nga.mil/x")
+
+
+def test_nga_refuses_a_row_whose_relevance_cannot_be_read():
+    with pytest.raises(NoticeError, match="NGA_ROW"):
+        parse_nga_payload(b'{"broadcast-warn": ["text"]}', "https://msi.nga.mil/x")
+
+
+@pytest.mark.parametrize("area", ["1", "12", "A"])
+def test_nga_area_specific_answer_refuses_a_conflicting_row_area(area):
+    rows = json.loads((fx.NOTICES / fx.NGA_2023).read_bytes())["broadcast-warn"]
+    launch = next(row for row in rows if row["msgNumber"] == 1231)
+    body = json.dumps({"broadcast-warn": [{**launch, "navArea": area}]}).encode()
+    with pytest.raises(NoticeError, match="NGA_ROW"):
+        parse_nga_payload(body, "https://msi.nga.mil/x?navArea=4&status=active&output=json")
 
 
 def test_faa_starship_restriction_matches_its_xml_and_its_own_narrative():
@@ -295,7 +327,8 @@ def test_faa_cape_restriction_for_vulcan_and_the_starship_recovery_notice():
     assert recovery.areas[0].ring == fx.faa_notice("faa-tfr-6-7130.xml").areas[0].ring
 
 
-def test_faa_file_that_disagrees_with_itself_loses_the_disputed_part():
+@pytest.mark.parametrize("pinned", [False, True])
+def test_faa_file_that_disagrees_with_itself_loses_the_disputed_part(pinned):
     raw = (fx.NOTICES / "faa-tfr-6-7129.xml").read_bytes()
 
     def parse(old: bytes, new: bytes):
@@ -305,7 +338,15 @@ def test_faa_file_that_disagrees_with_itself_loses_the_disputed_part():
     shifted = parse(b"<dateEffective>2026-11-13T22:30:00</dateEffective>", b"<dateEffective>2026-11-13T21:30:00</dateEffective>")
     assert shifted.problems == ("WINDOW_CONFLICT",) and shifted.areas[0].windows == ()
     assert parse(b"EFFECTIVE 2611132230 UTC", b"EFFECTIVE DAILY").areas[0].windows == ()
-    assert parse(b"!FDC 6/7129 ", b"!FDC 6/7128 ").problems == ("NUMBER_CONFLICT",)
+    conflicted = parse(b"!FDC 6/7129 ", b"!FDC 6/7128 ")
+    assert conflicted.problems == ("NUMBER_CONFLICT",)
+    clean = parse_faa_tfr(raw, "https://tfr.faa.gov/x")
+    clean_bundle, _ = build_bundle(fx.catalog_items(), [Sighting(clean, fx.SCENARIO_NOW)], fx.SCENARIO_NOW)
+    assert fx.launch(clean_bundle, fx.STARSHIP)["geojson"]["features"]
+    overrides = {"pin": {"TFR 6/7129": fx.STARSHIP}} if pinned else None
+    bundle, log = build_bundle(fx.catalog_items(), [Sighting(conflicted, fx.SCENARIO_NOW)], fx.SCENARIO_NOW, overrides)
+    assert bundle["launches"] == []
+    assert log[0]["decision"] == "rejected" and log[0]["reasons"] == ["NUMBER_CONFLICT"]
     arc = parse(b"<codeType>GRC</codeType>", b"<codeType>CWA</codeType>")
     assert arc.areas == () and arc.problems == ("GEOMETRY_UNPARSED:6/7129",)
     assert parse(b"<geoLat>26.1N</geoLat>", b"<geoLat>26.1X</geoLat>").areas == ()
