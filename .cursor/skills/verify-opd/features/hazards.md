@@ -23,7 +23,7 @@
 Preconditions:
 
 - `doctor` prints `ok`. The proxy is the local origin. Do not fetch `https://map.astroanil.dev` or `https://map.expedition75.com`.
-- Abort any host ending in `nasa.gov`. This drive does not fetch NASA tiles.
+- Tile requests use `isolateSnapRequests` (`scripts/context-state-fixture.mjs`): an image or a WMTS URL gets a 1 pixel PNG, and every other host outside the local origin is aborted. Do not point NASA hosts at `127.0.0.1`. A connection-refused GIBS answer leaves `isStyleLoaded` false until the 30s timeout. This drive does not fetch NASA tiles.
 - One process is one viewport. Do not run `drive all`. Do not run a second WebKit process beside it.
 - The clock is frozen at `2026-11-13T22:50:00Z` before the document loads, and the catalog `generated_at` is stamped once from that instant (one minute earlier). Do not move `Date.now` on that page. A later clock change rebuilds `generated_at` on the next catalog read, the store keeps the newer stamp, and later reads on that page are contaminated. Use a fresh context per clock.
 
@@ -64,6 +64,7 @@ pytest tests/test_starship_flight15_hazards.py
 ## Gotchas
 
 - A frozen clock and a catalog route that stamps `generated_at` from `Date.now()` do not share a page. Moving the clock bumps that stamp. The catalog store drops an older `generated_at` and holds the newer one, so a later read is not the clock you think it is. Open a new context.
+- This script returns 404 for `/launch/latest.json` on purpose. That path is the schema 2 store. The schema 3 catalog is the pointer and the revision body. Painting stops at `checked_at + 48h` (`REVIEW_MAX_MS`). The Nov 13 review is `2026-11-13T10:02:00Z`, so that cutoff is closed and the Nov 19 window does not paint. The live drive freezes inside the Nov 13 window and does not move the clock.
 - `drive map` and `drive all` leave this probe out. There is no `drive all` form of it.
 - The hazard file is `globIgnores` `**/hazards/**` and a NetworkOnly runtime route. A 404 is not precached. `sw` does not fetch it.
 - iPhone and iPad use a context created at the size above. Do not call `setViewportSize`. WebKit has no `Emulation.setSafeAreaInsetsOverride`, so the insets read 0.
