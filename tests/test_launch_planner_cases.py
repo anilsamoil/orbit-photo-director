@@ -34,6 +34,15 @@ def catalog() -> dict:
     return launch_catalog.build_launch_catalog(_payload(), _tle(), NOW, fetched_at=NOW)
 
 
+@pytest.fixture(scope="module")
+def tied_catalog() -> dict:
+    payload = _payload()
+    row = next(row for row in payload["results"] if row["id"] == "fixture-iss-cape")
+    for field in ("net", "window_start", "window_end"):
+        row[field] = "2026-11-15T22:07:00Z"
+    return launch_catalog.build_launch_catalog(payload, _tle(), NOW, fetched_at=NOW)
+
+
 def _item(catalog: dict, event_id: str) -> dict:
     return next(item for item in catalog["items"] if item["event_id"] == event_id)
 
@@ -51,6 +60,35 @@ def test_iss_inclination_from_cape_keeps_both_scenarios(catalog) -> None:
     assert {
         shot["direction"]["azimuth_deg"] for shot in item["shots"] if shot["subject"] == "ascent"
     } == {42.7624, 137.2376}
+
+
+def test_tied_ascent_selects_northbound_primary_envelope(tied_catalog) -> None:
+    _validate_catalog(tied_catalog)
+    item = _item(tied_catalog, "fixture-iss-cape")
+    assert item["direction"]["kind"] == "modeled"
+    assert item["direction"]["azimuth_deg"] == pytest.approx(42.7624)
+    selected_fan = next(
+        fan for fan in item["ascent"]["fans"]
+        if fan["azimuth_deg"] == item["direction"]["azimuth_deg"]
+    )
+    assert selected_fan["branch"] == "northbound"
+    primary = item["shots"][0]
+    assert primary["subject"] == "ascent"
+    assert primary["direction"] == item["direction"]
+    assert primary["best"] == "2026-11-15T22:11:25Z"
+    assert primary["score"]["low"] == 60
+    assert primary["slant_km"] == 833.4
+    other = next(
+        shot for shot in item["shots"]
+        if shot["subject"] == "ascent" and shot["direction"]["azimuth_deg"] == 137.2376
+    )
+    assert other["score"]["low"] == primary["score"]["low"]
+    assert other["slant_km"] == 991.0
+    assert other["best"] < primary["best"]
+    assert "833 km" in item["why"]
+    assert "991 km" not in item["why"]
+    fixture = FIXTURES.parent.parent / "frontend/test/fixtures/launch-planner-tied-catalog.json"
+    assert canonical_bytes(tied_catalog) == fixture.read_bytes()
 
 
 def test_actual_amazon_row_is_a_conditional_modeled_negative(catalog) -> None:

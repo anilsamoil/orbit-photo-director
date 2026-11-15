@@ -341,7 +341,7 @@ def _item(
             tier = "likely"
         elif tier == "none":
             tier = "watch"
-    why = _why(tier, shots, reasons)
+    why = _why(tier, shots[:1] if isinstance(direction, ModeledDirection) else shots, reasons)
     if scan is not None:
         why = _scan_summary(scan, shots) + " " + why
     if "FORECAST_EPHEMERIS" in reasons:
@@ -747,7 +747,8 @@ def _modeled_shots(
     if best is not None:
         keep.add(best["liftoff"])
         direction = replace(direction, azimuth_deg=best["direction"]["azimuth_deg"])
-    return [shot for shot in candidates if shot["liftoff"] in keep], direction, scan
+    retained = [shot for shot in candidates if shot["liftoff"] in keep and shot is not best]
+    return ([best] if best is not None else []) + retained, direction, scan
 
 
 def _scan_summary(scan: LiftoffScan, shots: list[dict]) -> str:
@@ -764,10 +765,7 @@ def _scan_summary(scan: LiftoffScan, shots: list[dict]) -> str:
             "Unsampled liftoffs remain unknown."
         )
     if visible:
-        best = min(
-            (shot for shot in shots if shot["subject"] == "ascent"),
-            key=lambda shot: (-shot["score"]["low"], shot["slant_km"], shot["liftoff"]),
-        )
+        best = next(shot for shot in shots if shot["subject"] == "ascent")
         when = _parse_iso8601_z(best["liftoff"]).strftime("%H:%M:%S")
         return (
             f"Modeled ascent in view for {len(visible)} of {scan.checked} liftoff minutes sampled. "

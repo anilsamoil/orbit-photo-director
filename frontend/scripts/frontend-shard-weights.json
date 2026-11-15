@@ -194,5 +194,6 @@
   "test/webkit-floor.test.ts": 1.864,
   "test/webkit-gate.test.ts": 0.792,
   "test/wx.test.ts": 0.441,
-  "test/orbit-sight.test.ts": 0.4
+  "test/orbit-sight.test.ts": 0.4,
+  "test/launch-planner-selection.test.ts": 0.4
 }

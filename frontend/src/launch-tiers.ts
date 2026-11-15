@@ -216,10 +216,15 @@ function shotOrder(a: ShotEnvelope, b: ShotEnvelope): number {
   return a.subject < b.subject ? -1 : 1;
 }
 
+function orderedShots(item: LaunchCatalogItem): ShotEnvelope[] {
+  const shots = item.shots.slice();
+  return item.direction.kind === 'modeled' ? shots : shots.sort(shotOrder);
+}
+
 function corridorOf(item: LaunchCatalogItem): Corridor | null {
   if (item.direction.kind === 'none') return null;
-  const ascent = item.shots.filter((shot) => shot.subject === 'ascent' && shot.track.length >= 2).sort(shotOrder);
-  const best = ascent[0];
+  const best = orderedShots(item).find((shot) => shot.subject === 'ascent'
+    && (item.direction.kind === 'modeled' || shot.track.length >= 2));
   if (!best) return null;
   const points = best.track.map((point) => ({
     lat: point.lat,
@@ -233,9 +238,7 @@ function corridorOf(item: LaunchCatalogItem): Corridor | null {
 }
 
 function toTierLaunch(item: LaunchCatalogItem): TierLaunch {
-  const shots = item.shots.flatMap((shot) => (toTierShot(shot) ? [shot] : []))
-    .sort(shotOrder)
-    .flatMap((shot) => toTierShot(shot) ?? []);
+  const shots = orderedShots(item).flatMap((shot) => toTierShot(shot) ?? []);
   const top = shots[0] ?? null;
   const netMs = Date.parse(item.schedule.net);
   const windowEndMs = instant(item.schedule.window_end);

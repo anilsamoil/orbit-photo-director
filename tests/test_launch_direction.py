@@ -282,9 +282,25 @@ def test_wrapping_sector_and_southern_infeasible_orbit_are_finite() -> None:
     assert isinstance(direction, ModeledDirection)
     assert 0 <= direction.azimuth_deg < 360
     assert "PLANE_CHANGE_LATER" in direction.reasons
-    retrograde = model_direction(69.1, 15.6, _inclination(120))
-    assert retrograde.kind in {DirectionKind.MODELED, DirectionKind.NONE}
     west = model_direction(85, 0, _inclination(97.6))
     assert isinstance(west, ModeledDirection)
     assert west.azimuth_deg == 270
     assert west.fans[0].branch is None
+
+
+def test_andoya_retrograde_dogleg_includes_exactly_60_degree_gap() -> None:
+    direction = model_direction(69.1, 15.6, _inclination(120))
+
+    assert direction.kind is DirectionKind.MODELED
+    assert isinstance(direction, ModeledDirection)
+    assert direction.azimuth_deg == 330
+    assert "DOGLEG_ASSUMED" in direction.reasons
+    assert "PLANE_CHANGE_LATER" in direction.reasons
+
+
+def test_andoya_dogleg_rejects_just_beyond_60_degree_gap() -> None:
+    direction = model_direction(69.1, 15.6, _inclination(110.899999, Branch.SOUTHBOUND))
+
+    assert isinstance(direction, NoDirection)
+    assert direction.kind is DirectionKind.NONE
+    assert direction.azimuth_deg is None

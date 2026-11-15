@@ -153,6 +153,12 @@ including the end. The distance pre-screen includes both horizon distances,
 maximum modeled travel, and an ISS motion margin. Deadline or point exhaustion
 adds `EVALUATION_INCOMPLETE` to the item and coverage. The builder retains
 diagnostic liftoffs and the best sampled liftoff by score low then slant range.
+The builder publishes the selected modeled envelope first in `shots`, using
+liftoff time to break a remaining tie. Its direction supplies the item's selected
+azimuth. The frontend preserves this order for the primary shot, brief, and
+corridor. A selected envelope with fewer than two track points has no corridor.
+The frontend does not substitute another modeled envelope's track.
+Non-modeled items keep their existing frontend ordering.
 Visibility verdicts concern sampled nominal headings through T+600 seconds.
 Heading uncertainty, later burns, insertion and deployment remain unassessed.
 Modeled directions never earn Shot, and modeled negatives never earn None.
