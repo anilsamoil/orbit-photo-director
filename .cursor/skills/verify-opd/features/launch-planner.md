@@ -11,12 +11,14 @@
 - `planner-iss-plane` leaves an ISS-plane launch alone. The CRS-35 item is byte-identical to `tests/fixtures/lp1-crs35-baseline.json`: Likely, azimuth 44.7° (`44.6851`), source `iss_tle_plane`. The card reads `Estimate. The ISS orbital plane, derived from the ISS TLE.`
 - `planner-vulcan` is the Amazon Leo example in the tied catalog (`Vulcan VC6L | Amazon Leo (LV-01)`). It is Watch, grade C, azimuth 42.4° (`42.4225`). That azimuth is the rotation-corrected heading. `sin(Az) = cos(i) / cos(lat)` at inclination 51.9° and latitude 28.5834° is the inertial angle, about 44.6°, and `_fixed_azimuth` turns it into 42.4°.
 - `planner-andoya` sits on the 60° dogleg boundary. Inclination 120° at Andøya (69.1°N, 15.6°E) is modeled, azimuth 330, with `DOGLEG_ASSUMED`. Inclination 110.899999° southbound is just past 60° from the sector edge and is no direction, with no azimuth.
+- `planner-toggle` is #370 (`d9516ca`). The first tap or click on `Show site and modeled ascent` closes the brief and any open launch popup, keeps that launch's line and caption, and focuses the brief summary `Next launch · Watch`. Reopened, the same button reads `Hide modeled ascent` with `aria-pressed=true`. Hide clears that launch's features and caption and returns to `Show site and modeled ascent` with `aria-pressed=false`. Across show, hide, and show, the source ids and layer ids stay the same list and the ascent feature ids and keys match the first show. Showing another launch replaces the drawing and resets the first button to Show with `aria-pressed=false`. Grade D uses `Show site and assumed sector` and `Hide assumed sector`. Show-only, with no `aria-pressed`: a published corridor (`Show site and corridor`), a site with no ascent (`Show launch site`), and hazard-only (`Show published hazard areas`). While another modeled launch is selected, `eligibleAttempt` in `frontend/src/map/features/launch-corridor/index.ts` returns null, the hazard notes clear, and that hazard-only button reads `Show launch site`. The published CRS corridor (`direction.kind` `iss_plane`) stays drawn for that non-modeled launch, so it is not a leftover of the toggle.
 
 ## How to get to it (user POV)
 
 - Open Map on iPhone or iPad, or on the desktop window. Show the chrome. Tap Launches.
 - The next-launch card for a modeled pass reads `Modeled, grade C.` (or B), then the fan sentence, then `Source:` and the source sentence. The envelope title says `Estimate.` The tier is Likely or Watch, never Shot.
 - Tap `Show site and corridor` on the tied card. That launch has a corridor, so the button is not `Show site and modeled ascent`. The selected corridor and both fans draw. The caption under the map names the grade and the source. On iPad and desktop that caption can sit under the launch card. That overlap is follow-up 401. Read the card anyway. A modeled launch with no corridor says `Show site and modeled ascent`. Grade D says `Show site and assumed sector`.
+- On the toggle catalog, tap or click `Show site and modeled ascent` on the next-launch card. The card closes. The summary reads `Next launch · Watch`. The fan and the caption stay. Open the summary again. The button reads `Hide modeled ascent`. Tap or click it and that fan and caption go away. `Other launches (5)` holds the second modeled launch, the grade D sector, the published CRS corridor, the site-only launch, and the hazard-only launch.
 - An unknown orbit has no azimuth. The card says `Estimate, grade D` and names every assumed sector. Starbase is one sector, 85° to 105°. Baikonur is two.
 - The ISS-plane card for CRS-35 still says Likely and 44.7° from the ISS TLE. It does not become a modeled azimuth.
 
@@ -45,6 +47,16 @@ iPhone is 402 by 874 and 874 by 402. iPad is 1024 by 768, 1180 by 820, 768 by 10
 
 The script serves only `fixture-iss-cape` from the tied catalog, so the next-launch card is that tie. Stdout is `launch planner <WxH> card modeled grade C azimuth 42.8 km 833 fans 2 corridor northbound caption-under-card <0|1> overlap <w>x<h>`. `caption-under-card 1` is follow-up 401. The script records the overlap and still exits 0. Shots are `evidence/launch-planner-<WxH>.png`.
 
+`OPD_LAUNCH_PLANNER_PROBE=toggle` is the #370 control. It is not one of the seven card sizes. One process is one of `1024x768`, `402x874`, `874x402`, or `1440x900`. iPad at 1024 by 768 and iPhone at 402 by 874 and 874 by 402 use a WebKit `hasTouch` tap. Desktop at 1440 by 900 uses a click, then Enter, then Space. Space must leave `window.scrollY`, the document scroller, and `#map-pane` where they were. The brief's own `scrollTop` can clamp when the card collapses (measured 308 to 0 at 1440 by 900). That clamp is not a page scroll.
+
+```bash
+OPD_LAUNCH_PLANNER_PROBE=toggle OPD_VERIFY_VIEWPORT=1024x768 node .cursor/skills/verify-opd/scripts/launch-planner.mjs
+OPD_LAUNCH_PLANNER_PROBE=toggle OPD_VERIFY_VIEWPORT=402x874 node .cursor/skills/verify-opd/scripts/launch-planner.mjs
+OPD_LAUNCH_PLANNER_PROBE=toggle OPD_VERIFY_VIEWPORT=1440x900 node .cursor/skills/verify-opd/scripts/launch-planner.mjs
+```
+
+Stdout is `launch brief toggle <WxH> tap|click show hide show sources <n> layers <n> features identical focus-visible <0|1> hazard-popup <open|closed|none> space-scroll <0|n/a>`. A pass at these sizes was `sources 16 layers 19 features identical focus-visible 0`. Space on desktop was `space-scroll 0`. Shots are `evidence/launch-brief-toggle-<WxH>-shown.png`, `evidence/launch-brief-toggle-<WxH>-hide.png`, and `evidence/launch-brief-toggle-<WxH>-cleared.png`. The readout is `evidence/launch-brief-toggle-<WxH>.json`. `aria-pressed` is an attribute on the button. A caption painted onto a shot to show that attribute is a probe overlay. It is evidence, not product UI.
+
 The grade, the tie, the empty corridor, the sectors, the dogleg, the Vulcan azimuth, and the CRS-35 bytes stay on the unit files. They do not open a browser:
 
 ```bash
@@ -61,12 +73,17 @@ These go red if the named behavior is removed:
 - Keeping only the first sector in `model_direction` fails `test_unknown_orbit_keeps_all_assumed_site_fans`. Baikonur's `(340, 355)` disappears.
 - Routing an ISS destination into `model_direction` fails `test_existing_iss_plane_item_is_byte_identical_to_base`.
 
+The toggle stays on the unit files too. `frontend/src/map/features/launch-corridor/launch-corridor.test.ts` `reopens a pressed control, replaces the selected fan, then clears its fan and caption` fails if another launch does not reset the first button. `does not clear independently drawn sourced corridors` fails if a published corridor grows `aria-pressed`. `frontend/test/launch-tier-card.test.ts` `renders a native click toggle` fails if grade D loses `Hide assumed sector`. `frontend/test/main-integration.test.ts` `closes the modeled brief immediately, respects later reopening, and cancels pending focus when hidden` fails if the summary does not take focus. `frontend/scripts/verify-map-pins.mjs` goes red for `showing a launch collapses its expanded brief before refresh` and `hiding a selected ascent clears its geometry and caption`. Do not run that mutator from this skill.
+
 ## Gotchas
 
 - On iPad and desktop the ascent caption (`#launch-ascent-caption`) sits under `#map-launch-coverage`. That is follow-up 401. Measure the overlap. Do not fail the drive for it. A pass at the seven sizes measured `caption-under-card 0` at 402 by 874, and an overlap on the other six: 304 by 114 at 874 by 402, 1024 by 768, 1180 by 820, 834 by 1210, and 1440 by 900, and 298 by 114 at 768 by 1024. iPhone landscape overlaps too. The portrait phone caption sits clear of the card.
 - LP1 deferred work is follow-up 402. `TODOS.md` still owes a check of the inclination and site tables against primary documents, a calibrated early-ascent track, sampled heading uncertainty, and coast, insertion, and deployment. This planner adds conditional T+600 estimates and minute liftoff scans. It does not verify a flight trajectory. Do not treat those gaps as a failed drive.
 - This script returns 404 for `/launch/latest.json` on purpose, and `hazard-overlay.mjs` does the same. That path is the schema 2 store. The schema 3 body is `/launch/catalog/latest.json` and the revision it names. A 200 schema 2 body there is a different launch, not a broken catalog.
 - The Andøya dogleg includes a gap of exactly 60° and rejects the next inclination that sits just beyond it. Do not tighten the comparison to `>= 60`.
-- `frontend/scripts/verify-map-pins.mjs` has six known stale anchors in `frontend/src/satellites.ts`. They are named in [tracked.md](./tracked.md). Do not run that mutator to prove this planner.
+- After a pointer, focus is on the summary and `:focus-visible` is false, so no ring is painted. Measured false at 1024 by 768, 402 by 874, 874 by 402, and 1440 by 900. That is follow-up 405. Record it. Do not fail the drive for the missing ring.
+- A clear-point tap on a published hazard polygon is not a pass/fail of this toggle. On this pass a click opened the popup at 1440 by 900 and a tap opened it at 874 by 402. A tap at 1024 by 768 left it closed. At 402 by 874 the framed polygons had no clear point (`hazard-popup none`). Follow-up 405. Do not fail the drive when the popup stays closed.
+- Astra P3s are follow-up 404. This drive does not prove them.
+- `frontend/scripts/verify-map-pins.mjs` has 51 anchors. The six `frontend/src/satellites.ts` finds match the current guards, and the two #370 contracts are `showing a launch collapses its expanded brief before refresh` and `hiding a selected ascent clears its geometry and caption`. A scan of those 51 find strings reports 0 missing. Do not run the mutator from this skill. It rewrites product source. The pin note is in [tracked.md](./tracked.md).
 - A hosts-file blackhole of `gibs.earthdata.nasa.gov` to `127.0.0.1` is connection refused. Stub the tile with `isolateSnapRequests` instead.
 - `drive map` and `drive all` do not open this probe. There is no `drive all` form of it.

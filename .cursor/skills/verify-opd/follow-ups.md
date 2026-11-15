@@ -50,8 +50,16 @@ Recorded after #368 (`174d761`).
 
 Recorded after #368 (`174d761`).
 
-## Harness gap: six stale satellite anchors
+## Deferred: Astra P3s (404)
 
-`frontend/scripts/verify-map-pins.mjs` has six anchors whose source lines are gone from `frontend/src/satellites.ts`. The mutator prints `STALE` and skips them: `one failed feed among empty ones is a failed lookup for a published vehicle`, `an element set older than the publisher limit is never drawn`, `the last good element set is dropped once it passes the publisher limit`, `the map never asks CelesTrak for a published vehicle on its own`, `the newest element set wins`, and `a publisher element set past its age limit is not drawn`. Any other `STALE` or `UNPINNED` line is a real failure. This skill does not edit that script.
+#370 left `prove PASS, Astra and green CI on the same head` unchecked. Astra is the crs35-astra review fixture in `tests/test_launch_catalog_forecast.py` (the Oct 9 TLE copied for that review). The P3 rows in `TODOS.md` stay deferred: verified window attitude, a high-fidelity trajectory, photo ingestion, and Web Push. This toggle drive does not prove them. Do not fail the drive for that gap.
 
-Recorded after #368 (`174d761`).
+Recorded after #370 (`d9516ca`).
+
+## Product gap: pointer focus draws no ring, and a hazard tap can miss (405)
+
+After a pointer, focus lands on the brief summary and `:focus-visible` is false, so no ring is painted. Measured false at 1024 by 768, 402 by 874, 874 by 402, and 1440 by 900. `launch-planner.mjs` records `focus-visible 0` and does not fail.
+
+A clear-point tap or click on a published hazard polygon is recorded and is not a pass/fail. On this pass a click opened the popup at 1440 by 900, and a tap opened it at 874 by 402. A tap at 1024 by 768 left it closed. At 402 by 874 the framed polygons had no clear point (`hazard-popup none`). Do not fail the drive when that popup stays closed.
+
+Recorded after #370 (`d9516ca`).
