@@ -40,7 +40,24 @@ function planBlock(plan: ShotPlan, every: boolean): HTMLElement {
   return block;
 }
 
-export function renderTierCard(launch: TierLaunch, onShowMap?: (eventId: string) => void): HTMLElement {
+export function launchMapToggleKind(launch: TierLaunch): 'modeled' | 'sector' | null {
+  if (!launch.ascent || (launch.corridor && launch.direction.kind !== 'modeled')) return null;
+  return launch.ascent.grade === 'D' ? 'sector' : 'modeled';
+}
+
+function paintMapAction(button: HTMLButtonElement, shown: boolean): void {
+  button.textContent = shown ? button.dataset.hideLabel ?? '' : button.dataset.showLabel ?? '';
+  button.setAttribute('aria-pressed', String(shown));
+}
+
+export function refreshTierMapActions(isShown: (eventId: string) => boolean): void {
+  for (const button of document.querySelectorAll<HTMLButtonElement>('button[data-launch-map-event]')) {
+    paintMapAction(button, isShown(button.dataset.launchMapEvent ?? ''));
+  }
+}
+
+export function renderTierCard(launch: TierLaunch, onShowMap?: (eventId: string) => void,
+  isShown: (eventId: string) => boolean = () => false): HTMLElement {
   const card = document.createElement('article');
   card.className = 'card launch launch-tier';
   card.dataset.launch = 'tier';
@@ -73,7 +90,17 @@ export function renderTierCard(launch: TierLaunch, onShowMap?: (eventId: string)
     show.className = 'btn';
     const areas = hazardNotesFor(launch.eventId).length > 0;
     show.textContent = launch.corridor ? 'Show site and corridor' : launch.ascent?.grade === 'D' ? 'Show site and assumed sector' : launch.ascent ? 'Show site and modeled ascent' : areas ? 'Show published hazard areas' : 'Show launch site';
-    show.addEventListener('click', () => onShowMap(launch.eventId));
+    const toggleKind = launchMapToggleKind(launch);
+    if (toggleKind) {
+      show.dataset.launchMapEvent = launch.eventId;
+      show.dataset.showLabel = show.textContent;
+      show.dataset.hideLabel = toggleKind === 'sector' ? 'Hide assumed sector' : 'Hide modeled ascent';
+      paintMapAction(show, isShown(launch.eventId));
+    }
+    show.addEventListener('click', () => {
+      onShowMap(launch.eventId);
+      if (toggleKind) paintMapAction(show, isShown(launch.eventId));
+    });
     actions.append(show);
     card.append(actions);
   }

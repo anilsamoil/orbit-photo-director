@@ -13,10 +13,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as manifestModule from '../src/manifest';
 import type { Manifest, PassEntry, Track } from '../src/types';
-import { artifact as launchArtifact, assessment, catalog, catalogItem, launch, supported, NOW as LAUNCH_NOW } from './launch-fixtures';
+import { artifact as launchArtifact, assessment, catalog, catalogItem, launch, plannerItem, supported, NOW as LAUNCH_NOW } from './launch-fixtures';
+import { tiersAt } from '../src/launch-tiers';
 import * as profileApi from '../src/profile-api';
 
 const schedulerStops = vi.hoisted(() => new Set<() => void>());
+const profileStops = vi.hoisted(() => new Set<() => void>());
+vi.mock('../src/profile-events', async () => {
+  const actual = await vi.importActual<typeof import('../src/profile-events')>('../src/profile-events');
+  return { ...actual, subscribeProfileChanged: (handler: Parameters<typeof actual.subscribeProfileChanged>[0]) => {
+    const stop = actual.subscribeProfileChanged(handler);
+    profileStops.add(stop);
+    return stop;
+  } };
+});
 vi.mock('../src/network-status', async () => {
   const actual = await vi.importActual<typeof import('../src/network-status')>('../src/network-status');
   return { ...actual, createPollScheduler: (options: Parameters<typeof actual.createPollScheduler>[0]) => {
@@ -74,6 +84,8 @@ vi.mock('../src/map', () => ({
   renderMap: vi.fn(async () => {}),
   resizeMap: vi.fn(),
   focusLaunchOnMap: vi.fn(),
+  clearLaunchOnMap: vi.fn(() => false),
+  isLaunchShownOnMap: vi.fn(() => false),
   applyDistanceThreshold: vi.fn(),
   dropLookupPin: vi.fn(),
   getSatelliteTopbarReadouts: vi.fn(() => []),
@@ -189,6 +201,8 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  for (const stop of profileStops) stop();
+  profileStops.clear();
   for (const stop of schedulerStops) stop();
   schedulerStops.clear();
   for (const id of liveIntervals) window.clearInterval(id);
@@ -1198,6 +1212,76 @@ describe('main.ts: common launch lane', () => {
 });
 
 describe('main.ts: map pane vs manifest race (iPad QA loop 2026-06-11)', () => {
+  it('closes the modeled brief immediately, respects later reopening, and cancels pending focus when hidden', async () => {
+    const mapModule = await import('../src/map');
+    const { launchCatalog } = await import('../src/launch-catalog');
+    const { setMapLaunchMode } = await import('../src/map-launch-mode');
+    const { init, renderQueue } = await import('../src/main');
+    vi.mocked(manifestModule.fetchManifest).mockResolvedValue(buildManifest());
+    vi.mocked(manifestModule.fetchTop5).mockResolvedValue([]);
+    vi.mocked(manifestModule.fetchTop24h).mockResolvedValue([]);
+    vi.mocked(manifestModule.fetchTrack).mockResolvedValue(buildTrack());
+    await init();
+    document.getElementById('view')!.insertAdjacentHTML('beforeend', '<section id="map-pane"><div id="map"></div></section>');
+    document.getElementById('map')!.scrollIntoView = vi.fn();
+    vi.spyOn(Date, 'now').mockReturnValue(LAUNCH_NOW);
+    vi.spyOn(launchCatalog, 'read').mockReturnValue(tiersAt(catalog([plannerItem(), plannerItem({ event_id: 'z-other' })]), LAUNCH_NOW));
+    vi.mocked(mapModule.isLaunchShownOnMap).mockReturnValue(false);
+    setMapLaunchMode(true);
+    renderQueue();
+    let release = (): void => {};
+    vi.mocked(mapModule.renderMap).mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
+    vi.mocked(mapModule.focusLaunchOnMap).mockImplementation(() => {
+      vi.mocked(mapModule.isLaunchShownOnMap).mockReturnValue(true);
+      return true;
+    });
+    const brief = document.getElementById('map-launch-coverage')!;
+    const primary = brief.querySelector<HTMLDetailsElement>('.map-launch-primary')!;
+    primary.open = true;
+    const button = primary.querySelector<HTMLButtonElement>('.launch-brief-actions button')!;
+    button.focus();
+    button.click();
+    expect(primary.open).toBe(false);
+    expect(document.activeElement).toBe(primary.querySelector('summary'));
+    await vi.waitFor(() => expect(mapModule.renderMap).toHaveBeenCalled());
+    primary.open = true;
+    const elsewhere = primary.querySelector<HTMLButtonElement>('.launch-name')!;
+    elsewhere.focus();
+    release();
+    await vi.waitFor(() => expect(mapModule.focusLaunchOnMap).toHaveBeenCalledWith('vulcan'));
+    expect(document.activeElement).toBe(elsewhere);
+    expect(brief.querySelector<HTMLDetailsElement>('.map-launch-primary')?.open).toBe(true);
+    renderQueue();
+    const reopened = brief.querySelector<HTMLDetailsElement>('.map-launch-primary')!;
+    reopened.open = true;
+    const hide = reopened.querySelector<HTMLButtonElement>('.launch-brief-actions button')!;
+    expect(hide.textContent).toBe('Hide modeled ascent');
+    expect(hide.getAttribute('aria-pressed')).toBe('true');
+    let releaseOther = (): void => {};
+    const otherDraw = new Promise<void>((resolve) => { releaseOther = resolve; });
+    vi.mocked(mapModule.renderMap).mockReturnValueOnce(otherDraw);
+    brief.querySelector<HTMLButtonElement>('[data-event-id="z-other"] .launch-brief-actions button')!.click();
+    await vi.waitFor(() => expect(mapModule.renderMap).toHaveBeenCalledTimes(2));
+    vi.mocked(mapModule.clearLaunchOnMap).mockImplementationOnce(() => {
+      vi.mocked(mapModule.isLaunchShownOnMap).mockReturnValue(false);
+      return true;
+    });
+    const current = document.querySelector<HTMLDetailsElement>('#map-launch-coverage .map-launch-primary')!;
+    current.open = true;
+    const currentHide = current.querySelector<HTMLButtonElement>('.launch-brief-actions button')!;
+    currentHide.focus();
+    currentHide.click();
+    expect(mapModule.clearLaunchOnMap).toHaveBeenCalledWith('vulcan');
+    expect(mapModule.focusLaunchOnMap).toHaveBeenCalledTimes(1);
+    expect(current.open).toBe(false);
+    expect(currentHide.textContent).toBe('Show site and modeled ascent');
+    expect(currentHide.getAttribute('aria-pressed')).toBe('false');
+    expect(document.activeElement).toBe(current.querySelector('summary'));
+    releaseOther();
+    await otherDraw;
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    expect(mapModule.focusLaunchOnMap).toHaveBeenCalledTimes(1);
+  });
   it('opens the requested launch after the map finishes loading', async () => {
     const mapModule = await import('../src/map');
     const { launchStore } = await import('../src/launch-store');

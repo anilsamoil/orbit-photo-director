@@ -5,6 +5,7 @@ import { renderMapLaunchBrief } from '../../../launch-map-brief';
 import { parseLaunchArtifact } from '../../../launch-schema';
 import { tiersAt } from '../../../launch-tiers';
 import type { PassEntry } from '../../../types';
+import type { LaunchCatalogItem } from '../../../launch-schema';
 import { catalog, catalogItem, NOW, plannerCases, plannerFan, plannerItem, shot, state } from '../../../../test/launch-fixtures';
 import { createVendorDouble } from '../../../../test/vendor-map-double';
 import { createClock } from '../../map-core/clock';
@@ -27,7 +28,143 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
+async function selectionFixture(items: LaunchCatalogItem[] = [plannerItem(), plannerItem({ event_id: 'other', name: 'Other' })]) {
+  const { launchCatalog: currentCatalog } = await import('../../../launch-catalog');
+  const corridor = await import('./index');
+  const mode = await import('../../../map-launch-mode');
+  const { renderTierCard } = await import('../../../launch-tier-card');
+  const { renderMapLaunchBrief: renderBrief } = await import('../../../launch-map-brief');
+  const tiers = tiersAt(catalog(items), NOW);
+  if (!tiers) throw new Error('expected a current catalog');
+  const read = vi.spyOn(currentCatalog, 'read').mockReturnValue(tiers);
+  const vendor = createVendorDouble();
+  const core = createMapCore(vendor, createClock(() => NOW));
+  corridor.noteLaunchCore(core);
+  corridor.refreshAscentTrajectorySource();
+  corridor.syncMapLaunchMode();
+  document.body.innerHTML = '<div id="map-pane"></div><div id="brief"></div>';
+  const show = (eventId: string): void => {
+    if (!corridor.clearLaunchOnMap(eventId)) corridor.focusLaunchOnMap(eventId);
+  };
+  const brief = document.getElementById('brief')!;
+  renderBrief(brief, state(), NOW, show, corridor.isLaunchShownOnMap);
+  const button = (eventId: string): HTMLButtonElement => {
+    const found = brief.querySelector<HTMLButtonElement>(`[data-event-id="${eventId}"] .launch-brief-actions button`);
+    if (!found) throw new Error('missing map action');
+    return found;
+  };
+  const lines = (): GeoJSON.Feature[] => {
+    const source = vendor.sources.get('ascent-trajectory');
+    if (!source || source.type !== 'geojson' || typeof source.data === 'string') throw new Error('missing ascent source');
+    return source.data.features;
+  };
+  return { corridor, mode, vendor, core, tiers, read, button, lines, brief, show, renderTierCard };
+}
+
 describe('launch-corridor', () => {
+  it.each([
+    ['assumed sector', plannerCases().find((entry) => entry.event_id === 'starbase')!],
+    ['modeled corridor', plannerItem({ shots: [shot({ subject: 'ascent', track: plannerFan().track })] })],
+  ] as const)('clears selected-only geometry for the %s control', async (_kind, item) => {
+    const { corridor, mode, button, lines } = await selectionFixture([item]);
+    button(item.event_id).click();
+    expect(lines().length).toBeGreaterThan(0);
+    expect(button(item.event_id).getAttribute('aria-pressed')).toBe('true');
+    button(item.event_id).click();
+    expect(lines()).toEqual([]);
+    expect(button(item.event_id).getAttribute('aria-pressed')).toBe('false');
+    expect(document.getElementById('launch-ascent-caption')?.hidden).toBe(true);
+    corridor.resetLaunchForTest();
+    mode.setMapLaunchMode(false);
+  });
+  it('reopens a pressed control, replaces the selected fan, then clears its fan and caption', async () => {
+    const fixture = await selectionFixture();
+    const { corridor, mode, button, lines, vendor, tiers, renderTierCard, show } = fixture;
+    expect(button('vulcan').getAttribute('aria-pressed')).toBe('false');
+    button('vulcan').click();
+    expect(lines()).toHaveLength(12);
+    expect(lines().every((line) => line.properties?.event_id === 'vulcan')).toBe(true);
+    expect(button('vulcan').textContent).toBe('Hide modeled ascent');
+    expect(button('vulcan').getAttribute('aria-pressed')).toBe('true');
+    const reopened = renderTierCard(tiers.find('vulcan')!, show, corridor.isLaunchShownOnMap);
+    document.body.append(reopened);
+    expect(reopened.querySelector('button[aria-pressed]')?.getAttribute('aria-pressed')).toBe('true');
+    button('other').click();
+    expect(lines().every((line) => line.properties?.event_id === 'other')).toBe(true);
+    expect(button('vulcan').textContent).toBe('Show site and modeled ascent');
+    expect(button('vulcan').getAttribute('aria-pressed')).toBe('false');
+    expect(reopened.querySelector('button[aria-pressed]')?.getAttribute('aria-pressed')).toBe('false');
+    expect(button('other').getAttribute('aria-pressed')).toBe('true');
+    button('other').click();
+    expect(lines()).toEqual([]);
+    expect(button('other').textContent).toBe('Show site and modeled ascent');
+    expect(button('other').getAttribute('aria-pressed')).toBe('false');
+    expect(document.getElementById('launch-ascent-caption')?.hidden).toBe(true);
+    const pads = vendor.sources.get('ascent-pad');
+    expect(pads?.type === 'geojson' && typeof pads.data !== 'string' && pads.data.features.length).toBe(2);
+    corridor.resetLaunchForTest();
+    mode.setMapLaunchMode(false);
+  });
+
+  it('refreshes controls after pad selection, mode changes, and catalog removal', async () => {
+    const { corridor, mode, vendor, core, button, tiers, read, lines } = await selectionFixture();
+    vi.spyOn(HTMLDialogElement.prototype, 'showModal').mockImplementation(function (this: HTMLDialogElement) { this.open = true; });
+    mode.setMapLaunchMode(true);
+    corridor.bindAscentPad(core);
+    vendor.fireLayer('click', 'ascent-pad-layer', {
+      point: { x: 0, y: 0 },
+      lngLat: [-80.6, 28.5],
+      features: [{ geometry: { type: 'Point', coordinates: [-80.6, 28.5] }, properties: { event_id: 'other', catalog: 'tier' } }],
+    });
+    expect(button('other').getAttribute('aria-pressed')).toBe('true');
+    mode.setMapLaunchMode(false);
+    expect(button('other').getAttribute('aria-pressed')).toBe('false');
+    expect(corridor.clearLaunchOnMap('other')).toBe(false);
+    mode.setMapLaunchMode(true);
+    expect(button('other').getAttribute('aria-pressed')).toBe('true');
+    read.mockReturnValue({ ...tiers, mapPins: [] });
+    corridor.refreshAscentTrajectorySource();
+    expect(button('other').getAttribute('aria-pressed')).toBe('false');
+    expect(lines()).toEqual([]);
+    corridor.resetLaunchForTest();
+    mode.setMapLaunchMode(false);
+  });
+
+  it('does not clear independently drawn sourced corridors', async () => {
+    const { corridor, mode, button, lines } = await selectionFixture([catalogItem()]);
+    const eventId = catalogItem().event_id;
+    button(eventId).click();
+    expect(button(eventId).textContent).toBe('Show site and corridor');
+    expect(button(eventId).hasAttribute('aria-pressed')).toBe(false);
+    const count = lines().length;
+    expect(count).toBeGreaterThan(0);
+    expect(corridor.clearLaunchOnMap(eventId)).toBe(false);
+    expect(lines()).toHaveLength(count);
+    corridor.resetLaunchForTest();
+    mode.setMapLaunchMode(false);
+  });
+
+  it('closes the launch popup while keeping the selected modeled ascent and caption drawn', async () => {
+    const tiers = tiersAt(catalog([plannerItem()]), NOW);
+    const { launchCatalog: currentCatalog } = await import('../../../launch-catalog');
+    const corridor = await import('./index');
+    const mode = await import('../../../map-launch-mode');
+    vi.spyOn(currentCatalog, 'read').mockReturnValue(tiers);
+    const vendor = createVendorDouble();
+    const core = createMapCore(vendor, createClock(() => NOW));
+    corridor.noteLaunchCore(core);
+    corridor.refreshAscentTrajectorySource();
+    mode.setMapLaunchMode(true);
+    document.body.innerHTML = '<div id="map-pane"></div>';
+    core.openPopup({ at: [-80.6, 28.5], content: document.createElement('div'), owner: 'launch' });
+    expect(corridor.focusLaunchOnMap('vulcan')).toBe(true);
+    const source = vendor.sources.get('ascent-trajectory');
+    expect(source?.type === 'geojson' && typeof source.data !== 'string' && source.data.features.length).toBe(12);
+    expect(document.getElementById('launch-ascent-caption')?.hidden).toBe(false);
+    expect(vendor.popups[0]?.removed).toBe(true);
+    corridor.resetLaunchForTest();
+    mode.setMapLaunchMode(false);
+  });
   it('draws the selected fan nominal, both edges, and their end chord with its provenance', () => {
     const first = plannerItem();
     const second = plannerItem({ event_id: 'other', name: 'Other launch' });

@@ -12,7 +12,7 @@ import {
   type HazardNote,
 } from '../../../launch-hazards';
 import { tierWindowText } from '../../../launch-tiers';
-import { openTierDetails } from '../../../launch-tier-card';
+import { launchMapToggleKind, openTierDetails, refreshTierMapActions } from '../../../launch-tier-card';
 import type { TierLaunch } from '../../../launch-tiers';
 import { launchStore, type LaunchState } from '../../../launch-store';
 import { selectLaunches } from '../../../launch-selectors';
@@ -300,6 +300,7 @@ export function refreshAscentTrajectorySource(): void {
   core.setGeoJson('ascent-pad', { type: 'FeatureCollection', features: pads });
   syncLaunchHazards(now);
   paintAscentCaption(tiers?.mapPins.find((pin) => pin.eventId === state.selectedEventId) ?? null);
+  refreshTierMapActions(isLaunchShownOnMap);
 }
 
 /** Show the corridor and hide it when launch mode is off. */
@@ -317,6 +318,7 @@ export function applyAscentLaunchVisibility(): void {
     paintHazardCaption();
     const tiers = launchCatalog.read(core.clock.now());
     paintAscentCaption(tiers?.mapPins.find((pin) => pin.eventId === state.selectedEventId) ?? null);
+    refreshTierMapActions(isLaunchShownOnMap);
   } catch {}
 }
 
@@ -663,6 +665,7 @@ export function focusLaunchOnMap(eventId: string): boolean {
   if (tiers) {
     const pin = tiers.mapPins.find((launch) => launch.eventId === eventId);
     if (!pin) return false;
+    core.closePopup('launch');
     state.selectedEventId = eventId;
     const waiting = eventId === STARSHIP_FLIGHT15_EVENT_ID
       && state.hazardFeatures.length === 0
@@ -677,6 +680,7 @@ export function focusLaunchOnMap(eventId: string): boolean {
   const selection = selectLaunches(launchStore.getState(), now, 'map')
     .find(({ item }) => item.event_id === eventId);
   if (!selection) return false;
+  core.closePopup('launch');
   state.selectedEventId = eventId;
   state.pendingFocusId = null;
   const { site, trajectory } = selection.item;
@@ -689,6 +693,23 @@ export function focusLaunchOnMap(eventId: string): boolean {
     }
   }
   fitLaunch(core, points, false);
+  return true;
+}
+
+export function isLaunchShownOnMap(eventId: string): boolean {
+  const core = state.core;
+  if (!core || !getMapLaunchMode() || state.selectedEventId !== eventId) return false;
+  const pin = launchCatalog.read(core.clock.now())?.mapPins.find((launch) => launch.eventId === eventId);
+  return !!pin && launchMapToggleKind(pin) !== null;
+}
+
+export function clearLaunchOnMap(eventId: string): boolean {
+  if (!isLaunchShownOnMap(eventId)) return false;
+  state.selectedEventId = null;
+  state.pendingFocusId = null;
+  state.hazardArmed = false;
+  state.core?.closePopup('launch');
+  refreshAscentTrajectorySource();
   return true;
 }
 
@@ -717,6 +738,7 @@ export function resetLaunchForTest(): void {
   state.hazardPopupKeys = [];
   document.getElementById('launch-ascent-caption')?.remove();
   publishHazardNotes([]);
+  refreshTierMapActions(isLaunchShownOnMap);
 }
 
 /** Ascent corridor and pad. Launch mode swaps these with the target pins. */

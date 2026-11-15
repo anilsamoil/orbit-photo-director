@@ -45,9 +45,22 @@ const PIN_FILES = [
   'src/map/features/targets/targets.test.ts',
   'src/map/features/launch-corridor/launch-corridor.test.ts',
   'test/launch-map-schedule.test.ts',
+  'test/launch-map-brief.test.ts',
 ];
 
 const MUTATIONS = [
+  {
+    contract: 'showing a launch collapses its expanded brief before refresh',
+    file: 'src/launch-map-brief.ts',
+    find: '    collapseMapLaunchBrief(container);',
+    replace: '    void container;',
+  },
+  {
+    contract: 'hiding a selected ascent clears its geometry and caption',
+    file: 'src/map/features/launch-corridor/index.ts',
+    find: '  state.selectedEventId = null;\n  state.pendingFocusId = null;\n  state.hazardArmed = false;',
+    replace: '  state.pendingFocusId = null;\n  state.hazardArmed = false;',
+  },
   {
     contract: 'lightning polling survives wall clock correction',
     file: 'src/map/features/lightning/index.ts',
@@ -201,7 +214,7 @@ const MUTATIONS = [
   {
     contract: 'one failed feed among empty ones is a failed lookup for a published vehicle',
     file: ORBIT_LOOKUP,
-    find: "  if (cause === null) return { state: 'not_found' };\n  return publisherSays.state === 'failed' ? { state: 'failed', cause } : publisherSays;",
+    find: "  if (cause === null) return { state: 'not_found' };\n  return publisherSays.state === 'failed' ? failed(cause, lookup, cached, nowMs) : publisherSays;",
     replace: "  return publisherSays.state === 'failed' ? { state: 'not_found' } : publisherSays;",
   },
   {
@@ -223,28 +236,28 @@ const MUTATIONS = [
     replace: '      ? reply.sets.map((tle) => ({ tle, feed: reply.feed }))',
   },
   {
-    contract: 'an element set older than the publisher limit is never drawn',
+    contract: 'an element set older than the publisher grace is never drawn',
     file: ORBIT_LOOKUP,
-    find: '  const usable = candidates.filter(({ tle }) => ageHours(tle, nowMs) <= lookup.max_age_hours);',
-    replace: '  const usable = candidates;',
+    find: '      nowMs - epochMs <= lookup.grace_hours * HOUR_MS && !reentered(set.tle.line2, epochMs, nowMs))',
+    replace: '      !reentered(set.tle.line2, epochMs, nowMs))',
   },
   {
-    contract: 'the last good element set is dropped once it passes the publisher limit',
+    contract: 'the last good element set is dropped once it passes the publisher grace',
     file: ORBIT_LOOKUP,
-    find: '  const lastGood = cached && lookup && ageHours(cached.tle, nowMs) <= lookup.max_age_hours ? cached : null;',
-    replace: '  const lastGood = cached && lookup ? cached : null;',
+    find: '  const lastGood = lookup ? liveObjects(lookup, cached, nowMs) : [];',
+    replace: '  const lastGood = lookup ? cached : [];',
   },
   {
     contract: 'the map never asks CelesTrak for a published vehicle on its own',
     file: ORBIT_LOOKUP,
-    find: "  if (mode === 'published' || !lookup) return lastGood ? fromCache(lastGood, true) : publisherSays;",
-    replace: '  if (!lookup) return lastGood ? fromCache(lastGood, true) : publisherSays;',
+    find: "  if (mode === 'published') return lastGood.length > 0 ? drawn(lookup, lastGood, 'cache', true, nowMs) : verdict;",
+    replace: '',
   },
   {
-    contract: 'the newest element set wins',
+    contract: 'the newest element set for each object wins',
     file: ORBIT_LOOKUP,
-    find: '      if (eb !== ea) return eb > ea ? b : a;',
-    replace: '      if (eb !== ea) return a;',
+    find: "    const wins = !held || epochMs > held.epochMs || (epochMs === held.epochMs && set.feed === 'supgp' && held.set.feed !== 'supgp');",
+    replace: "    const wins = !held || epochMs < held.epochMs || (epochMs === held.epochMs && set.feed === 'supgp' && held.set.feed !== 'supgp');",
   },
   {
     contract: 'an unread tracked.json is a failed lookup, never a confirmed absence',
@@ -253,10 +266,10 @@ const MUTATIONS = [
     replace: "    reason: 'no_public_orbit',\n    lookup: {",
   },
   {
-    contract: 'a publisher element set past its age limit is not drawn',
+    contract: 'a publisher element set past its grace is not drawn',
     file: ORBIT_LOOKUP,
-    find: '    if (ageHours(tle, nowMs) <= row.lookup.max_age_hours) {',
-    replace: '    if (row.lookup.max_age_hours > 0) {',
+    find: '  const live = row ? liveObjects(row.lookup, publishedSets(meta, row), nowMs) : [];',
+    replace: '  const live = row ? publishedSets(meta, row) : [];',
   },
   {
     contract: 'a background lookup does not override a tap that is still asking CelesTrak',
