@@ -142,8 +142,10 @@ def test_crs35_hour_precision_miss_and_unusable_receipt_release_shot():
     missed_tle = TLE(line1=opposite.line1, line2=opposite.line2, epoch=NET - timedelta(hours=12))
     missed = _item(payload, missed_tle, now, fetched, prior)
     assert missed["name"] == CRS35_NAME
-    assert missed["tier"] == "none"
-    assert missed["why"] == "The ascent stays behind Earth on a fresh orbit."
+    assert missed["direction"]["kind"] == "modeled"
+    assert missed["tier"] == "watch"
+    assert "DIRECTION_MODELED" in missed["reasons"]
+    assert "1 liftoff minutes sampled" in missed["why"]
 
     stale_receipt = build_launch_catalog(
         payload, tle, now, fetched_at=fetched, source_reasons=("SOURCE_AGE_MTIME_ONLY",), prior_items=prior,

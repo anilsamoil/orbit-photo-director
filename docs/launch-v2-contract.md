@@ -103,7 +103,7 @@ The parser allows a schedule lease up to three hours. Each shot envelope include
 `lens` (`telephoto` or `wide`), `lens_reason`, and that envelope's own `direction`
 plus `evaluated_at`. A `night_engine` shot stays scored;
 its item carries `NIGHT_ENGINE_UNVALIDATED` until that mode is calibrated. An ascent
-envelope requires `direction.kind` of `published`, `iss_plane`, or `hazard_area`.
+envelope requires `direction.kind` of `published`, `iss_plane`, `hazard_area`, or `modeled`.
 A pad envelope has an empty track. Unknown keys are rejected on both versions. A hash
 mismatch keeps the last good artifact.
 
@@ -112,3 +112,59 @@ strict parsers reject the new field, so publish the new frontend first, then
 update the separate publisher checkout. Existing tabs may need a reload to pick
 up the new app; do not clear personal site data. Publisher policy 4 changes the
 input identity once while preserving the persistent owner and receipts.
+
+## General launch estimates, LP1
+
+Schema 3 accepts `direction.kind = modeled` with a numeric azimuth, a source,
+and null `off_plane_deg`. The existing ISS-plane calculation runs first.
+Structured LL2 program, mission, and orbit labels supply a fallback inclination.
+Unknown inclination remains unknown. A known site supplies assumed sector edges
+for display, with no nominal heading and no ascent shot.
+
+An optional item `ascent` contains `grade`, `source`, and one or two `fans`.
+Each fan contains exactly `branch`, `azimuth_deg`, `low_deg`, `high_deg`, `track`,
+`low_track`, and `high_track`. Branch is northbound, southbound, east, or null.
+Angles are degrees clockwise from north. Low and high can wrap through north.
+Tracks use the shot track point shape, with at most 200 points and strictly
+increasing `t_offset_s`. These full early-ascent tracks differ from `shot.track`,
+which contains only the visible part of a particular sampled scenario.
+
+Grade B means a program or constellation inclination with one branch and no
+dogleg at a recognized site. Grade C includes orbit-class rules, ambiguous
+branches, unknown sites, and assumed doglegs or later plane changes. These are
+estimate grades, not verification or photo probabilities. Grade D occurs exactly
+with direction none. Every grade D fan has null nominal azimuth and an empty
+nominal track. Its edge tracks show assumed sectors. Grade A is accepted for
+future sourced published directions but is rejected for modeled directions.
+ISS-plane items have no ascent block in LP1. Every block requires a nonblank source.
+An item's modeled azimuth and each shot's modeled azimuth must match a fan.
+A modeled ascent shot requires its own modeled direction and evaluation time.
+
+Site matching uses distance from pad coordinates. Site sectors are assumptions,
+not published allowed flight corridors. Every table row without a checked primary
+document carries `unverified: not checked against a primary document` in its source.
+The Amazon Leo/Kuiper constellation rule uses the owner-supplied FCC STA quote
+linked in that rule. Its northerly branch hint applies near the Cape only.
+Both candidate branches remain visible when neither evidence nor the assumed
+site sectors selects one. A selected scenario is not a claim of the actual heading.
+
+Modeled liftoffs are sampled every minute from max(window start, NET), always
+including the end. The distance pre-screen includes both horizon distances,
+maximum modeled travel, and an ISS motion margin. Deadline or point exhaustion
+adds `EVALUATION_INCOMPLETE` to the item and coverage. The builder retains
+diagnostic liftoffs and the best sampled liftoff by score low then slant range.
+The builder publishes the selected modeled envelope first in `shots`, using
+liftoff time to break a remaining tie. Its direction supplies the item's selected
+azimuth. The frontend preserves this order for the primary shot, brief, and
+corridor. A selected envelope with fewer than two track points has no corridor.
+The frontend does not substitute another modeled envelope's track.
+Non-modeled items keep their existing frontend ordering.
+Visibility verdicts concern sampled nominal headings through T+600 seconds.
+Heading uncertainty, later burns, insertion and deployment remain unassessed.
+Modeled directions never earn Shot, and modeled negatives never earn None.
+
+Roll out the accepting frontend parser first, the publisher validator second,
+and the builder last. Refresh policy 7 rebuilds once for the new model even when
+the cached input receipt is unchanged. Schema 2 remains unchanged. The map draws
+selected-launch model and edge lines in the existing source and layer, with grade
+and source in its caption. It does not add a filled fan or an ISS-view fan.

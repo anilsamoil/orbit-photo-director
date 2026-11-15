@@ -6,9 +6,80 @@ import { launchCatalog, LaunchCatalogStore } from '../src/launch-catalog';
 import { parseLaunchArtifact, parseLaunchCatalogPointer, parseLaunchPointer } from '../src/launch-schema';
 import { LaunchStore, LAUNCH_STORAGE_KEY, validateLaunchBytes } from '../src/launch-store';
 import { renderMapLaunchBrief } from '../src/launch-map-brief';
-import { catalog, catalogItem, envelope, iso, NOW, state } from './launch-fixtures';
+import { catalog, catalogItem, envelope, iso, NOW, plannerCases, plannerFan, plannerItem, shot, state } from './launch-fixtures';
+import plannerRaw from './fixtures/launch-planner-catalog.json' with { type: 'json' };
 
 beforeEach(() => localStorage.clear());
+
+describe('modeled ascent catalog contract', () => {
+  const parseItem = (item: unknown) => parseLaunchArtifact({ ...catalog([]), items: [item] });
+
+  it('accepts the generator fixture with all eleven launch cases', () => {
+    const parsed = parseLaunchArtifact(plannerRaw);
+    expect(parsed.schema_version).toBe(3);
+    expect(parsed.items).toHaveLength(11);
+    if (parsed.schema_version !== 3) throw new Error('expected generated catalog');
+    const amazon = parsed.items.find((item) => item.name.includes('Amazon Leo (LV-01)'));
+    expect(amazon?.ascent?.grade).toBe('C');
+    expect(amazon?.ascent?.source).toContain('450 km deployment only');
+    expect(amazon?.ascent?.source).toContain('other Amazon Leo shells use different inclinations');
+  });
+
+  it('accepts seven launch cases, older catalogs, and a sourced grade A ascent', () => {
+    expect(parseLaunchArtifact(catalog(plannerCases())).schema_version).toBe(3);
+    expect(parseItem(catalogItem()).schema_version).toBe(3);
+    const modeled = plannerItem();
+    expect(parseItem({ ...modeled, direction: { ...modeled.direction, kind: 'published' }, ascent: { ...modeled.ascent, grade: 'A' } }).schema_version).toBe(3);
+  });
+
+  it('accepts either modeled branch as the shot direction', () => {
+    const item = plannerItem();
+    const other = plannerFan({ branch: 'southbound', azimuth_deg: 137.2, low_deg: 132.2, high_deg: 142.2 });
+    const ascent = { ...item.ascent, grade: 'C', fans: [plannerFan(), other] };
+    const direction = { kind: 'modeled', azimuth_deg: 137.2, source: 'Other branch', off_plane_deg: null };
+    expect(parseItem({ ...item, ascent, shots: [shot({ subject: 'ascent', direction: { ...direction, kind: 'modeled' } })] }).schema_version).toBe(3);
+    expect(() => parseItem({ ...item, ascent, shots: [shot({ subject: 'ascent', direction: { ...direction, kind: 'modeled', azimuth_deg: 130 } })] })).toThrow();
+  });
+
+  it('rejects invalid grades, sources, keys, fan counts, and direction mismatches', () => {
+    const item = plannerItem();
+    const ascent = item.ascent;
+    if (!ascent) throw new Error('missing ascent');
+    const fan = ascent.fans[0];
+    if (!fan) throw new Error('missing fan');
+    const invalid = [
+      { ...ascent, grade: 'E' }, { ...ascent, grade: 'A' }, { ...ascent, grade: 'D' }, { ...ascent, grade: ['B'] },
+      { ...ascent, source: '' }, { ...ascent, source: '  ' }, { ...ascent, extra: true },
+      { ...ascent, fans: [] }, { ...ascent, fans: [fan, fan, fan] },
+      { ...ascent, fans: [{ ...fan, extra: true }] },
+      { ...ascent, fans: [{ ...fan, azimuth_deg: 50 }] },
+      { ...ascent, fans: [{ ...fan, branch: 'west' }] }, { ...ascent, fans: [{ ...fan, branch: ['northbound'] }] },
+    ];
+    for (const candidate of invalid) expect(() => parseItem({ ...item, ascent: candidate })).toThrow();
+    expect(() => parseItem({ ...item, direction: { kind: 'iss_plane', azimuth_deg: 42.4, source: 'TLE', off_plane_deg: 1 } })).toThrow();
+    expect(() => parseItem({ ...item, ascent: { grade: 'D', source: 'Site', fans: [{ ...fan, azimuth_deg: null, track: [] }] } })).toThrow();
+  });
+
+  it('rejects nominal unknown-orbit fans, ascent shots without direction, and malformed tracks', () => {
+    const unknown = plannerCases().find((item) => item.event_id === 'starbase');
+    if (!unknown?.ascent) throw new Error('missing unknown case');
+    const fan = unknown.ascent.fans[0];
+    if (!fan) throw new Error('missing fan');
+    const changeFan = (changes: Record<string, unknown>) => ({ ...unknown, ascent: { ...unknown.ascent, fans: [{ ...fan, ...changes }] } });
+    expect(() => parseItem(changeFan({ azimuth_deg: 90 }))).toThrow();
+    expect(() => parseItem(changeFan({ track: [fan.low_track[0]] }))).toThrow();
+    expect(() => parseItem({ ...unknown, shots: [shot({ subject: 'ascent' })] })).toThrow();
+    const missingDirection = { ...shot({ subject: 'ascent' }), direction: undefined, evaluated_at: undefined };
+    delete missingDirection.direction;
+    delete missingDirection.evaluated_at;
+    expect(() => parseItem({ ...plannerItem(), shots: [missingDirection] })).toThrow();
+    for (const key of ['track', 'low_track', 'high_track']) {
+      const points = Array.from({ length: 201 }, (_, i) => ({ t_offset_s: i, lat: 0, lon: 0, alt_km: 0 }));
+      expect(() => parseItem(changeFan({ [key]: points }))).toThrow();
+      expect(() => parseItem(changeFan({ [key]: [points[0], points[0]] }))).toThrow();
+    }
+  });
+});
 
 const jsonHeaders = { 'content-type': 'application/json' };
 

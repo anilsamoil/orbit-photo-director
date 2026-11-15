@@ -1,4 +1,4 @@
-import { tierInstantText, tierWindowUtc, tierWord, utcInstant, type DirectionEvidence, type TierLaunch, type TierShot } from './launch-tiers';
+import { tierInstantText, tierWindowUtc, tierWord, utcInstant, type TierLaunch, type TierShot } from './launch-tiers';
 
 export interface PlanFact {
   readonly label: string;
@@ -65,14 +65,18 @@ function sentence(text: string): string {
   return /[.!?]$/.test(clean) ? clean : `${clean}.`;
 }
 
-function envelopeFacts(shot: TierShot): EnvelopeFacts {
+function envelopeFacts(shot: TierShot, launch: TierLaunch): EnvelopeFacts {
   const subject = shot.subject === 'ascent' ? 'Ascent' : 'Pad';
   const score = shot.score.low === shot.score.high
     ? trimmed(shot.score.low, 0)
     : `${trimmed(shot.score.low, 0)} to ${trimmed(shot.score.high, 0)}`;
+  const direction = shot.provenance?.direction;
+  const scenario = shot.subject === 'ascent' && direction?.kind === 'modeled' && direction.azimuthDeg !== null
+    ? ` Modeled azimuth ${trimmed(direction.azimuthDeg, 1)}°.`
+    : '';
   return {
     subject: shot.subject,
-    title: `${subject} shot if liftoff is ${utcInstant(shot.liftoffMs)}. Estimate.`,
+    title: `${subject} shot if liftoff is ${utcInstant(shot.liftoffMs)}. Estimate.${scenario}`,
     facts: [
       { label: 'Best time', text: `${tierInstantText(shot.bestMs)} · ${offsetText(shot.bestOffsetS)}` },
       { label: 'Shootable', text: `${tierWindowUtc(shot.startMs, shot.endMs)} · ${span((shot.endMs - shot.startMs) / 1000)}` },
@@ -84,18 +88,28 @@ function envelopeFacts(shot: TierShot): EnvelopeFacts {
       { label: 'Light', text: LIGHT[shot.light] },
       {
         label: 'How sure',
-        text: `ISS orbit data ${trimmed(shot.confidence.tleAgeH, 1)} h old at the event. ${shot.confidence.robust ? 'Robust to timing error.' : 'Not robust to timing error.'} Score ${score} of 100.`,
+        text: `ISS orbit data ${trimmed(shot.confidence.tleAgeH, 1)} h old at the event. ${shot.confidence.robust ? 'Robust to timing error.' : 'Not robust to timing error.'} Score ${score} of 100.${shot.subject === 'ascent' && shot.provenance?.direction.kind === 'modeled' && launch.ascent ? ` Direction grade ${launch.ascent.grade}.` : ''}`,
       },
     ],
   };
 }
 
-function directionFact(direction: DirectionEvidence): PlanFact {
+function directionFact(launch: TierLaunch): PlanFact {
+  const { direction, ascent } = launch;
   const label = 'Launch direction';
   if (direction.kind === 'none') {
+    if (ascent?.grade === 'D') {
+      const sectors = ascent.fans.map((fan) => `${fan.branch ? `${fan.branch} ` : ''}${trimmed(fan.low_deg, 1)}° to ${trimmed(fan.high_deg, 1)}°`).join('; ');
+      return { label, text: `Estimate, grade D. Orbit not published. UNVERIFIED assumed site ${ascent.fans.length === 1 ? 'sector' : 'sectors'} ${sectors}. Only the pad can be planned. Source: ${ascent.source}` };
+    }
     return { label, text: 'No sourced launch direction, so no ascent path is drawn. Only the pad can be planned.' };
   }
   const azimuth = `${trimmed(direction.azimuthDeg, 1)}°`;
+  if (direction.kind === 'modeled') {
+    if (!ascent) return { label, text: `Modeled estimate. Azimuth ${azimuth}. Actual heading unverified. Source: ${direction.source}` };
+    const fans = ascent.fans.map((fan) => `${fan.branch ? `${fan.branch} branch, ` : ''}${fan.azimuth_deg === direction.azimuthDeg ? 'selected scenario, ' : ''}${fan.azimuth_deg === null ? '' : `azimuth ${trimmed(fan.azimuth_deg, 1)}°, `}fan ${trimmed(fan.low_deg, 1)}° to ${trimmed(fan.high_deg, 1)}°`).join('; ');
+    return { label, text: `Modeled, grade ${ascent.grade}. ${fans}. One scenario is selected for planning; the actual heading is unverified. Source: ${ascent.source}` };
+  }
   if (direction.kind === 'iss_plane') {
     return {
       label,
@@ -117,14 +131,14 @@ export function shotPlan(launch: TierLaunch): ShotPlan {
   const plannable = launch.direction.kind === 'none'
     ? launch.shots.filter((shot) => shot.subject === 'pad')
     : launch.shots;
-  const envelopes = plannable.map(envelopeFacts);
+  const envelopes = plannable.map((shot) => envelopeFacts(shot, launch));
   const others = envelopes.length - 1;
   return {
     verdict: `${tierWord(launch.tier)}. ${sentence(launch.why)}`,
     envelopes,
     brief: (envelopes[0]?.facts ?? []).filter((fact) => fact.label === 'Best time' || fact.label === 'Stand and look'),
     empty: envelopes.length ? null : emptyText(launch),
-    direction: directionFact(launch.direction),
+    direction: directionFact(launch),
     honesty: envelopes.length ? HONESTY_LINE : null,
     more: others > 0 ? `${others} more shot ${others === 1 ? 'window' : 'windows'} in the details.` : null,
   };

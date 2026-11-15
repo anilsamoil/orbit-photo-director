@@ -4,7 +4,7 @@ import { launchCatalog } from '../src/launch-catalog';
 import { openTierDetails, renderTierCard } from '../src/launch-tier-card';
 import { tiersAt, type TierLaunch } from '../src/launch-tiers';
 import type { LaunchCatalog, LaunchCatalogItem } from '../src/launch-schema';
-import { catalog, catalogItem, iso, NOW, shot } from './launch-fixtures';
+import { catalog, catalogItem, iso, NOW, plannerItem, shot } from './launch-fixtures';
 
 beforeEach(() => {
   document.body.replaceChildren();
@@ -81,6 +81,17 @@ function details(): HTMLDialogElement {
 }
 
 describe('tier schedule lines', () => {
+  it('offers the modeled fan on the map and shows its grade and source', () => {
+    const entry = plannerItem({ tier: 'likely', shots: [shot()] });
+    const showMap = vi.fn();
+    const card = renderTierCard(pin(entry), showMap);
+    expect(fact(card, 'Launch direction')).toContain('Modeled, grade B.');
+    expect(fact(card, 'Launch direction')).toContain('Amazon Leo shell estimate');
+    const button = [...card.querySelectorAll('button')].find((candidate) => candidate.textContent === 'Show site and modeled ascent');
+    expect(button).toBeDefined();
+    button?.click();
+    expect(showMap).toHaveBeenCalledWith('vulcan');
+  });
   it('labels NET, both window endpoints, and best time in UTC and Houston', () => {
     const card = renderTierCard(pin(shotItem()));
     expect(fact(card, 'NET')).toBe('7 Sep 2026, 12:10:00 UTC · 7 Sep 2026, 07:10:00 CDT');

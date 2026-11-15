@@ -1,4 +1,4 @@
-import type { LaunchCatalog, LaunchCatalogItem, ShotEnvelope } from './launch-schema';
+import type { LaunchAscent, LaunchCatalog, LaunchCatalogItem, ShotEnvelope } from './launch-schema';
 import { ALL_LAUNCHES_HORIZON_MS } from './iss-view/launches';
 import { LAUNCH_HORIZON_MS, LAUNCH_MAP_HORIZON_MS } from './launch-selectors';
 
@@ -36,7 +36,7 @@ export interface ShotProvenance {
 export type DirectionEvidence =
   | { readonly kind: 'none' }
   | { readonly kind: 'iss_plane'; readonly azimuthDeg: number; readonly offPlaneDeg: number; readonly source: string }
-  | { readonly kind: 'published' | 'hazard_area'; readonly azimuthDeg: number; readonly source: string };
+  | { readonly kind: 'published' | 'hazard_area' | 'modeled'; readonly azimuthDeg: number; readonly source: string };
 
 /** One shot envelope: one subject at one liftoff scenario. Envelopes are never merged. */
 export interface TierShot {
@@ -75,6 +75,7 @@ export interface TierLaunch {
   readonly reasons: readonly string[];
   readonly schedule: TierSchedule;
   readonly direction: DirectionEvidence;
+  readonly ascent: LaunchAscent | null;
   /** Every envelope, best first. */
   readonly shots: readonly TierShot[];
   readonly top: TierShot | null;
@@ -215,10 +216,15 @@ function shotOrder(a: ShotEnvelope, b: ShotEnvelope): number {
   return a.subject < b.subject ? -1 : 1;
 }
 
+function orderedShots(item: LaunchCatalogItem): ShotEnvelope[] {
+  const shots = item.shots.slice();
+  return item.direction.kind === 'modeled' ? shots : shots.sort(shotOrder);
+}
+
 function corridorOf(item: LaunchCatalogItem): Corridor | null {
   if (item.direction.kind === 'none') return null;
-  const ascent = item.shots.filter((shot) => shot.subject === 'ascent' && shot.track.length >= 2).sort(shotOrder);
-  const best = ascent[0];
+  const best = orderedShots(item).find((shot) => shot.subject === 'ascent'
+    && (item.direction.kind === 'modeled' || shot.track.length >= 2));
   if (!best) return null;
   const points = best.track.map((point) => ({
     lat: point.lat,
@@ -232,9 +238,7 @@ function corridorOf(item: LaunchCatalogItem): Corridor | null {
 }
 
 function toTierLaunch(item: LaunchCatalogItem): TierLaunch {
-  const shots = item.shots.flatMap((shot) => (toTierShot(shot) ? [shot] : []))
-    .sort(shotOrder)
-    .flatMap((shot) => toTierShot(shot) ?? []);
+  const shots = orderedShots(item).flatMap((shot) => toTierShot(shot) ?? []);
   const top = shots[0] ?? null;
   const netMs = Date.parse(item.schedule.net);
   const windowEndMs = instant(item.schedule.window_end);
@@ -258,6 +262,7 @@ function toTierLaunch(item: LaunchCatalogItem): TierLaunch {
       status: item.schedule.status,
     },
     direction: directionOf(item.direction),
+    ascent: item.ascent ?? null,
     shots,
     top,
     corridor: corridorOf(item),

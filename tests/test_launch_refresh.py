@@ -13,7 +13,7 @@ from unittest.mock import patch
 import pytest
 
 from generator.launch_evidence import build_launch_artifact, canonical_bytes, utc
-from generator.launch_publish import publish_launch_artifact, rclone_reader
+from generator.launch_publish import publish_launch_artifact, publish_launch_catalog, rclone_reader
 from generator.orbit import TLE, propagate
 from scripts import launch_refresh
 from scripts.launch_refresh import refresh_cached
@@ -22,6 +22,93 @@ from scripts.launch_refresh import refresh_cached
 def _published_catalog(remote: dict) -> dict:
     pointer = json.loads(remote["launch/catalog/latest.json"])
     return json.loads(remote[pointer["path"]])
+
+
+def _planner_catalog() -> dict:
+    path = Path(__file__).resolve().parents[1] / "frontend/test/fixtures/launch-planner-catalog.json"
+    return json.loads(path.read_text())
+
+
+def _sign_catalog(catalog: dict) -> dict:
+    catalog["revision"] = hashlib.sha256(
+        canonical_bytes({key: value for key, value in catalog.items() if key != "revision"})
+    ).hexdigest()[:24]
+    return catalog
+
+
+@pytest.mark.parametrize("defect", [
+    "unknown-key", "grade", "modeled-grade-a", "three-fans", "blank-source", "direction-none",
+    "nominal-unknown", "shot-heading", "missing-ascent", "track-order", "track-limit",
+    "iss-plane-ascent", "modeled-null-fans", "empty-direction-source", "long-direction-source",
+])
+def test_catalog_rejects_malformed_modeled_ascent(defect) -> None:
+    from generator.launch_publish import _validate_catalog
+
+    catalog = _planner_catalog()
+    item = next(item for item in catalog["items"] if item["event_id"] == "fixture-positive")
+    ascent = item["ascent"]
+    if defect == "unknown-key":
+        ascent["invented"] = 1
+    elif defect == "grade":
+        ascent["grade"] = "E"
+    elif defect == "modeled-grade-a":
+        ascent["grade"] = "A"
+    elif defect == "three-fans":
+        ascent["fans"] *= 3
+    elif defect == "blank-source":
+        ascent["source"] = " "
+    elif defect == "direction-none":
+        item["direction"] = {"kind": "none", "azimuth_deg": None, "source": None, "off_plane_deg": None}
+    elif defect == "nominal-unknown":
+        ascent = next(item for item in catalog["items"] if item["event_id"] == "fixture-unknown")["ascent"]
+        ascent["fans"][0]["azimuth_deg"] = 180
+    elif defect == "shot-heading":
+        item["shots"][0]["direction"]["azimuth_deg"] = 123
+    elif defect == "missing-ascent":
+        del item["ascent"]
+    elif defect == "track-order":
+        ascent["fans"][0]["track"] *= 2
+    elif defect == "track-limit":
+        ascent["fans"][0]["track"] = [
+            {"t_offset_s": offset, "lat": 0, "lon": 0, "alt_km": 0} for offset in range(201)
+        ]
+    elif defect == "iss-plane-ascent":
+        item["direction"].update(kind="iss_plane", off_plane_deg=0)
+    elif defect == "empty-direction-source":
+        item["direction"]["source"] = ""
+    elif defect == "long-direction-source":
+        item["direction"]["source"] = "x" * 2049
+    else:
+        ascent["fans"][0]["azimuth_deg"] = None
+    with pytest.raises(ValueError):
+        _validate_catalog(_sign_catalog(catalog))
+
+
+def test_modeled_catalog_publishes_and_reads_back_with_frontend_parser(tmp_path) -> None:
+    catalog = _planner_catalog()
+    remote: dict[str, bytes] = {}
+
+    def upload(path, key, immutable):
+        remote[key] = path.read_bytes()
+
+    publish_launch_catalog(catalog, tmp_path, upload=upload)
+    pointer = json.loads(remote["launch/catalog/latest.json"])
+    path = tmp_path / pointer["path"]
+    assert json.loads(path.read_bytes()) == catalog
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == pointer["sha256"]
+    frontend = Path(__file__).resolve().parents[1] / "frontend"
+    bun = shutil.which("bun")
+    assert bun
+    script = """
+import { readFileSync } from 'node:fs';
+import { parseLaunchArtifact } from './src/launch-schema.ts';
+const artifact = parseLaunchArtifact(JSON.parse(readFileSync(process.argv[1], 'utf8')));
+console.log(JSON.stringify(artifact));
+"""
+    result = subprocess.run(  # noqa: S603
+        [bun, "-e", script, str(path)], cwd=frontend, check=True, capture_output=True, text=True,
+    )
+    assert json.loads(result.stdout) == catalog
 
 
 @pytest.fixture
@@ -501,7 +588,7 @@ def test_policy_upgrade_republishes_same_receipt_once_without_releasing_owner(se
     state = json.loads(state_path.read_bytes())
     assert state["remote"] == old_owner
     assert state["input"]["fetched_at"] == old_receipt
-    assert state["input"]["policy"] == 6
+    assert state["input"]["policy"] == 7
     assert len(calls) == 8
     assert run(now + timedelta(seconds=2))["reason"] == "UNCHANGED_INPUT"
     assert len(calls) == 8

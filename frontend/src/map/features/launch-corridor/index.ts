@@ -164,6 +164,29 @@ function paintHazardCaption(): void {
   node.hidden = !(getMapLaunchMode() && state.hazardFeatures.length > 0);
 }
 
+function paintAscentCaption(pin: TierLaunch | null): void {
+  const pane = document.getElementById('map-pane');
+  if (!pane) return;
+  let node = document.getElementById('launch-ascent-caption');
+  if (!node) {
+    node = document.createElement('p');
+    node.id = 'launch-ascent-caption';
+    node.className = 'launch-hazard-caption';
+    node.setAttribute('role', 'note');
+    node.style.maxHeight = '8rem';
+    node.style.overflow = 'auto';
+    node.style.pointerEvents = 'auto';
+    pane.append(node);
+  }
+  const ascent = pin?.ascent;
+  node.hidden = !getMapLaunchMode() || !pin || !ascent;
+  if (!pin || !ascent) return;
+  node.style.bottom = state.hazardFeatures.length ? 'calc(var(--map-command-height) + 5rem)' : 'calc(var(--map-command-height) + 12px)';
+  const qualification = ascent.grade === 'D' ? 'UNVERIFIED assumed site sector' : 'UNVERIFIED modeled ascent estimate';
+  const hasFan = ascent.fans.some((fan) => fan.track.length > 1 || fan.low_track.length > 1 || fan.high_track.length > 1 || (fan.low_track.length > 0 && fan.high_track.length > 0));
+  node.textContent = `${qualification} for ${pin.name}, grade ${ascent.grade}. ${hasFan ? "Only this launch's fans are shown." : 'No fan geometry is available.'} Source: ${ascent.source}`;
+}
+
 function hazardSignature(features: readonly GeoJSON.Feature[]): string {
   return features.map((feature) => {
     const ring = feature.geometry.type === 'Polygon' ? feature.geometry.coordinates[0] : undefined;
@@ -265,14 +288,18 @@ export function refreshAscentTrajectorySource(): void {
   const now = core.clock.now();
   const tiers = launchCatalog.read(now);
   const launchState: LaunchState = launchStore.getState();
+  if (tiers && !tiers.mapPins.some((pin) => pin.eventId === state.selectedEventId)) {
+    state.selectedEventId = null;
+  }
   const { lines, pads } = tiers
-    ? buildTierMapFeatures(tiers, now)
+    ? buildTierMapFeatures(tiers, now, state.selectedEventId)
     : launchState.artifact
       ? buildLaunchMapFeatures(launchState, now)
       : buildAscentFeatures(legacyPassesInHorizon(state.passes, now));
   core.setGeoJson('ascent-trajectory', { type: 'FeatureCollection', features: lines });
   core.setGeoJson('ascent-pad', { type: 'FeatureCollection', features: pads });
   syncLaunchHazards(now);
+  paintAscentCaption(tiers?.mapPins.find((pin) => pin.eventId === state.selectedEventId) ?? null);
 }
 
 /** Show the corridor and hide it when launch mode is off. */
@@ -288,6 +315,8 @@ export function applyAscentLaunchVisibility(): void {
       }
     }
     paintHazardCaption();
+    const tiers = launchCatalog.read(core.clock.now());
+    paintAscentCaption(tiers?.mapPins.find((pin) => pin.eventId === state.selectedEventId) ?? null);
   } catch {}
 }
 
@@ -559,6 +588,8 @@ export function bindAscentPad(host: MapCore): void {
       const tiers = typeof now === 'number' ? launchCatalog.read(now) : null;
       const found = props.catalog === 'tier' && tiers ? tiers.find(eventId) : null;
       if (found && tiers?.mapPins.some((pin) => pin.eventId === eventId)) {
+        state.selectedEventId = eventId;
+        refreshAscentTrajectorySource();
         openTierDetails(found);
         return;
       }
@@ -609,11 +640,16 @@ function tierFocusPoints(pin: TierLaunch): [number, number][] {
       }
     }
   }
-  if (!pin.corridor) return points;
-  let longitude = pin.site.lon;
-  for (const point of pin.corridor.points) {
-    longitude += wrapLon(point.lon - longitude);
-    points.push([longitude, point.lat]);
+  const tracks = [
+    ...(pin.corridor ? [pin.corridor.points] : []),
+    ...(pin.ascent?.fans.flatMap((fan) => [fan.track, fan.low_track, fan.high_track]) ?? []),
+  ];
+  for (const track of tracks) {
+    let longitude = pin.site.lon;
+    for (const point of track) {
+      longitude += wrapLon(point.lon - longitude);
+      points.push([longitude, point.lat]);
+    }
   }
   return points;
 }
@@ -635,6 +671,7 @@ export function focusLaunchOnMap(eventId: string): boolean {
     syncLaunchHazards(now);
     const hazard = eventId === STARSHIP_FLIGHT15_EVENT_ID && state.hazardFeatures.length > 0;
     fitLaunch(core, tierFocusPoints(pin), hazard);
+    if (core.hasSource('ascent-pad')) refreshAscentTrajectorySource();
     return true;
   }
   const selection = selectLaunches(launchStore.getState(), now, 'map')
@@ -678,6 +715,7 @@ export function resetLaunchForTest(): void {
   state.hazardFrameKey = '';
   state.hazardPopupContent = null;
   state.hazardPopupKeys = [];
+  document.getElementById('launch-ascent-caption')?.remove();
   publishHazardNotes([]);
 }
 

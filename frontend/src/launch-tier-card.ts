@@ -72,7 +72,7 @@ export function renderTierCard(launch: TierLaunch, onShowMap?: (eventId: string)
     show.type = 'button';
     show.className = 'btn';
     const areas = hazardNotesFor(launch.eventId).length > 0;
-    show.textContent = launch.corridor ? 'Show site and corridor' : areas ? 'Show published hazard areas' : 'Show launch site';
+    show.textContent = launch.corridor ? 'Show site and corridor' : launch.ascent?.grade === 'D' ? 'Show site and assumed sector' : launch.ascent ? 'Show site and modeled ascent' : areas ? 'Show published hazard areas' : 'Show launch site';
     show.addEventListener('click', () => onShowMap(launch.eventId));
     actions.append(show);
     card.append(actions);
@@ -158,7 +158,7 @@ export function openTierDetails(launch: TierLaunch): void {
       ? current.corridor.points.map((point) => `${point.lat.toFixed(2)}, ${point.lon.toFixed(2)}`).join(' → ')
       : note
         ? 'Published hazard areas \u2014 not a flight path or navigation guidance.'
-        : 'Pad only';
+        : current.ascent?.grade === 'D' ? 'UNVERIFIED assumed site sector. See the launch direction above.' : current.ascent ? 'Modeled ascent estimate. See the launch direction above.' : 'Pad only';
     content.append(why, planBlock(shotPlan(current), true), track);
     if (note) content.append(note);
   };

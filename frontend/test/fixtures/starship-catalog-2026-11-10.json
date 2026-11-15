@@ -54,6 +54,7 @@
       "tier": "watch",
       "why": "Night pad 1894 km left, W1, 8 min after liftoff.",
       "reasons": [
+        "ORBIT_UNKNOWN",
         "TLE_AGE_OVER_24H",
         "TRAJECTORY_UNVERIFIED"
       ],
@@ -119,7 +120,96 @@
           }
         }
       ],
-      "revision": "c04841d2073554724033af33"
+      "ascent": {
+        "grade": "D",
+        "source": "Assumed site sectors for Vandenberg: ((130, 201),). unverified: not checked against a primary document.",
+        "fans": [
+          {
+            "branch": null,
+            "azimuth_deg": null,
+            "low_deg": 130,
+            "high_deg": 201,
+            "track": [],
+            "low_track": [
+              {
+                "t_offset_s": 0,
+                "lat": 34.632,
+                "lon": -120.611,
+                "alt_km": 0
+              },
+              {
+                "t_offset_s": 120,
+                "lat": 34.45852,
+                "lon": -120.36062,
+                "alt_km": 45.0
+              },
+              {
+                "t_offset_s": 240,
+                "lat": 32.75609,
+                "lon": -117.99273,
+                "alt_km": 130.0
+              },
+              {
+                "t_offset_s": 360,
+                "lat": 30.14193,
+                "lon": -114.62998,
+                "alt_km": 158.0
+              },
+              {
+                "t_offset_s": 480,
+                "lat": 27.44655,
+                "lon": -111.44347,
+                "alt_km": 186.0
+              },
+              {
+                "t_offset_s": 540,
+                "lat": 26.07229,
+                "lon": -109.90928,
+                "alt_km": 200.0
+              }
+            ],
+            "high_track": [
+              {
+                "t_offset_s": 0,
+                "lat": 34.632,
+                "lon": -120.611,
+                "alt_km": 0
+              },
+              {
+                "t_offset_s": 120,
+                "lat": 34.38035,
+                "lon": -120.72802,
+                "alt_km": 45.0
+              },
+              {
+                "t_offset_s": 240,
+                "lat": 31.94226,
+                "lon": -121.82457,
+                "alt_km": 130.0
+              },
+              {
+                "t_offset_s": 360,
+                "lat": 28.29416,
+                "lon": -123.35506,
+                "alt_km": 158.0
+              },
+              {
+                "t_offset_s": 480,
+                "lat": 24.63014,
+                "lon": -124.78377,
+                "alt_km": 186.0
+              },
+              {
+                "t_offset_s": 540,
+                "lat": 22.79318,
+                "lon": -125.4664,
+                "alt_km": 200.0
+              }
+            ]
+          }
+        ]
+      },
+      "revision": "a48939f961223521ef96297d"
     },
     {
       "event_id": "0f867f0c-5422-4d44-93b8-d7faaae7019b",
@@ -148,13 +238,103 @@
       "tier": "watch",
       "why": "The ISS orbit is too old to confirm or rule out a view.",
       "reasons": [
+        "ORBIT_UNKNOWN",
         "TLE_AGE_OVER_24H",
         "TLE_AGE_OVER_48H",
         "TRAJECTORY_UNVERIFIED"
       ],
       "shots": [],
-      "revision": "ef57baeda973b070b49f3f9c"
+      "ascent": {
+        "grade": "D",
+        "source": "Assumed site sectors for Starbase: ((85, 105),). unverified: not checked against a primary document.",
+        "fans": [
+          {
+            "branch": null,
+            "azimuth_deg": null,
+            "low_deg": 85,
+            "high_deg": 105,
+            "track": [],
+            "low_track": [
+              {
+                "t_offset_s": 0,
+                "lat": 25.99677,
+                "lon": -97.15799,
+                "alt_km": 0
+              },
+              {
+                "t_offset_s": 120,
+                "lat": 26.03254,
+                "lon": -96.69357,
+                "alt_km": 43.474
+              },
+              {
+                "t_offset_s": 240,
+                "lat": 26.24013,
+                "lon": -93.45488,
+                "alt_km": 103.333
+              },
+              {
+                "t_offset_s": 360,
+                "lat": 26.41865,
+                "lon": -88.3672,
+                "alt_km": 146.744
+              },
+              {
+                "t_offset_s": 480,
+                "lat": 26.40687,
+                "lon": -82.76854,
+                "alt_km": 180.233
+              },
+              {
+                "t_offset_s": 515,
+                "lat": 26.36239,
+                "lon": -81.13686,
+                "alt_km": 190.0
+              }
+            ],
+            "high_track": [
+              {
+                "t_offset_s": 0,
+                "lat": 25.99677,
+                "lon": -97.15799,
+                "alt_km": 0
+              },
+              {
+                "t_offset_s": 120,
+                "lat": 25.88766,
+                "lon": -96.70823,
+                "alt_km": 43.474
+              },
+              {
+                "t_offset_s": 240,
+                "lat": 25.09059,
+                "lon": -93.60204,
+                "alt_km": 103.333
+              },
+              {
+                "t_offset_s": 360,
+                "lat": 23.71596,
+                "lon": -88.82367,
+                "alt_km": 146.744
+              },
+              {
+                "t_offset_s": 480,
+                "lat": 22.04053,
+                "lon": -83.694,
+                "alt_km": 180.233
+              },
+              {
+                "t_offset_s": 515,
+                "lat": 21.52173,
+                "lon": -82.22162,
+                "alt_km": 190.0
+              }
+            ]
+          }
+        ]
+      },
+      "revision": "3949ab34963ee536c008afb2"
     }
   ],
-  "revision": "7196a47982825f754493117e"
+  "revision": "6183d34269358bd4e4c2d66f"
 }

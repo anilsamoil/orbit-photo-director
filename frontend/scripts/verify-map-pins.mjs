@@ -333,8 +333,14 @@ const MUTATIONS = [
   {
     contract: 'a tier pin with no corridor draws no line',
     file: LAUNCH_CORRIDOR,
-    find: '    if (pin.corridor) lines.push(...antimeridianSegments(pin.corridor.points, properties));',
-    replace: '    lines.push(...antimeridianSegments(pin.corridor ? pin.corridor.points : [pin.site, pin.site], properties));',
+    find: "    if (pin.corridor && (pin.direction.kind !== 'modeled' || pin.eventId === selectedEventId)) {",
+    replace: "    lines.push(...antimeridianSegments([pin.site, pin.site], properties));\n    if (pin.corridor && (pin.direction.kind !== 'modeled' || pin.eventId === selectedEventId)) {",
+  },
+  {
+    contract: 'the selected modeled launch draws its fan',
+    file: LAUNCH_CORRIDOR,
+    find: '    if (pin.eventId !== selectedEventId || !pin.ascent) continue;',
+    replace: '    continue;',
   },
 ];
 
