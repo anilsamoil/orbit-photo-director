@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { isolateSnapRequests } from './context-state-fixture.mjs';
 import { launchWebkit } from './webkit-devices.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -113,14 +114,6 @@ function contextOptions(token) {
   };
 }
 
-function nasaHost(hostname) {
-  return hostname === 'nasa.gov' || hostname.endsWith('.nasa.gov');
-}
-
-function forbiddenHost(hostname) {
-  return hostname === 'map.astroanil.dev' || hostname === 'map.expedition75.com' || nasaHost(hostname);
-}
-
 const stamped = catalogBody();
 let hazardOverride = null;
 
@@ -137,12 +130,6 @@ async function arm(page) {
     Date.now = () => frozen;
     localStorage.setItem('opd-map-chrome', 'shown');
   }, WHEN);
-  await page.route('**/*', (route) => {
-    let hostname = '';
-    try { hostname = new URL(route.request().url()).hostname; } catch { return route.abort(); }
-    if (forbiddenHost(hostname)) return route.abort();
-    return route.fallback();
-  });
   await page.route('**/api/browser/session', (route) => jsonRoute(route, {
     ok: true,
     profile: { name: 'anil', displayName: 'Anil' },
@@ -477,6 +464,7 @@ async function gesture(page, kind) {
 }
 
 const browser = await launchWebkit();
+isolateSnapRequests(browser, origin);
 try {
   const context = await browser.newContext(contextOptions(size));
   const page = await context.newPage();

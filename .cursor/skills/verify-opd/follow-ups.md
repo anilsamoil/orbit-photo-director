@@ -37,3 +37,21 @@ Recorded after #346 (`74ce5a5`).
 `_glm_granule_urls` GETs each hour prefix once (`list-type=2`) and reads `<Key>` until the body ends. It does not read `IsTruncated` or `NextContinuationToken`, and it does not send `continuation-token`. A truncated page is treated as the full hour. This skill does not fetch NOAA.
 
 Recorded after #346 (`74ce5a5`).
+
+## Product gap: the ascent caption sits under the launch card (401)
+
+`#launch-ascent-caption` is painted at the bottom of `#map-pane`. On iPad and desktop it sits under `#map-launch-coverage`. `launch-planner.mjs` measures that overlap (`caption-under-card` and `overlap WxH`) and does not fail the drive. A pass of the seven sizes measured no overlap at 402 by 874, 304 by 114 at 874 by 402, 1024 by 768, 1180 by 820, 834 by 1210, and 1440 by 900, and 298 by 114 at 768 by 1024. Follow-up 401. A maintain run does not change the product layout.
+
+Recorded after #368 (`174d761`).
+
+## Deferred: LP1 does not verify a flight trajectory (402)
+
+`TODOS.md` P2: verify the inclination and site tables against primary documents, calibrate modeled early-ascent tracks, sample heading uncertainty, and model coast, insertion, and deployment. LP1 adds conditional T+600 estimates and minute liftoff scans. It does not verify a flight trajectory. Follow-up 402. This skill does not treat those gaps as a failed drive.
+
+Recorded after #368 (`174d761`).
+
+## Harness gap: six stale satellite anchors
+
+`frontend/scripts/verify-map-pins.mjs` has six anchors whose source lines are gone from `frontend/src/satellites.ts`. The mutator prints `STALE` and skips them: `one failed feed among empty ones is a failed lookup for a published vehicle`, `an element set older than the publisher limit is never drawn`, `the last good element set is dropped once it passes the publisher limit`, `the map never asks CelesTrak for a published vehicle on its own`, `the newest element set wins`, and `a publisher element set past its age limit is not drawn`. Any other `STALE` or `UNPINNED` line is a real failure. This skill does not edit that script.
+
+Recorded after #368 (`174d761`).
