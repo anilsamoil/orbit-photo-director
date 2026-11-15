@@ -66,6 +66,20 @@ export interface ShotEnvelope {
   confidence: { tle_age_h: number; along_track_sigma_km: number; timing_sigma_s: number; robust: boolean };
 }
 
+export interface LaunchAscent {
+  grade: 'A' | 'B' | 'C' | 'D';
+  source: string;
+  fans: {
+    branch: 'northbound' | 'southbound' | 'east' | null;
+    azimuth_deg: number | null;
+    low_deg: number;
+    high_deg: number;
+    track: ShotEnvelope['track'];
+    low_track: ShotEnvelope['track'];
+    high_track: ShotEnvelope['track'];
+  }[];
+}
+
 export interface LaunchCatalogItem {
   event_id: string; revision: string; name: string; rocket: string;
   site: { name: string; lat: number; lon: number; pad?: string | null };
@@ -74,12 +88,13 @@ export interface LaunchCatalogItem {
     precision: string | null; status: string; destination: string | null;
   };
   direction: {
-    kind: 'published' | 'iss_plane' | 'hazard_area' | 'none';
+    kind: 'published' | 'iss_plane' | 'hazard_area' | 'modeled' | 'none';
     azimuth_deg: number | null; source: string | null; off_plane_deg: number | null;
   };
   tier: 'shot' | 'likely' | 'watch' | 'unassessed' | 'none';
   why: string; reasons: string[];
   shots: ShotEnvelope[];
+  ascent?: LaunchAscent;
 }
 
 export interface LaunchCatalog {
@@ -101,7 +116,7 @@ const ASSESSMENT_REASONS = new Set([
   'EVALUATION_INCOMPLETE', 'GEOMETRY_INVALID',
 ]);
 const CATALOG_TIERS = new Set(['shot', 'likely', 'watch', 'unassessed', 'none']);
-const DIRECTION_KINDS = new Set(['published', 'iss_plane', 'hazard_area', 'none']);
+const DIRECTION_KINDS = new Set(['published', 'iss_plane', 'hazard_area', 'modeled', 'none']);
 const SHOT_LIGHTS = new Set(['twilight_plume', 'day_plume', 'night_engine', 'pad_day', 'pad_night']);
 const SCORE_TERMS = ['A', 'C', 'D', 'M', 'R'] as const;
 
@@ -357,7 +372,7 @@ function parseSchema3(value: unknown): LaunchCatalog {
   requireValue(Array.isArray(obj.items) && obj.items.length <= 2000);
   const ids = new Set<string>();
   for (const entry of obj.items) {
-    const item = record(entry, 'event_id revision name rocket site schedule direction tier why reasons shots');
+    const item = record(entry, 'event_id revision name rocket site schedule direction tier why reasons shots', 'ascent');
     requireValue(string(item.event_id) && !ids.has(item.event_id));
     ids.add(item.event_id);
     requireValue(revision(item.revision) && string(item.name) && string(item.rocket) && string(item.why));
@@ -381,6 +396,27 @@ function parseSchema3(value: unknown): LaunchCatalog {
       if (direction.kind === 'iss_plane') requireValue(number(direction.off_plane_deg, -180, 180));
       else requireValue(direction.off_plane_deg === null);
     }
+    let fanAzimuths: unknown[] = [];
+    if (Object.hasOwn(item, 'ascent')) {
+      const ascent = record(item.ascent, 'grade source fans');
+      requireValue(typeof ascent.grade === 'string' && ['A', 'B', 'C', 'D'].includes(ascent.grade)
+        && string(ascent.source) && ascent.source.trim().length > 0);
+      requireValue((ascent.grade === 'D') === (direction.kind === 'none') && direction.kind !== 'iss_plane');
+      if (direction.kind === 'modeled') requireValue(ascent.grade === 'B' || ascent.grade === 'C');
+      requireValue(Array.isArray(ascent.fans) && ascent.fans.length >= 1 && ascent.fans.length <= 2);
+      for (const fanValue of ascent.fans) {
+        const fan = record(fanValue, 'branch azimuth_deg low_deg high_deg track low_track high_track');
+        requireValue(fan.branch === null || (typeof fan.branch === 'string' && ['northbound', 'southbound', 'east'].includes(fan.branch)));
+        requireValue((fan.azimuth_deg === null || number(fan.azimuth_deg, 0, 360))
+          && number(fan.low_deg, 0, 360) && number(fan.high_deg, 0, 360));
+        trackPoints(fan.track, 200);
+        trackPoints(fan.low_track, 200);
+        trackPoints(fan.high_track, 200);
+        if (ascent.grade === 'D') requireValue(fan.azimuth_deg === null && Array.isArray(fan.track) && fan.track.length === 0);
+        fanAzimuths.push(fan.azimuth_deg);
+      }
+      if (direction.kind === 'modeled') requireValue(fanAzimuths.includes(direction.azimuth_deg));
+    }
     requireValue(typeof item.tier === 'string' && CATALOG_TIERS.has(item.tier));
     strings(item.reasons);
     requireValue(Array.isArray(item.shots) && item.shots.length <= 1000);
@@ -392,9 +428,11 @@ function parseSchema3(value: unknown): LaunchCatalog {
       const hasEvaluated = Object.hasOwn(shot, 'evaluated_at');
       const hasDirection = Object.hasOwn(shot, 'direction');
       requireValue(hasEvaluated === hasDirection);
+      if (shot.subject === 'ascent' && direction.kind === 'modeled') requireValue(hasDirection);
       if (hasEvaluated) {
         timestamp(shot.evaluated_at);
         const shotDirection = record(shot.direction, 'kind azimuth_deg source off_plane_deg');
+        if (shot.subject === 'ascent' && direction.kind === 'modeled') requireValue(shotDirection.kind === 'modeled');
         requireValue(typeof shotDirection.kind === 'string' && DIRECTION_KINDS.has(shotDirection.kind));
         if (shotDirection.kind === 'none') {
           requireValue(shotDirection.azimuth_deg === null && shotDirection.source === null && shotDirection.off_plane_deg === null);
@@ -403,6 +441,7 @@ function parseSchema3(value: unknown): LaunchCatalog {
           requireValue(number(shotDirection.azimuth_deg, 0, 360) && string(shotDirection.source));
           if (shotDirection.kind === 'iss_plane') requireValue(number(shotDirection.off_plane_deg, -180, 180));
           else requireValue(shotDirection.off_plane_deg === null);
+          if (shotDirection.kind === 'modeled') requireValue(fanAzimuths.includes(shotDirection.azimuth_deg));
         }
       }
       ordered(shot.start, shot.best);
@@ -416,16 +455,9 @@ function parseSchema3(value: unknown): LaunchCatalog {
       requireValue(shot.plume_mrad === null || number(shot.plume_mrad, 0, 1000));
       requireValue(typeof shot.light === 'string' && SHOT_LIGHTS.has(shot.light));
       requireValue((shot.lens === 'telephoto' || shot.lens === 'wide') && string(shot.lens_reason));
-      requireValue(Array.isArray(shot.track) && shot.track.length <= 10000);
+      trackPoints(shot.track, 10000);
+      requireValue(Array.isArray(shot.track));
       if (shot.subject === 'pad') requireValue(shot.track.length === 0);
-      let previous = -Infinity;
-      for (const pointValue of shot.track) {
-        const point = record(pointValue, 't_offset_s lat lon alt_km');
-        coordinates(point);
-        requireValue(number(point.alt_km, 0, 100000) && number(point.t_offset_s, -86400, 1e7));
-        requireValue(point.t_offset_s > previous);
-        previous = point.t_offset_s;
-      }
       const score = record(shot.score, 'low high terms');
       requireValue(number(score.low, 0, 100) && number(score.high, 0, 100) && score.low <= score.high);
       const terms = record(score.terms, 'A C D M R');
@@ -436,6 +468,17 @@ function parseSchema3(value: unknown): LaunchCatalog {
     }
   }
   return value as LaunchCatalog;
+}
+function trackPoints(value: unknown, limit: number): void {
+  requireValue(Array.isArray(value) && value.length <= limit);
+  let previous = -Infinity;
+  for (const pointValue of value) {
+    const point = record(pointValue, 't_offset_s lat lon alt_km');
+    coordinates(point);
+    requireValue(number(point.alt_km, 0, 100000) && number(point.t_offset_s, -86400, 1e7));
+    requireValue(point.t_offset_s > previous);
+    previous = point.t_offset_s;
+  }
 }
 function unitPair(value: unknown): void {
   requireValue(Array.isArray(value) && value.length === 2);

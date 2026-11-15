@@ -5,12 +5,13 @@ import type { IssRenderer } from '../src/iss-view/renderer';
 import type { SceneSnapshot } from '../src/iss-view/model';
 import type { Track } from '../src/types';
 import { launchCatalog } from '../src/launch-catalog';
-import type { LaunchCatalogItem, ShotEnvelope } from '../src/launch-schema';
+import { parseLaunchArtifact, type LaunchCatalogItem, type ShotEnvelope } from '../src/launch-schema';
 import { shotPlan } from '../src/launch-shot-plan';
 import { openTierDetails, renderTierCard } from '../src/launch-tier-card';
 import { tiersAt, type TierCatalog, type TierLaunch } from '../src/launch-tiers';
-import { catalog, catalogItem, shot } from './launch-fixtures';
+import { catalog, catalogItem, plannerCases, plannerFan, plannerItem, shot } from './launch-fixtures';
 import fixtureRaw from './fixtures/iss-sgp4-fixture.json' with { type: 'json' };
+import plannerRaw from './fixtures/launch-planner-catalog.json' with { type: 'json' };
 
 const fixture = fixtureRaw as {
   tle: { line1: string; line2: string };
@@ -110,6 +111,59 @@ function launchOf(entry: LaunchCatalogItem): TierLaunch {
   if (!launch) throw new Error('launch is not listed');
   return launch;
 }
+
+describe('modeled launch plans', () => {
+  it('prints the generated negative, unknown fans and positive camera facts', () => {
+    const parsed = parseLaunchArtifact(plannerRaw);
+    if (parsed.schema_version !== 3) throw new Error('expected generated catalog');
+    const tiers = tiersAt(parsed, Date.parse(parsed.generated_at) + 60_000);
+    const amazon = tiers?.all.find((launch) => launch.name.includes('Amazon Leo (LV-01)'));
+    const positive = tiers?.find('fixture-positive');
+    const unknown = tiers?.find('fixture-starbase');
+    if (!amazon || !positive || !unknown) throw new Error('missing generated launch');
+    expect(shotPlan(amazon).direction.text).toContain('Modeled, grade C.');
+    expect(shotPlan(amazon).direction.text).toContain('42.4°');
+    expect(shotPlan(amazon).direction.text).toContain('450 km deployment only');
+    expect(shotPlan(amazon).direction.text).toContain('other Amazon Leo shells use different inclinations');
+    expect(shotPlan(amazon).verdict).toContain('21 liftoff minutes sampled');
+    expect(shotPlan(amazon).envelopes).toHaveLength(0);
+    expect(shotPlan(unknown).direction.text).toContain('85° to 105°');
+    expect(shotPlan(unknown).direction.text).toContain('unverified: not checked against a primary document');
+    const ascent = shotPlan(positive).envelopes.find((envelope) => envelope.subject === 'ascent');
+    expect(ascent?.facts.map((fact) => fact.label)).toEqual(['Best time', 'Shootable', 'Stand and look', 'Lens', 'Light', 'How sure']);
+    expect(ascent?.title).toContain('Modeled azimuth 42.4°');
+    expect(ascent?.facts.at(-1)?.text).toMatch(/Direction grade C\.$/);
+  });
+  it('names every branch and grades the actual modeled ascent envelope', () => {
+    const source = 'Two candidate branches, not a published trajectory';
+    const direction = { kind: 'modeled' as const, azimuth_deg: 42.4, source, off_plane_deg: null };
+    const entry = item({
+      ...plannerItem(), schedule: item({}).schedule, direction, tier: 'likely',
+      ascent: { grade: 'C', source, fans: [plannerFan(), plannerFan({ branch: 'southbound', azimuth_deg: 137.2, low_deg: 132.2, high_deg: 142.2 })] },
+      shots: [ascent({ direction })],
+    });
+    const plan = shotPlan(launchOf(entry));
+    expect(plan.direction.text).toContain('Modeled, grade C.');
+    expect(plan.direction.text).toContain('northbound branch, selected scenario, azimuth 42.4°, fan 37.4° to 47.4°');
+    expect(plan.direction.text).toContain('southbound branch, azimuth 137.2°, fan 132.2° to 142.2°');
+    expect(plan.direction.text).toContain('actual heading is unverified');
+    expect(plan.direction.text).toContain(source);
+    expect(plan.envelopes[0]?.title).toContain('Modeled azimuth 42.4°');
+    expect(plan.envelopes[0]?.facts.find((fact) => fact.label === 'How sure')?.text).toMatch(/Direction grade C\.$/);
+  });
+
+  it('shows unknown orbits as unverified assumed site sectors and plans only the pad', () => {
+    const unknown = plannerCases().find((entry) => entry.event_id === 'starbase');
+    if (!unknown) throw new Error('missing unknown case');
+    const plan = shotPlan(launchOf(item({ ...unknown, schedule: item({}).schedule, shots: [pad()] })));
+    expect(plan.direction.text).toContain('Orbit not published. UNVERIFIED assumed site sector');
+    expect(plan.direction.text).toContain('70° to 110°');
+    expect(plan.direction.text).toContain('UNVERIFIED assumed Starbase sector');
+    expect(plan.direction.text).not.toContain('every heading');
+    expect(plan.envelopes.map((entry) => entry.subject)).toEqual(['pad']);
+    expect(plan.envelopes[0]?.facts.find((fact) => fact.label === 'How sure')?.text).not.toContain('Direction grade');
+  });
+});
 
 /** What a person reads in the shot plan, one line per printed row. */
 function planLines(root: ParentNode): string[] {

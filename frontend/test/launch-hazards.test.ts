@@ -31,6 +31,7 @@ import {
   noteLaunchCore,
   reloadLaunchHazards,
   resetLaunchForTest,
+  refreshAscentTrajectorySource,
   syncLaunchHazards,
   syncMapLaunchMode,
   useHazardBundleForTest,
@@ -41,6 +42,7 @@ import type { TierCatalog } from '../src/launch-tiers';
 import type { VendorDouble } from './vendor-map-double';
 import { createVendorDouble } from './vendor-map-double';
 import capturedCatalog from './fixtures/starship-catalog-2026-11-10.json' with { type: 'json' };
+import { catalog, NOW, plannerItem } from './launch-fixtures';
 
 const ROOT = resolve(__dirname, '..');
 const HAZARD_FILE = resolve(ROOT, 'public/hazards/v1/0f867f0c-5422-4d44-93b8-d7faaae7019b.json');
@@ -322,6 +324,7 @@ const STARSHIP_PIN: TierLaunch = {
     status: 'TBC',
   },
   direction: { kind: 'none' },
+  ascent: null,
   shots: [],
   top: null,
   corridor: null,
@@ -461,6 +464,24 @@ describe('Starship Flight 15 hazard notices', () => {
 });
 
 describe('hazard overlay on the map', () => {
+  it('preserves published hazards until the photographer explicitly selects a modeled launch', () => {
+    const projected = tiersAt(catalog([plannerItem()]), NOW);
+    const modeled = projected?.mapPins[0];
+    if (!projected || !modeled) throw new Error('missing modeled pin');
+    vi.spyOn(launchCatalog, 'read').mockReturnValue({ ...projected, mapPins: [modeled, STARSHIP_PIN] });
+    vi.spyOn(launchCatalog, 'attempt').mockReturnValue(ATTEMPT);
+    const { vendor } = mount();
+    setMapLaunchMode(true);
+    syncLaunchHazards(NOV13 + 5 * 60_000);
+    expect(painted(vendor)).toHaveLength(3);
+    refreshAscentTrajectorySource();
+    expect(painted(vendor)).toHaveLength(3);
+    expect(focusLaunchOnMap(modeled.eventId)).toBe(true);
+    expect(painted(vendor)).toHaveLength(0);
+    expect(focusLaunchOnMap(STARSHIP_FLIGHT15_EVENT_ID)).toBe(true);
+    expect(painted(vendor)).toHaveLength(3);
+  });
+
   it('paints closed polygons inside the window and none between windows', () => {
     vi.spyOn(launchCatalog, 'read').mockReturnValue({
       mapPins: [{ eventId: STARSHIP_FLIGHT15_EVENT_ID }],
