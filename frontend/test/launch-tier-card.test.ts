@@ -4,7 +4,7 @@ import { launchCatalog } from '../src/launch-catalog';
 import { openTierDetails, renderTierCard } from '../src/launch-tier-card';
 import { tiersAt, type TierLaunch } from '../src/launch-tiers';
 import type { LaunchCatalog, LaunchCatalogItem } from '../src/launch-schema';
-import { catalog, catalogItem, iso, NOW, plannerItem, shot } from './launch-fixtures';
+import { catalog, catalogItem, iso, NOW, plannerCases, plannerFan, plannerItem, shot } from './launch-fixtures';
 
 beforeEach(() => {
   document.body.replaceChildren();
@@ -27,6 +27,12 @@ function shotItem(over: Partial<LaunchCatalogItem> = {}): LaunchCatalogItem {
 function pin(item: LaunchCatalogItem, over: Partial<LaunchCatalog> = {}): TierLaunch {
   const launch = tiersAt(catalog([item], over), NOW)?.pins[0];
   if (!launch) throw new Error('missing pin');
+  return launch;
+}
+
+function mapPin(item: LaunchCatalogItem): TierLaunch {
+  const launch = tiersAt(catalog([item]), NOW)?.find(item.event_id);
+  if (!launch) throw new Error('missing map pin');
   return launch;
 }
 
@@ -81,6 +87,40 @@ function details(): HTMLDialogElement {
 }
 
 describe('tier schedule lines', () => {
+  it.each([
+    ['modeled ascent', plannerItem(), 'Show site and modeled ascent', 'Hide modeled ascent'],
+    ['assumed sector', plannerCases().find((entry) => entry.event_id === 'starbase')!, 'Show site and assumed sector', 'Hide assumed sector'],
+    ['modeled corridor', plannerItem({ shots: [shot({ subject: 'ascent', track: plannerFan().track })] }), 'Show site and corridor', 'Hide modeled ascent'],
+  ] as const)('renders a native click toggle for %s', (_kind, item, showLabel, hideLabel) => {
+    let selected: string | null = null;
+    const launch = mapPin(item);
+    const action = (eventId: string): void => { selected = selected === eventId ? null : eventId; };
+    const card = renderTierCard(launch, action, (eventId) => selected === eventId);
+    const button = card.querySelector<HTMLButtonElement>('.launch-brief-actions button')!;
+    expect(button.type).toBe('button');
+    expect(button.textContent).toBe(showLabel);
+    expect(button.getAttribute('aria-pressed')).toBe('false');
+    button.click();
+    expect(selected).toBe(launch.eventId);
+    expect(button.textContent).toBe(hideLabel);
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    const reopened = renderTierCard(launch, action, (eventId) => selected === eventId);
+    const reopenedButton = reopened.querySelector<HTMLButtonElement>('.launch-brief-actions button')!;
+    expect(reopenedButton.textContent).toBe(hideLabel);
+    expect(reopenedButton.getAttribute('aria-pressed')).toBe('true');
+    reopenedButton.click();
+    expect(selected).toBeNull();
+    expect(reopenedButton.textContent).toBe(showLabel);
+    expect(reopenedButton.getAttribute('aria-pressed')).toBe('false');
+  });
+  it('keeps the sourced corridor and site-only actions show-only', () => {
+    for (const launch of [mapPin(catalogItem()), { ...mapPin(plannerItem()), ascent: null, corridor: null }]) {
+      const card = renderTierCard(launch, vi.fn(), () => true);
+      const button = card.querySelector<HTMLButtonElement>('.launch-brief-actions button')!;
+      expect(button.textContent).toBe(launch.corridor ? 'Show site and corridor' : 'Show launch site');
+      expect(button.hasAttribute('aria-pressed')).toBe(false);
+    }
+  });
   it('offers the modeled fan on the map and shows its grade and source', () => {
     const entry = plannerItem({ tier: 'likely', shots: [shot()] });
     const showMap = vi.fn();

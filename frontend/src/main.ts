@@ -63,7 +63,7 @@ import { launchStore } from './launch-store';
 import { isLaunchPass, legacyLaunchInHorizon, queueSlots, selectLaunches } from './launch-selectors';
 import { renderLaunchCard, renderLaunchCoverage } from './launch-card';
 import { renderTierCard } from './launch-tier-card';
-import { renderMapLaunchBrief } from './launch-map-brief';
+import { collapseMapLaunchBrief, renderMapLaunchBrief } from './launch-map-brief';
 import { getMapLaunchMode, launchCardBuried, setMapLaunchMode, subscribeMapLaunchMode } from './map-launch-mode';
 import {
   MAP_IMPORT_URL_KEY,
@@ -575,7 +575,7 @@ function renderQueue(): void {
         if (primary) primary.open = true;
       }
       notice.hidden = hidden;
-      renderMapLaunchBrief(notice, launches, now, showLaunchOnMap);
+      renderMapLaunchBrief(notice, launches, now, showLaunchOnMap, isLaunchShownOnMap);
       resizeVisibleMap();
     }
     else renderLaunchCoverage(notice, launches, now, 'upcoming');
@@ -719,7 +719,7 @@ function renderUpcoming(nowMs: number, stale: boolean): void {
   const hidden = currentProfile?.removedCuratedIds ?? [];
   const tiers = launchCatalog.read(nowMs);
   if (tiers) {
-    const launchCards = tiers.upcoming.map((launch) => renderTierCard(launch, showLaunchOnMap));
+    const launchCards = tiers.upcoming.map((launch) => renderTierCard(launch, showLaunchOnMap, isLaunchShownOnMap));
     const visible = applyTargetFilter(
       filterPassesByDistance(
         upcomingPasses(filterRemovedCurated(currentTop24h.filter((p) => !isLaunchPass(p)), hidden), nowMs),
@@ -1711,9 +1711,21 @@ function showLaunchOnMap(eventId: string): void {
     ? tiers.mapPins.some((pin) => pin.eventId === eventId)
     : selectLaunches(launchStore.getState(), now, 'map').some(({ item }) => item.event_id === eventId);
   if (!listed) return;
+  if (mapModule?.clearLaunchOnMap(eventId)) {
+    pendingLaunchFocus = null;
+    const brief = document.getElementById('map-launch-coverage');
+    if (brief) collapseMapLaunchBrief(brief);
+    return;
+  }
   setMapLaunchMode(true);
   pendingLaunchFocus = eventId;
   document.getElementById('tab-map')?.click();
+  const brief = document.getElementById('map-launch-coverage');
+  if (brief) collapseMapLaunchBrief(brief);
+}
+
+function isLaunchShownOnMap(eventId: string): boolean {
+  return mapModule?.isLaunchShownOnMap(eventId) ?? false;
 }
 
 function currentMapLoad(generation: number): boolean {

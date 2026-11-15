@@ -24,6 +24,7 @@ import { createMapCore } from '../src/map/map-core/core';
 import {
   bindAscentPad,
   bindLaunchStore,
+  clearLaunchOnMap,
   focusLaunchOnMap,
   onHazardCatalogRefresh,
   launchHazardFillLayer,
@@ -464,6 +465,29 @@ describe('Starship Flight 15 hazard notices', () => {
 });
 
 describe('hazard overlay on the map', () => {
+  it('keeps published hazards and cancels delayed framing when a modeled selection clears', () => {
+    const projected = tiersAt(catalog([plannerItem()]), NOW);
+    if (!projected) throw new Error('missing modeled catalog');
+    const modeled = { ...STARSHIP_PIN, ascent: plannerItem().ascent ?? null };
+    vi.spyOn(launchCatalog, 'read').mockReturnValue({ ...projected, mapPins: [modeled] });
+    vi.spyOn(launchCatalog, 'attempt').mockReturnValue(ATTEMPT);
+    const { vendor, core } = mount();
+    document.body.innerHTML = '<div id="map-pane"></div><p id="launch-hazard-caption"></p>';
+    bindAscentPad(core);
+    refreshAscentTrajectorySource();
+    setMapLaunchMode(true);
+    expect(focusLaunchOnMap(STARSHIP_FLIGHT15_EVENT_ID)).toBe(true);
+    expect(painted(vendor)).toHaveLength(3);
+    expect(clearLaunchOnMap(STARSHIP_FLIGHT15_EVENT_ID)).toBe(true);
+    expect(painted(vendor)).toHaveLength(3);
+    expect(document.getElementById('launch-hazard-caption')?.hidden).toBe(false);
+    expect(document.getElementById('launch-ascent-caption')?.hidden).toBe(true);
+    const fits = vendor.cameraCalls.filter((call) => call.method === 'fitBounds').length;
+    core.setBearing(42);
+    vendor.fire('moveend', undefined);
+    syncLaunchHazards(NOV13 + 5 * 60_000);
+    expect(vendor.cameraCalls.filter((call) => call.method === 'fitBounds')).toHaveLength(fits);
+  });
   it('preserves published hazards until the photographer explicitly selects a modeled launch', () => {
     const projected = tiersAt(catalog([plannerItem()]), NOW);
     const modeled = projected?.mapPins[0];
@@ -1092,6 +1116,27 @@ describe('hazard notice facts', () => {
     expect(noteText).toContain('SFC-UNL');
     expect(noteText).toContain('international waters');
     expect(brief.querySelector('[data-hazard-note] a')?.textContent).toMatch(/^https:\/\//);
+  });
+
+  it('keeps the latest map action and pressed state through a hazard redraw', () => {
+    const modeled = { ...STARSHIP_PIN, ascent: plannerItem().ascent ?? null };
+    vi.spyOn(launchCatalog, 'read').mockReturnValue({ highlights: [], mapPins: [modeled] } as unknown as TierCatalog);
+    vi.spyOn(launchCatalog, 'attempt').mockReturnValue(ATTEMPT);
+    const brief = document.createElement('div');
+    document.body.append(brief);
+    const previous = vi.fn();
+    const current = vi.fn();
+    renderMapLaunchBrief(brief, { artifact: null, availability: 'ready' } as never, NOV13, previous, () => false);
+    renderMapLaunchBrief(brief, { artifact: null, availability: 'ready' } as never, NOV13, current, () => true);
+    mount();
+    setMapLaunchMode(true);
+    syncLaunchHazards(NOV13 + 5 * 60_000);
+    const button = brief.querySelector<HTMLButtonElement>('.launch-brief-actions button')!;
+    expect(button.textContent).toBe('Hide modeled ascent');
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    button.click();
+    expect(current).toHaveBeenCalledWith(STARSHIP_FLIGHT15_EVENT_ID);
+    expect(previous).not.toHaveBeenCalled();
   });
 });
 

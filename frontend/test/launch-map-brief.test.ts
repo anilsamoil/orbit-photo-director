@@ -1,13 +1,53 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderMapLaunchBrief } from '../src/launch-map-brief';
+import { launchCatalog } from '../src/launch-catalog';
+import { tiersAt } from '../src/launch-tiers';
 import { _setFollowEnvForTest, applyFollowISS, focusLaunchOnMap } from '../src/map';
 import { launchStore } from '../src/launch-store';
 import { getMapLaunchMode, setMapLaunchMode } from '../src/map-launch-mode';
-import { assessment, iso, launch, NOW, state, supported } from './launch-fixtures';
+import { assessment, catalog, iso, launch, NOW, plannerItem, state, supported } from './launch-fixtures';
 
 afterEach(() => { vi.restoreAllMocks(); localStorage.removeItem('opd-map-launch-brief-open'); _setFollowEnvForTest(null, false); document.body.replaceChildren(); });
 
 describe('map launch brief', () => {
+  it('closes Other launches and keeps its connected summary focused through refresh', () => {
+    const tiers = tiersAt(catalog([plannerItem(), plannerItem({ event_id: 'z-other' })]), NOW);
+    vi.spyOn(launchCatalog, 'read').mockReturnValue(tiers);
+    const box = document.createElement('div');
+    document.body.append(box);
+    const show = vi.fn((): void => renderMapLaunchBrief(box, state(), NOW, show));
+    renderMapLaunchBrief(box, state(), NOW, show);
+    const more = box.querySelector<HTMLDetailsElement>('.map-launch-more')!;
+    more.open = true;
+    const button = more.querySelector<HTMLButtonElement>('.launch-brief-actions button')!;
+    button.focus();
+    button.click();
+    expect(show).toHaveBeenCalledWith('z-other');
+    const current = box.querySelector<HTMLDetailsElement>('.map-launch-more')!;
+    expect(current.open).toBe(false);
+    expect(document.activeElement).toBe(current.querySelector('summary'));
+    expect(document.activeElement?.isConnected).toBe(true);
+  });
+  it('closes the modeled ascent card and retains summary focus through an immediate refresh', () => {
+    const tiers = tiersAt(catalog([plannerItem()]), NOW);
+    vi.spyOn(launchCatalog, 'read').mockReturnValue(tiers);
+    const box = document.createElement('div');
+    document.body.append(box);
+    const show = vi.fn((): void => renderMapLaunchBrief(box, state(), NOW, show));
+    renderMapLaunchBrief(box, state(), NOW, show);
+    const primary = box.querySelector<HTMLDetailsElement>('.map-launch-primary')!;
+    primary.open = true;
+    const button = primary.querySelector<HTMLButtonElement>('.launch-brief-actions button')!;
+    expect(button.type).toBe('button');
+    button.focus();
+    button.click();
+    expect(show).toHaveBeenCalledWith('vulcan');
+    const current = box.querySelector<HTMLDetailsElement>('.map-launch-primary')!;
+    expect(current.open).toBe(false);
+    expect(localStorage.getItem('opd-map-launch-brief-open')).toBe('0');
+    expect(document.activeElement).toBe(current.querySelector('summary'));
+    expect(document.activeElement?.isConnected).toBe(true);
+  });
   it('leads with the next launch and keeps other launches collapsed across refresh', () => {
     const box = document.createElement('div');
     document.body.append(box);

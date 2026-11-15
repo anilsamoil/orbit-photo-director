@@ -133,7 +133,9 @@ export type { TargetHit, TargetPopupProps } from './features/targets';
 export {
   buildAscentFeatures,
   buildLaunchMapFeatures,
+  clearLaunchOnMap,
   focusLaunchOnMap,
+  isLaunchShownOnMap,
   syncMapLaunchMode as _syncMapLaunchModeForTest,
 } from './features/launch-corridor';
 export {
