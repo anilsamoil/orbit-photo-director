@@ -1568,7 +1568,12 @@ def _uscg_areas(description: str, *, strict: bool) -> tuple[list[Area], list[str
         if strict:
             raise NoticeError("USCG_ROW")
         areas = []
-    if strict and (shared.unreadable or len({draft.area_id for draft in drafts}) != len(drafts)):
+    if strict and (
+        shared.unreadable or len({draft.area_id for draft in drafts}) != len(drafts)
+        or not _consecutive_area_labels([
+            draft.area_id for draft in drafts if len(draft.area_id) == 1
+        ])
+    ):
         raise NoticeError("USCG_ROW")
     return areas, list(dict.fromkeys(problems))
 
