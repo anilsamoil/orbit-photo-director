@@ -24,6 +24,8 @@ Check whether the membership is active at developer.apple.com/account. If not, e
 **Why:** signing and TestFlight need it. Approval can take a day or more, so it is the longest wait in the plan.
 **Send back:** "active" or "enrolled on" and the date.
 
+**Done 2026-11-16:** the membership is active.
+
 ## 3. The app record and the key
 
 In App Store Connect:
@@ -39,7 +41,7 @@ Then on GitHub, in the repository's Settings, Environments: create an environmen
 
 ## 4. A ground tester
 
-Name one person on Earth with an iPhone or iPad who can spend ten minutes on a checklist before a build goes to orbit. Add them as a TestFlight tester.
+Name one person on Earth with an iPhone or iPad who can spend ten minutes on a checklist before a build goes to orbit. Add them in App Store Connect as a user on your team and an internal TestFlight tester: internal testers get builds with no Beta App Review, which W-03 needs.
 
 **Why:** nobody can attach a cable to the iPad in orbit. A build that fails on the ground costs minutes. One that fails in orbit costs days.
 
@@ -47,7 +49,7 @@ Name one person on Earth with an iPhone or iPad who can spend ten minutes on a c
 
 ## 4a. Approval for the managed devices
 
-Ask the agency's device managers to approve SNAP for the iPad and the iPhone in orbit. The agents prepare an approval packet with W-71: what the app does, every server it contacts, what it stores, the one permission it asks for (notifications), and that it has no tracking and no third-party analytics.
+Once the app is in the App Store, ask NASA to approve SNAP and install it on the iPad and the iPhone in orbit. The agents prepare an approval packet with W-71: what the app does, every server it contacts, what it stores, the one permission it asks for (notifications), and that it has no tracking and no third-party analytics.
 
 Ask them one question early: do they want SNAP as an unlisted App Store app that they approve, or as a custom app sent to the agency's Apple Business Manager, which their device management then installs? Both go through App Review. The second lets them push the app and its updates themselves.
 
@@ -73,7 +75,7 @@ When the organizer reports that the device-access design passed its review:
 ## 7. Decisions to send back when convenient
 
 - Alert defaults: how many minutes before a target, which targets (all, yours, launches), and a sleep window with no alerts.
-- Esri map layers: keep them as the website does today, viewed tiles cached briefly and never bundled (the plan's default), or ask Esri about offline rights.
+- Esri map layers: keep exactly the tiles the website keeps today, never bundled (the plan's default), or ask Esri about offline rights.
 - When crewmates get the app. The plan's default is after fourteen days of your own use with no lockout and no lost log.
 
 ## 8. Each release

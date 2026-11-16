@@ -34,7 +34,7 @@ Use these words and no synonyms.
 | bridge | How the `ios` side of the seam calls native code. Hidden behind the seam. |
 | plan | One published version: `manifest.json` and the artifacts it names. Same as today. |
 | installed plan | A plan the device has downloaded, verified and stored. |
-| extended queue | Passes the device computes past the published horizon. Geometry and lighting only. |
+| extended queue | Passes the device computes from now to seven days ahead, replaced by published scored passes where they exist. Geometry and lighting only. |
 | alert plan | The list of alerts the web side hands to native code. |
 | outbox | The durable list of writes not yet acknowledged by the server. |
 | baseline pack | The map tiles shipped inside the app. |
@@ -135,11 +135,11 @@ The web side keeps polling `/manifest.json` every 60 seconds. On the `ios` host 
 | `baseline` | In the baseline pack. Deeper zooms go to the tile store. | Blue Marble, Black Marble 2016, Natural Earth lines and labels |
 | `durable` | Kept on disk after fetch, inside a size budget | GIBS daily true colour (latest two days), SNAP forecast cloud frames |
 | `session` | Kept briefly | Geostationary IR, RealEarth Meteosat |
-| `viewed` | Kept as viewed in a bounded cache that matches the website's service worker today: up to 100 tiles for 7 days. Never bundled, never bulk-fetched. | Esri imagery, Esri dark grey, Esri reference labels |
+| `website` | Fetched and kept exactly as the website's service worker does today: the world view at zoom 0 to 3 once a session, kept 30 days; dark grey at zoom 6, 8 and 10 near the top three targets after each new plan; viewed tiles up to 100 for 7 days. Never bundled. | Esri imagery, Esri dark grey, Esri reference labels |
 
 The gateway answers in this order: baseline pack, tile store, network. A miss with no network returns nothing and the map overzooms the baseline. The baseline sits under the online layers in the map style, so a missing Esri tile shows Earth, not black.
 
-Prefetch stays as modest as today: the world view of the dated layers once a day, and one tile per zoom near the top three targets after each new plan.
+Prefetch matches the website exactly: the world view of the switchable layers once a session, and one tile per zoom at 6, 8 and 10 near the top three targets after each new plan. `frontend/src/tile-precache.ts` builds those URLs through `host.tileUrl`, so in the app they go to the gateway and are stored; the app has no service worker to store them otherwise.
 
 ## Native parts
 
@@ -163,7 +163,7 @@ The published plan covers little time. The Queue artifact holds the top 5 passes
 
 `frontend/src/plan-extend/` computes passes on the device from now to seven days ahead, from the published target list, the personal targets and the newest orbit data. It propagates the orbit once into a shared ephemeris and tests every target against it, using the generator's 800 km distance limit (`generator/config.py:56`). The dropped-pin finder in `frontend/src/pin-drop.ts` propagates per pin with a 1,500 km limit and is too slow for this; only its geometry helpers are reused, with the sun and terminator math. It fills geometry, lighting regime and a score from regime fit, distance from nadir and priority, the same three formulas as `generator/score.py`. It fills no cloud number.
 
-A published scored pass replaces the device pass for the same target and time. Each remaining device pass is marked `provenance: 'device'` and shown merged by time with published passes, tagged "geometry only". A device pass from orbit data more than 48 hours old is marked approximate; W-12's accuracy check may move that threshold. A script in the repository runs the Python pass finder on a fixed orbit and target set and writes reference vectors. The TypeScript tests must match them inside the generator's own sampling step. That is what keeps the two from drifting.
+A published scored pass replaces the device pass for the same target when their closest approaches are within five minutes. Queue shows up to five passes in the next 90 minutes, published picks first by score, then device passes by time. Each remaining device pass is marked `provenance: 'device'` and shown merged by time with published passes, tagged "geometry only". A device pass is marked approximate when its closest-approach time minus the epoch of the orbit data used exceeds 48 hours, and the mark is recomputed when newer orbit data is installed; W-12's accuracy check may move that threshold. A script in the repository runs the Python pass finder on a fixed orbit and target set and writes reference vectors. The TypeScript tests must match them inside the generator's own sampling step. That is what keeps the two from drifting.
 
 ## Alerts
 
@@ -200,6 +200,7 @@ App                 system sign-in sheet        Cloudflare Access       Worker
 - `/d/*` gets an Access bypass application, as `/api/profiles` has today. The Worker is the only gate on that path, so it fails closed: no token, an unknown token or a revoked token is a 401 with no body detail.
 - A device token carries the account that enrolled it. The Worker resolves that account to the same profile and granted profiles as it does for the website (`worker/src/browser-identity.ts`), and `/d/*` acts inside them and no further.
 - A token does not expire. It is revoked per device, by the owner, through a route behind Access.
+- Every `/d/*` request carries the app's build number, and the owner's device list shows each device's last build. W-63 uses it to know which builds are still in use.
 - Bearer-token requests carry no cookie, so the same-origin write rule that guards the website does not apply to `/d/*`. The design note for work package W-20 states that reasoning for the security review.
 - Reading the installed plan never needs a valid token. A rejected token shows a clear state and keeps every stored byte.
 

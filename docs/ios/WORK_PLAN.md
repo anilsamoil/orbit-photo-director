@@ -30,14 +30,14 @@ A gate is a point where work stops until something is shown. The organizer recor
 
 | Gate | Shown by | Passes when | If it fails |
 | --- | --- | --- | --- |
-| G0 Accounts | Owner | The developer membership is active, the app record exists, the API key is in the `ios-release` environment, a ground tester is named | Unsigned work continues. Nothing ships. |
+| G0 Accounts | Owner | The developer membership is active (done 2026-11-16), the app record exists, the API key is in the `ios-release` environment, the ground tester is an internal tester in App Store Connect | Unsigned work continues. Nothing ships. |
 | G1 Host proof | W-02 on a simulator, then W-03 on a ground device | Every check in W-02 passes on a simulator, then on a signed build on a ground device; the host choice is recorded. W-11, W-32 and W-41 may start after the simulator half, at risk. | Try the other host. If neither can draw Map and ISS view from a local origin, stop and tell the owner: the fallback is hardening the website. |
 | G2 Offline acceptance | W-72, on the hosted workflow | Cold-launch offline; Earth draws; the ISS prediction moves; a target remains usable; an alert appears while locked; a recorded shot survives restart and uploads once. Then a new build installed over the previous one keeps the credential, the plan, the outbox, the kept tiles and the settings, and the queued entries upload once. | Fix before any signed release build |
-| G3 Ground device | Ground tester, checklist from W-72 | The same lines, on a real iPhone or iPad on Earth matching the orbit devices' OS version and device class, from a TestFlight install | Fix before the build goes to orbit |
-| G7 Device approval | Owner, with W-71's approval packet | The agency's device management approves SNAP for the iPad and the iPhone in orbit | The website remains the tool. Answer what the device managers ask. |
+| G3 Ground device | Ground tester, checklist from W-72 | The same lines, from a TestFlight install, on a real device on Earth matching the orbit iPad first: iOS or iPadOS 26 and, if possible, an iPad. The iPhone is covered by the iOS 26 simulator, plus an iPhone on iOS 26 if the tester has one. With no matching device, the closest one plus the exact simulator runtime stand in, and the gap goes into `STATUS.md`. | Fix before the build goes to orbit |
+| G7 Device approval | Owner, with W-71's approval packet, once the app is in the App Store | NASA approves SNAP and installs it on the iPad and the iPhone in orbit | The website remains the tool. Answer what the device managers ask. |
 | G4 Orbit | Owner, ten-minute checklist from W-72 | Needs G6 and G7. Install from the unlisted App Store link (or the device managers' push), enroll, one LOS period, one alert, one logged shot | The website remains the tool. Fix and resend. |
-| G5 Crew | Owner | Fourteen days of the owner's use with no lockout and no lost log | Hold the crew group |
-| G6 No-expiry route | W-71 | The unlisted App Store listing is approved and installed | Keep the 45-day refresh schedule |
+| G5 Crew | Owner | Fourteen days of the owner's use with no lockout and no lost log | Hold the crew rollout |
+| G6 No-expiry route | W-71, then the ground tester | The unlisted App Store listing is approved; the ground tester installs the App Store build over the TestFlight build, state carries over, and no expiry date shows | Fix the named reason and resubmit. Apple declining unlisted distribution: use a public listing. |
 
 ### Testing without the iPad in orbit
 
@@ -51,7 +51,7 @@ On 2026-11-16 the App Store on the iPad in orbit refused TestFlight, while other
 
 The orbit devices (an 11-inch iPad Pro with M4 on iPadOS 26.6.2 and an iPhone 17 Pro on iOS 26.6.1) are managed: every app needs approval from the agency's device management (gate G7). The owner is seeking that approval.
 
-1. The unlisted App Store listing (W-71), approved by the device managers. Builds do not expire. Each build goes through App Review, which takes days, so orbit fixes are slower than with TestFlight.
+1. The unlisted App Store listing (W-71). Once the app is in the App Store, the owner asks NASA to approve it and install it on the devices. Builds do not expire. Each build goes through App Review, which takes days, so orbit fixes are slower than with TestFlight.
 2. A custom app sent to the agency's Apple Business Manager, if the device managers prefer to install the app and its updates through their own device management. Also goes through App Review.
 3. TestFlight: the device managers will not approve it. Ground tester only.
 4. Ad hoc install over the air (W-74). Also needs the device managers' approval, so it is a last resort. The iPad's device identifier is registered in the developer account, the build is signed for the registered devices, and the iPad installs it by tapping a link in Safari. It needs neither TestFlight nor the App Store. The signing lasts up to a year, so it also avoids the 90-day lapse. It does not work if device management on that iPad forbids installing apps.
@@ -73,7 +73,7 @@ G0       W-03 (needs W-02, G0): signed host proof on a ground device, second hal
 Wave 1   W-11 (needs W-10, W-02)   W-12 (needs W-10)   W-32 (needs W-30, W-31, W-02)   W-41 (needs W-40, W-11)
          W-21 (needs W-20, owner)   W-60 (needs W-21, W-32)   W-63 (needs W-30, W-10)
 Wave 2   W-33   W-42   W-50   W-61   W-62          then W-72 (G2)
-Wave 3   W-70 (needs G0, G2)   G3   W-71 (needs G2, submits in parallel with G3)   G6   G7 (owner, can run from Wave 1)   G4   W-74 (needs G0, W-01)   W-73 (G5)
+Wave 3   W-70 (needs G0, G2)   G3   W-71 (needs G2, submits in parallel with G3)   G6   G7 (owner, after G6)   G4   W-74 (needs G0, W-01)   W-73 (G5)
 Later    W-80 and up, each with a measured reason
 ```
 
@@ -114,21 +114,21 @@ Sizes are agent effort: S is under a day, M is one to three days, L is more.
 - **Done when:** the build reached TestFlight from a workflow run with only the owner's approval; the ground tester's results for all ten checks are in `G1-HOST-PROOF.md`, with the device model and OS version. This also proves signing, upload and install before any feature depends on them.
 
 ### W-10 Web host seam, browser side (M)
-- **Change:** add `frontend/src/host/` with the interface in ARCHITECTURE.md and `browser.ts`. Move every same-origin `fetch` to `host.request` (21 non-test files call `fetch`; classify each call as same-origin or other-origin first). Move the snapshot and the calibration queue storage behind `host.snapshot` and `host.outbox`. Add `routes.json` and `tile-layers.json`, and build the map sources through `host.tileUrl`.
+- **Change:** add `frontend/src/host/` with the interface in ARCHITECTURE.md and `browser.ts`. Move every same-origin `fetch` to `host.request` (21 non-test files call `fetch`; classify each call as same-origin or other-origin first). Move the snapshot and the calibration queue storage behind `host.snapshot` and `host.outbox`. Add `routes.json` and `tile-layers.json`, and build the map sources and the prefetch URLs in `frontend/src/tile-precache.ts` through `host.tileUrl`.
 - **Tests first:** a contract test that records every same-origin request (URL, method, headers, cache mode, body) for manifest, artifacts, log post and read, session, target routes, kp, aurora, wx, cloud, launch pointer and catalog, hazards, lightning and the probe. It is green on the old code and committed before anything moves. This is the rule in `AGENTS.md` for moving a capability.
 - **Done when:** that contract test is still green; the new boundary tests fail on a planted violation (bare same-origin `fetch`, unclassified path, tile template outside the catalogue, `host.kind` read outside the seam); the three frontend checks are green; `drive all` in verify-opd is green.
 - **Traps:** `main.ts` and `map/index.ts` are outside coverage, so the contract test is their only guard. `src/map/` allows no comments and no module-level `let`.
 
 ### W-11 Web host seam, iOS side (M)
-- **Needs:** W-10, G1.
+- **Needs:** W-10, W-02. At risk until W-03 passes.
 - **Change:** `ios.ts` over the bridge. A Vite mode `ios` that builds to `frontend/dist-ios` with no service worker, no PWA manifest and no `registerSW.js`. The tier 2 storage mirror. The `/api/app` recovery link and the install hints are hidden when `identity.v1` is present.
 - **Done when:** unit tests drive `ios.ts` against a fake bridge for every route class; the `ios` build runs in the W-01 app on the fixture plan; switching profile from the profile menu reloads the shell inside the app; the browser build's behaviour is unchanged (W-10's contract test).
 
 ### W-12 Extended queue on the device (M)
 - **Needs:** W-10.
 - **Change:** `frontend/src/plan-extend/`, a pure module that runs in a Web Worker: passes for the published and personal targets from now to seven days out, with geometry, lighting regime and the three non-cloud score factors. It propagates the orbit once into a shared ephemeris and tests every target against it; the dropped-pin finder propagates per pin and is too slow for this. A published scored pass replaces the device pass for the same target and time. Entries carry `provenance: 'device'`; Queue and Upcoming show them merged by time with published passes, tagged "geometry only", with no cloud number. A device pass from orbit data more than 48 hours old is marked approximate. A script writes reference vectors from the Python pass finder for a fixed orbit and target set; use the generator's 800 km distance limit (`generator/config.py:56`), not the pin finder's 1,500 km.
-- **Accuracy check:** predict passes from an element set several days old and compare them with passes from the newest set, over a period that includes a reboost. Record the closest-approach timing error against a limit of 60 seconds, and set the "approximate" threshold from the result.
-- **Done when:** the TypeScript results match the reference vectors inside the generator's sampling step; the accuracy check is recorded in `DECISIONS.md` with its threshold; computation time is measured on the slowest orbit device class (or the closest ground device) and stays under two seconds for the real target count; the feature is on for the `ios` host and off for the `browser` host behind one flag; with the flag off the website renders exactly as before; between 90 minutes and seven days after the last sync, Queue is not empty while any target has a pass in the next 90 minutes.
+- **Accuracy check:** predict passes from an element set seven days old and compare them with passes from the newest set, over a period that includes a reboost. Record the closest-approach timing error against a limit of 60 seconds, and set the "approximate" threshold from the result.
+- **Done when:** the TypeScript results match the reference vectors inside the generator's sampling step; the accuracy check is recorded in `DECISIONS.md` with its threshold; computation time is measured on the closest ground device to the orbit iPad and the bar is set from that measurement, using a coarser time step with refinement near each closest approach if the ephemeris alone is too slow; a pass is marked approximate when its closest-approach time minus the epoch of the orbit data used exceeds the threshold, and the mark is recomputed when newer orbit data is installed; the feature is on for the `ios` host and off for the `browser` host behind one flag; with the flag off the website renders exactly as before; between 90 minutes and seven days after the last sync, Queue is not empty while any target has a pass in the next 90 minutes.
 - **Traps:** pass times start from the wall clock, not the scrubbed map time. Do not import from `src/map/`.
 
 ### W-20 Device access in the Worker (L, security-sensitive)
@@ -136,7 +136,7 @@ Sizes are agent effort: S is under a day, M is one to three days, L is more.
   1. `docs/ios/DEVICE-ACCESS.md`: the threat model, the enrollment sequence, token storage, revocation, rate limits, and why the same-origin write rule does not apply to bearer-token requests. Compare it with the service-token fallback in ARCHITECTURE.md and pick one.
   2. A security review of that note before any code.
   3. `worker/src/device-auth.ts` and its routing: `/api/device/enroll` (behind Access), `/d/enroll`, `/d/*` for the plan, published data and the API, and an owner-only list and revoke route behind Access.
-  4. Log dedupe that does not depend on the month the request arrives. Today the object key is `log/<arrival yyyymm>/<dedupe key>` (`worker/src/index.ts:285-291`), so a retry after a month change writes a second record. Key on something fixed by the entry, such as the month of `pass_time`, or check the previous month's key before writing. Existing records stay readable.
+  4. Log dedupe that does not depend on the month the request arrives. Today the object key is `log/<arrival yyyymm>/<dedupe key>` (`worker/src/index.ts:285-291`), so a retry after a month change writes a second record. Keep the arrival-month keys, so every existing reader of `log/` still finds new entries, and check the previous month's key before writing. Existing records stay readable.
 - **Tests, in the style of `worker/test/access-gate.test.ts`:** a code is single use; a code expires at five minutes; a wrong verifier fails; an unknown or revoked token is 401 with no detail; a token cannot read or write a profile its account is not granted; `/d/session` returns the same shape as `/api/browser/session`; `/d/*` cannot reach a human-only route; the daily rate limit holds; a log entry first stored on the last day of a month and retried on the first day of the next is stored once; the existing Worker suite stays green.
 - **Done when:** the review signs off and the tests are green. Nothing is deployed in this package.
 
@@ -154,7 +154,7 @@ Sizes are agent effort: S is under a day, M is one to three days, L is more.
 - **Done when:** an entry survives a process stop at any point after `enqueue` returns; a lost response plus a retry yields one server record in the fake transport; a rejected entry moves to a kept "rejected" folder and is counted in diagnostics; nothing is dropped for space.
 
 ### W-32 Native transport and bridge (M)
-- **Needs:** W-30, W-31, G1.
+- **Needs:** W-30, W-31, W-02. At risk until W-03 passes.
 - **Change:** `OPDHost` implements `request` by route class from `routes.json`, the events, the snapshot read and the outbox calls.
 - **Done when:** a simulator test loads the frontend on a fixture plan with the network off and Queue, Upcoming, Map and ISS view render; a path missing from `routes.json` returns 404 and writes a diagnostics entry.
 
@@ -169,7 +169,7 @@ Sizes are agent effort: S is under a day, M is one to three days, L is more.
 
 ### W-41 Tile gateway (M)
 - **Needs:** W-40, W-11.
-- **Done when:** the lookup order is baseline, tile store, network; a unit test proves the network is not touched when local bytes exist; the baseline is never evicted; the size budget holds under a fill test; the per-plan prefetch matches today's budget of one tile per zoom for the top three targets.
+- **Done when:** the lookup order is baseline, tile store, network; a unit test proves the network is not touched when local bytes exist; the baseline is never evicted; the size budget holds under a fill test; the app fetches exactly the tiles the website prefetches today (world view of the switchable layers once a session, dark grey and GIBS at zoom 6, 8 and 10 near the top three targets after each new plan) and the gateway stores them under each layer's policy.
 
 ### W-42 The map with no network (S)
 - **Needs:** W-41.
@@ -192,7 +192,7 @@ Sizes are agent effort: S is under a day, M is one to three days, L is more.
 
 ### W-63 Old builds keep working (S)
 - **Needs:** W-30, W-10.
-- **Change:** each release stores its contract fixtures: the artifact fields and `/d/*` responses that build requires. A test under `tests/` (not `generator/`) and one in `worker/test/` check current generator output and Worker responses against the fixtures of every build that can still be installed.
+- **Change:** each release stores its contract fixtures: the artifact fields and `/d/*` responses that build requires. A test under `tests/` (not `generator/`) and one in `worker/test/` check current generator output and Worker responses against the fixtures of every build still in use: every build released to orbit or to a tester, until every enrolled device has reported a newer build. The app sends its build number on `/d/*` requests and the owner's device list shows it.
 - **Done when:** removing a required field from a fixture's source makes CI fail with the build and the field named; the app shows "update needed" when SyncEngine refuses a plan.
 
 ### W-70 Signed build and TestFlight for the ground tester (M)
@@ -211,12 +211,12 @@ Sizes are agent effort: S is under a day, M is one to three days, L is more.
 
 ### W-73 Crew rollout (S)
 - **Needs:** G5.
-- **Done when:** an external TestFlight group exists; a one-page enrollment guide for crew exists; the device list and the revoke steps are in the runbook.
+- **Done when:** crewmates have the App Store link and NASA's approval for their devices; a one-page enrollment guide for crew exists; the device list and the revoke steps are in the runbook.
 
 ### W-74 Delivery without TestFlight (M)
 - **Needs:** G0, W-01.
 - **Change:** a release job that signs an ad hoc build for the devices registered in the developer account; an install page with the over-the-air manifest, served over HTTPS behind the map's existing sign-in; and the simplest way for the owner to hand over the iPad's device identifier with no Mac and no cable, written as owner steps.
-- **Done when:** a ground device installs the build by tapping the link in Safari, and the page names the build and its signing expiry date.
+- **Done when:** a ground device installs the build by tapping the link in Safari, and the page names the build and its signing expiry date. An ad hoc build shows that date in the app with the same banner and alert as a TestFlight build; the app detects it by its embedded provisioning profile.
 - **Traps:** no certificate, profile or private key in the repository or in a log. A device identifier is personal data: it goes into the developer account, not into git.
 
 ### Later, not scheduled
