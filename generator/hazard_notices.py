@@ -330,6 +330,8 @@ _OTHER_WARNING = re.compile(
     rf"|DEPTHS LESS THAN CHARTED: (?:[A-Z]\. \d+(?:\.\d+)? METERS IN {_OTHER_POINT}\. ?)+"
     rf"|(?:(?:\d+(?:\.\d+)? METER )?SHOAL|UNCHARTED REEF|DANGEROUS WRECK) "
     rf"(?:REPORTED )?IN {_OTHER_POINT}\."
+    rf"|(?:SCIENTIFIC )?MOORINGS?, AT DEPTH \d+(?:\.\d+)? METERS?, "
+    rf"(?:TEMPORARILY )?ESTABLISHED IN(?:: (?:[A-Z]\. {_OTHER_POINT}\. ?)+| {_OTHER_POINT}\.)"
     rf"|VESSEL (?:JUST POUR LE FUN )?AGROUND(?: IN {_OTHER_POINT}\.|\. "
     rf"NAVIGATION PROHIBITED IN AREA BOUND BY {_OTHER_PATH}\.{_OTHER_BERTH})"
     rf"|NAVAREA (?:IV|XII) WARNINGS IN FORCE AS OF \d{{6}}Z {_MON}\. "
@@ -551,11 +553,21 @@ def _other_broadcast_warning(body: _BroadcastBody) -> bool:
         components = [body.preamble]
     for index, component in enumerate(components):
         operative = " ".join(_after_broadcast_geography(component).upper().split())
-        if not (
-            _OTHER_WARNING.fullmatch(operative)
-            or _NAVIGATION_WARNING.fullmatch(operative)
-            or index and _OTHER_ADMIN.fullmatch(operative)
-        ):
+        consumed = False
+        while operative:
+            match = (
+                _OTHER_WARNING.fullmatch(operative)
+                or _NAVIGATION_WARNING.fullmatch(operative)
+                or _OTHER_WARNING.match(operative)
+                or _NAVIGATION_WARNING.match(operative)
+            )
+            if match is None and (index or consumed):
+                match = _OTHER_ADMIN.fullmatch(operative) or _OTHER_ADMIN.match(operative)
+            if not match:
+                return False
+            operative = operative[match.end():].lstrip()
+            consumed = True
+        if not consumed:
             return False
     return True
 
@@ -1515,30 +1527,42 @@ _FAA_RECOVERY_NAME = re.compile(
     r"(?P<vehicle>[A-Z0-9 |/-]+)"
 )
 _FAA_NARRATIVE_POINT = re.compile(r"(\d{2})(\d{2})(\d{2})([NS])(\d{3})(\d{2})(\d{2})([EW])")
-_FAA_SPACE_NARRATIVE = re.compile(
-    r"!FDC (?P<number>\d/\d{4}) [A-Z]{3} [A-Z]{2}\.\.AIRSPACE "
-    r"(?:STARBASE, TX|CAPE CANAVERAL, FL)\.\.TEMPORARY FLIGHT RESTRICTIONS\. "
-    r"PURSUANT TO 14 CFR SECTION 91\.143, SPACE (?:OPS|LAUNCH VEHICLE REENTRY) AREA, "
-    r"ACFT OPS ARE PROHIBITED WI AN AREA DEFINED AS "
-    r"(?P<coordinates>(?:\d{6}[NS]\d{7}[EW](?: \([A-Z]{3}\d+(?:\.\d+)?\))? TO ){3,})"
-    r"POINT OF ORIGIN (?P<altitude>SFC-(?:UNL|FL\d{3}|\d+FT (?:AGL|MSL))) "
-    r"EFFECTIVE (?P<start>\d{10}) UTC \(\d{4} LOCAL \d{2}/\d{2}/\d{2}\) "
-    r"UNTIL (?P<end>\d{10}) UTC \(\d{4} LOCAL \d{2}/\d{2}/\d{2}\)\. "
-    r"(?:SPACE OPS AREA: ACFT OPS ARE PROHIBITIED\. EXCLUDING AIRSPACE OVER "
-    r"INTERNATIONAL WATERS\. UAS OPR WHO DO NOT COMPLY WITH APPLICABLE AIRSPACE "
+_FAA_LOCATION = r"[A-Z0-9][A-Z0-9 .'()/-]*, [A-Z]{2}"
+_FAA_COORDINATION = (
+    r"(?:THE )?[A-Z][A-Z .'-]* /[A-Z0-9]{3}/ ARTCC,? TEL "
+    r"(?:[0-9]|\([0-9]{3}\))[0-9 ()-]*[0-9],? IS THE (?:FAA )?CDN FAC\."
+)
+_FAA_MARITIME_LIMIT = (
+    r"EXCLUDING AIRSPACE (?:OVER|BEYOND 12(?:NM| MILE) COASTAL LIMIT OVER) "
+    r"INTERNATIONAL WATERS\. "
+)
+_FAA_AIRSPACE = r"(?:PORTIONS OF )?[RW]\d{3,4}[A-Z]?"
+_FAA_AIRSPACE_STATUS = (
+    rf"THIS AREA ENCOMPASSES {_FAA_AIRSPACE}(?:(?:, |,? AND ){_FAA_AIRSPACE})*\. "
+    r"ADDITIONAL WARNING AND RESTRICTED AREAS WILL BE ACT\. PILOTS MUST CONSULT "
+    r"ALL NOTAMS REGARDING THESE OPS AND MAY CTC [A-Z]{3} FOR CURRENT AIRSPACE STATUS\. "
+)
+_FAA_UAS_WARNING = (
+    r"UAS OPR WHO DO NOT COMPLY WITH APPLICABLE AIRSPACE "
     r"RESTRICTIONS ARE WARNED THAT PURSUANT TO 10 U\.S\.C\.SECTION 130I AND 6 "
     r"U\.S\.C\.SECTION 124N, THE DEPARTMENT OF DEFENSE \(DOD\), THE DEPARTMENT OF "
     r"HOMELAND SECURITY \(DHS\) OR THE DEPARTMENT OF JUSTICE \(DOJ\) MAY TAKE "
     r"SECURITY ACTION THAT RESULTS IN THE INTERFERENCE, DISRUPTION, SEIZURE, "
     r"DAMAGING, OR DESTRUCTION OF UNMANNED ACFT DEEMED TO POSE A CREDIBLE SAFETY "
     r"OR SECURITY THREAT TO PROTECTED PERSONNEL, FAC, OR ASSETS\. "
-    r"(?:THE )?HOUSTON /ZHU/ ARTCC, TEL [\d-]+, IS THE (?:FAA )?CDN FAC\.|"
-    r"EXCLUDING AIRSPACE BEYOND 12NM COASTAL LIMIT OVER INTERNATIONAL WATERS\. "
-    r"THIS AREA ENCOMPASSES R2932, R2933 AND PORTIONS OF R2934 AND W497A\. "
-    r"ADDITIONAL WARNING AND RESTRICTED AREAS WILL BE ACT\. PILOTS MUST CONSULT "
-    r"ALL NOTAMS REGARDING THESE OPS AND MAY CTC ZMA FOR CURRENT AIRSPACE STATUS\. "
-    r"MIAMI /ZMA/ ARTCC TEL [\d-]+ IS THE FAA CDN FAC\.) "
-    r"(?P<closing_start>\d{10})-(?P<closing_end>\d{10})"
+)
+_FAA_SPACE_NARRATIVE = re.compile(
+    r"!FDC (?P<number>\d/\d{4}) [A-Z]{3} [A-Z]{2}\.\.AIRSPACE "
+    rf"{_FAA_LOCATION}\.\.TEMPORARY FLIGHT RESTRICTIONS\. "
+    r"PURSUANT TO 14 CFR SECTION 91\.143, SPACE (?:OPS|LAUNCH VEHICLE REENTRY) AREA, "
+    r"ACFT OPS ARE PROHIBITED WI AN AREA DEFINED AS "
+    r"(?P<coordinates>(?:\d{6}[NS]\d{7}[EW](?: \([A-Z]{3}\d+(?:\.\d+)?\))? TO ){3,})"
+    r"POINT OF ORIGIN (?P<altitude>SFC-(?:UNL|FL\d{3}|\d+FT (?:AGL|MSL))) "
+    r"EFFECTIVE (?P<start>\d{10}) UTC \(\d{4} LOCAL \d{2}/\d{2}/\d{2}\) "
+    r"UNTIL (?P<end>\d{10}) UTC \(\d{4} LOCAL \d{2}/\d{2}/\d{2}\)\. "
+    r"(?:SPACE OPS AREA: ACFT OPS ARE PROHIBIT(?:IED|ED)\. )?"
+    rf"(?:{_FAA_MARITIME_LIMIT})?(?:{_FAA_UAS_WARNING}|{_FAA_AIRSPACE_STATUS})?"
+    rf"{_FAA_COORDINATION} (?P<closing_start>\d{{10}})-(?P<closing_end>\d{{10}})"
 )
 _FAA_NARRATIVE = re.compile(r"EFFECTIVE (\d{10}) UTC .*?UNTIL (\d{10}) UTC")
 _FAA_ALTITUDE = re.compile(r"POINT OF ORIGIN (SFC-(?:UNL|FL\d{3}|\d+FT (?:AGL|MSL)))\b")
@@ -1640,7 +1664,7 @@ def _faa_ring_signature(ring: tuple[Position, ...]) -> tuple[tuple[int, int], ..
 
 
 def parse_faa_tfr(body: bytes, source_url: str) -> Notice:
-    """Decode XNOTAM with one completely supported space-operation narrative frame.
+    """Decode XNOTAM with a complete space-operation restriction and readable metadata.
 
     Its primary identity, whole polygon, and both UTC period representations must
     agree with the XML. Unsupported narrative remains diagnostic, never confirmation.

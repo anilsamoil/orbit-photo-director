@@ -1,0 +1,51 @@
+<?xml version='1.0' encoding='utf-8'?>
+<XNOTAM-Update version="0.1" origin="synthetic-regression">
+  <Group>
+    <Add>
+      <Not>
+        <NotUid>
+          <dateIndexYear>2026</dateIndexYear>
+          <noSeqNo>7992</noSeqNo>
+          <txtLocalName>261113 WALLOPS ISLAND Launch Vehicle</txtLocalName>
+        </NotUid>
+        <codeFacility>ZDC</codeFacility>
+        <txtNameCoordFacility>WASHINGTON</txtNameCoordFacility>
+        <TfrNot>
+          <codeType>91.143</codeType>
+          <TFRAreaGroup>
+            <aseTFRArea>
+              <txtName>Area A</txtName>
+              <ScheduleGroup>
+                <dateEffective>2026-11-13T22:30:00</dateEffective>
+                <dateExpire>2026-11-14T00:40:00</dateExpire>
+              </ScheduleGroup>
+            </aseTFRArea>
+            <abdMergedArea>
+              <Avx>
+                <codeType>GRC</codeType>
+                <geoLat>38.0N</geoLat>
+                <geoLong>75.5W</geoLong>
+              </Avx>
+              <Avx>
+                <codeType>GRC</codeType>
+                <geoLat>38.0N</geoLat>
+                <geoLong>75.0W</geoLong>
+              </Avx>
+              <Avx>
+                <codeType>GRC</codeType>
+                <geoLat>37.5N</geoLat>
+                <geoLong>75.0W</geoLong>
+              </Avx>
+              <Avx>
+                <codeType>GRC</codeType>
+                <geoLat>37.5N</geoLat>
+                <geoLong>75.5W</geoLong>
+              </Avx>
+            </abdMergedArea>
+          </TFRAreaGroup>
+        </TfrNot>
+        <txtDescrUSNS>!FDC 6/7992 ZDC VA..AIRSPACE WALLOPS ISLAND, VA..TEMPORARY FLIGHT RESTRICTIONS. PURSUANT TO 14 CFR SECTION 91.143, SPACE OPS AREA, ACFT OPS ARE PROHIBITED WI AN AREA DEFINED AS 380000N0753000W TO 380000N0750000W TO 373000N0750000W TO 373000N0753000W TO POINT OF ORIGIN SFC-UNL EFFECTIVE 2611132230 UTC (1730 LOCAL 11/13/26) UNTIL 2611140040 UTC (1940 LOCAL 11/13/26). THE WASHINGTON /ZDC/ ARTCC, TEL 703-555-0100, IS THE FAA CDN FAC. 2611132230-2611140040</txtDescrUSNS>
+      </Not>
+    </Add>
+  </Group>
+</XNOTAM-Update>
