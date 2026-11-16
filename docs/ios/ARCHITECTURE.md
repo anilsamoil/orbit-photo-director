@@ -135,7 +135,7 @@ The web side keeps polling `/manifest.json` every 60 seconds. On the `ios` host 
 | `baseline` | In the baseline pack. Deeper zooms go to the tile store. | Blue Marble, Black Marble 2016, Natural Earth lines and labels |
 | `durable` | Kept on disk after fetch, inside a size budget | GIBS daily true colour (latest two days), SNAP forecast cloud frames |
 | `session` | Kept briefly | Geostationary IR, RealEarth Meteosat |
-| `network` | Fetched as viewed with ordinary HTTP caching. Never bundled, never bulk-fetched. | Esri imagery, Esri dark grey, Esri reference labels |
+| `viewed` | Kept as viewed in a bounded cache that matches the website's service worker today: up to 100 tiles for 7 days. Never bundled, never bulk-fetched. | Esri imagery, Esri dark grey, Esri reference labels |
 
 The gateway answers in this order: baseline pack, tile store, network. A miss with no network returns nothing and the map overzooms the baseline. The baseline sits under the online layers in the map style, so a missing Esri tile shows Earth, not black.
 
@@ -148,7 +148,7 @@ Prefetch stays as modest as today: the world view of the dated layers once a day
 | Part | Job | The property its tests must hold |
 | --- | --- | --- |
 | PlanStore | Stores installed plans under Application Support. Keeps the current plan, the previous one and one more. | Stop the process between any two steps of an install: `current` still resolves to a complete plan whose every artifact matches its SHA-256. |
-| SyncEngine | Checks the manifest, downloads to a staging folder, verifies, installs, backs off on failure. Runs on foreground, on connectivity, on a timer and in background refresh. | A failed or partial download never changes `current`. A newer version always wins; an older one never replaces a newer one. |
+| SyncEngine | Checks the manifest, downloads to a staging folder, verifies, checks the plan has every field this build requires, installs, backs off on failure. Runs on foreground, on connectivity, on a timer and in background refresh. | A failed or partial download never changes `current`. A newer readable version always wins; an older one never replaces a newer one; an unreadable one is not installed and the app says an update is needed. |
 | Outbox | One file per unsent write, named by its dedupe key. | An entry is deleted only after the server answers `{ok:true}`. A lost response followed by a retry produces one server record. Nothing is dropped to make room. |
 | TileGateway | The lookup order and the size budget. | The baseline is never evicted. Local bytes are returned without touching the network. |
 | AlertPlanner | Chooses which alerts to schedule from the alert plan. | Never more than the system limit. The coverage end it reports equals the last scheduled alert. |
@@ -157,13 +157,13 @@ Prefetch stays as modest as today: the world view of the dated layers once a day
 
 `OPDHost` is the thin iOS layer: the bridge, the background refresh task, the notification centre, the Keychain, the sign-in sheet and the web view delegate.
 
-## The queue past the published horizon
+## The queue between syncs
 
-The generator scores passes for 36 hours (`generator/config.py:22`) and publishes the top 25 (`:26`). That stays the authority inside its horizon.
+The published plan covers little time. The Queue artifact holds the top 5 passes of the next 90 minutes, Upcoming the top 10 after that, and the map list the top 25 (`generator/config.py:25-27`). The generator scores 36 hours (`:22`) but does not publish all of it. So 90 minutes after the last sync the website's Queue is empty.
 
-Past it, `frontend/src/plan-extend/` computes passes on the device for up to seven days, from the published target list, the personal targets and the newest orbit data. It reuses the pass finder that already serves dropped pins (`frontend/src/pin-drop.ts`) and the sun and terminator math. It fills geometry, lighting regime and a score from regime fit, distance from nadir and priority, the same three formulas as `generator/score.py`. It fills no cloud number.
+`frontend/src/plan-extend/` computes passes on the device from now to seven days ahead, from the published target list, the personal targets and the newest orbit data. It propagates the orbit once into a shared ephemeris and tests every target against it, using the generator's 800 km distance limit (`generator/config.py:56`). The dropped-pin finder in `frontend/src/pin-drop.ts` propagates per pin with a 1,500 km limit and is too slow for this; only its geometry helpers are reused, with the sun and terminator math. It fills geometry, lighting regime and a score from regime fit, distance from nadir and priority, the same three formulas as `generator/score.py`. It fills no cloud number.
 
-Each computed pass is marked `provenance: 'device'`. The screens show them after the published passes, under their own heading, tagged "geometry only". A script in the repository runs the Python pass finder on a fixed orbit and target set and writes reference vectors. The TypeScript tests must match them inside the generator's own sampling step. That is what keeps the two from drifting.
+A published scored pass replaces the device pass for the same target and time. Each remaining device pass is marked `provenance: 'device'` and shown merged by time with published passes, tagged "geometry only". A device pass from orbit data more than 48 hours old is marked approximate; W-12's accuracy check may move that threshold. A script in the repository runs the Python pass finder on a fixed orbit and target set and writes reference vectors. The TypeScript tests must match them inside the generator's own sampling step. That is what keeps the two from drifting.
 
 ## Alerts
 
@@ -217,6 +217,8 @@ The fallback, if the review prefers no new token code: one Cloudflare Access ser
 | The token is rejected | Sync and the outbox pause. A banner offers sign-in. Reading continues. |
 | The orbit data is old | Past 48 hours the position readout shows the age. Alerts keep firing with the age in their text. |
 | Storage is nearly full | Tile storing stops first. Plans and the outbox are never trimmed. |
+| A newer plan lacks a field this build needs | It is not installed. The previous plan stays current. A banner says an update is needed. |
+| A new build is installed over the old one | The credential, installed plans, outbox, kept tiles and settings carry over. |
 | The build nears expiry | A banner from 30 days out, an alert at 10 days out. |
 
 ## Rules the build enforces

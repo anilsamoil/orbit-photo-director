@@ -6,9 +6,10 @@ Last updated: 2026-11-16
 
 - **Gate reached:** none. G0 (accounts) and G1 (host proof) are open.
 - **Shipped:** nothing.
-- **In flight:** W-00, landing the plan.
+- **In flight:** W-00, landing the plan (#373).
 - **Owner steps:**
-  - Step 1, TestFlight on the iPad: **blocked.** The owner could not get TestFlight onto the iPad in orbit (2026-11-16). Cause not known yet. This puts premise 3 of the design doc at risk: if no app can be installed on that iPad, the plan's fallback is hardening the website.
+  - Step 1, the iPad in orbit: the App Store refuses TestFlight; other App Store apps install (2026-11-16). The route to orbit is now the unlisted App Store listing. Waiting on the device details in step 1.
   - Step 2, Apple Developer Program: enrollment started 2026-11-16.
-  - Steps 3 and 4: waiting.
-- **Installed build expires in:** no build yet.
+  - Step 4, ground tester: the owner will ask someone.
+  - Step 3: waiting.
+- **Installed build expires in:** no build yet. App Store builds do not expire.

@@ -52,6 +52,7 @@ Agreed by the operator on 2026-11-15. Two were corrected after the second opinio
    - Corrected (c): the app pre-sets alerts for the next targets each time it syncs or opens, up to the iOS limit, and shows how far ahead they reach. If it stays closed for days the alerts run out, and it says so.
 3. The iPad and iPhone in orbit are the operator's and can install through TestFlight.
    - Corrected: a TestFlight build lapses after 90 days. A fresh build goes out at most every 45 days. The reviewed App Store route, whose builds do not expire, starts with release 1.
+   - Corrected again on 2026-11-16: the App Store on the iPad in orbit refuses TestFlight, while other App Store apps install. The route to orbit is therefore the unlisted App Store listing (D-9). TestFlight serves the ground tester only.
 4. The operator has, or will join, the Apple Developer Program, and a person can do the few steps that need an Apple ID.
 5. The website stays as it is. The operator uses the app first. Crewmates get it once it has held up.
 
@@ -68,7 +69,7 @@ Codex (gpt-6.1-sol, read-only, did not see the conversation) read a structured s
 - **Two Critical findings:** the auth design (F4) and the 90-day build lifetime (F13). Both are on the critical path of the plan.
 - **Its acceptance line, adopted as gate G2:** cold-launch offline; Earth draws; the ISS prediction moves; a target remains usable; an alert appears while locked; a recorded shot survives restart and uploads once.
 
-Where the plan departs from Codex: it suggested the generator publish a longer plan. This plan extends the queue on the device instead, in TypeScript, from the target list and the orbit data, so release 1 leaves the live generator alone and the website gets the same gain.
+Where the plan departs from Codex: it suggested the generator publish a longer plan. This plan extends the queue on the device instead, in TypeScript, from the target list and the orbit data, so release 1 leaves the live generator alone. The device queue is on in the app only; turning it on for the website is a separate, later decision.
 
 ## Approaches Considered
 
@@ -82,15 +83,17 @@ Release 1 is an app that carries the existing SNAP screens. Native code replaces
 
 Decisions, one line each with the reason:
 
-- **D-1 Host.** Capacitor by default, confirmed or replaced at gate G1 by a proof on a simulator and a real device. Reason: the implementer knows it and it handles web-view hosting; the proof exists because hashing, map workers and the two map renderers must all work from a local origin before anything else is built.
+- **D-1 Host.** Capacitor by default. Gate G1 confirms or replaces it in two steps: a proof on a simulator (W-02, no account needed), then the same proof signed and installed on a ground device (W-03) as soon as the developer account is active. Host-dependent packages (W-11, W-32, W-41) start after the simulator step, at risk until the device step passes; changing host after them costs their bridge code, about a week. Reason: the implementer knows it and it handles web-view hosting; the proof exists because hashing, map workers and the two map renderers must all work from a local origin before anything depends on them.
 - **D-2 One frontend.** A small seam, `frontend/src/host/`, is the only place that knows whether SNAP runs in a browser or in the app. The browser side of the seam is today's behaviour, request for request. Reason: the website must not change and must not fork.
 - **D-3 Native owns durable state.** Installed plans, the profile binding, unsent logs, map tiles and the credential live in native storage. Web storage becomes a cache. Reason: web storage can be cleared, and its origin changes inside an app.
-- **D-4 A queue that lasts days.** Inside the published horizon (36 hours) the generator's scored passes stay the authority. Past it, the device computes geometry and lighting for up to seven days from the target list and the orbit data, and labels them as device-computed with no cloud score. Reason: no change to the live generator, no extra bytes over the link, and it survives a Mac outage.
+- **D-4 A queue that lasts days.** The published plan covers little time: the Queue artifact holds the top 5 passes of the next 90 minutes and Upcoming the top 10 after that (`generator/config.py:25-27`), so today's Queue is empty 90 minutes after the last sync. The device therefore computes passes from now to seven days ahead for every target, from the published target list, the personal targets and the newest orbit data, with one shared orbit ephemeris for all targets (the dropped-pin finder propagates per pin and is far too slow for this). A published scored pass replaces the device pass for the same target and time. Device passes carry geometry, lighting and the three non-cloud score factors, are labelled as device-computed, and show no cloud number. A device pass computed from orbit data more than 48 hours old, the threshold the map already uses for "may drift" (`frontend/src/banner.ts:78-88`), is marked approximate in its card and its alert. W-12 measures the error of passes predicted from week-old orbit data across a reboost against a limit of 60 seconds at closest approach, and moves that threshold to what the measurement supports. The device queue is on in the app only in release 1. Reason: no change to the live generator, no extra bytes over the link, and it survives a Mac outage.
 - **D-5 Alerts.** While open, the web side builds an alert plan. Native code stores it, schedules up to the iOS limit, tops up from the stored plan in the background, and shows "Alerts set through ...". The last slot is an alert that says alerts are about to run out. Reason: the 64-alert limit and the lack of guaranteed background time.
-- **D-6 Sign-in.** One sign-in per device through the system browser sheet. The Worker then issues a per-device token bound to the verified profile. Native networking attaches it. It does not expire and can be revoked per device. Reading stored plans never needs it. Reason: Google refuses embedded web views, and a cookie that expires mid-mission is the failure already seen. This is security-sensitive and gets its own review before deploy.
-- **D-7 Map.** A built-in baseline from NASA Blue Marble, NASA Black Marble and Natural Earth. Everything fetched later is kept on disk. Local bytes are served before the network is tried. No Esri bytes in the bundle. Reason: the map must draw at once with every download failing, and bundling needs redistribution rights.
-- **D-8 Delivery first.** A hosted macOS job builds, tests, signs and uploads before app features are written. Local Xcode is optional. Reason: with nobody at the Mac, the pipeline is the only way a fix reaches orbit.
-- **D-9 Build lifetime.** Every build shows its own expiry date. A scheduled job cuts a fresh build at most every 45 days. The unlisted App Store listing starts at release 1. Reason: an expired build does not open.
+- **D-6 Sign-in.** Default: one sign-in per device through the system browser sheet, after which the Worker issues a per-device token bound to the verified account. The W-20 security review confirms it or picks the fallback: one Cloudflare Access service token per device, mapped to a profile and entered once by the owner, with no sign-in sheet. Either way these hold: one enrollment per device, no expiry during the mission, revocation per device, the credential only in the Keychain and native networking, and stored plans readable without it. Reason: Google refuses embedded web views, and a cookie that expires mid-mission is the failure already seen. This is security-sensitive and gets its own review before deploy.
+- **D-6a Logs saved exactly once.** The Worker's log dedupe today keys on the month the request arrives (`worker/src/index.ts:285-291`), so a retry that lands after a month change writes a second record. W-20 makes the dedupe independent of arrival time, with a test. Reason: the outbox retries hours or days later by design.
+- **D-7 Map.** A built-in baseline from NASA Blue Marble, NASA Black Marble and Natural Earth, zoom 0 to 5. Kept on disk after fetch: GIBS daily true colour and SNAP's forecast cloud frames. Esri imagery, dark grey and labels are never bundled and never bulk-fetched; viewed Esri tiles are kept in a bounded cache that matches what the website's service worker keeps today (up to 100 tiles for 7 days, `frontend/vite.config.ts:324-339`), until open question 5 is answered. Offline, where nothing else was viewed, the map shows the baseline, overzoomed past zoom 5. Local bytes are served before the network is tried. Reason: the map must draw at once with every download failing, and bundling needs redistribution rights.
+- **D-8 Delivery first.** A hosted macOS job builds and tests on every pull request from the first package. Signing, upload and a first install on a ground device are proven by W-03 as soon as the developer account is active, not after the features. Local Xcode is optional. Reason: with nobody at the Mac, the pipeline is the only way a fix reaches orbit.
+- **D-9 Delivery to orbit.** The App Store on the iPad in orbit refuses TestFlight, and other App Store apps install, so release 1 reaches orbit through the unlisted App Store listing; its builds do not expire and show no expiry date. TestFlight builds go to the ground tester; each shows its expiry date, and a fresh one goes out at least every 45 days while testing continues. Fallback: ad hoc install over the air (W-74). Risk: App Review must accept an app whose screens are a web view (guideline 4.2, minimum functionality); the offline map, stored plans and alerts are what it must see, and demo mode shows them without a sign-in. Reason: the only install channel that works on that iPad today is the App Store.
+- **D-11 Old builds keep working.** The generator, the Worker and the website ship weekly while an installed build stays fixed. Published artifacts and the `/d/*` API stay readable by every build that can still be installed. CI checks it: each released build's contract fixtures are tested against current generator output and Worker responses, in a test under `tests/`, not `generator/`. Before installing a plan, SyncEngine checks it has every field this build requires; a plan that fails stays uninstalled, the previous plan stays current, and the app says an update is needed. Reason: a fix to an unreadable plan reaches orbit only after App Review.
 - **D-10 Native follow-ons.** Lock Screen countdown, widgets, Swift orbit math and native screens come after release 1, each with a measurement that justifies it.
 
 Visual design was skipped on purpose: release 1 adds no new screens beyond a sign-in sheet, a status line and a diagnostics page. Design work belongs to the native follow-ons.
@@ -104,18 +107,21 @@ Visual design was skipped on purpose: release 1 adds no new screens beyond a sig
 5. Esri layers: stay online-only in the app, or seek offline rights?
 6. Alert defaults: lead time, which targets, and a sleep window with no alerts.
 7. Device token issued by the Worker, or one Cloudflare Access service token per device? The security review of work package W-20 decides.
-8. Does the station network allow TestFlight downloads at the size this app needs? The assignment below measures it.
+8. How fast do App Store downloads arrive over the station link? The assignment below measures it and sets the size budget.
+9. The model, the iOS or iPadOS version and the free storage of the iPad and the iPhone in orbit, and whether Settings, General, VPN & Device Management lists a management profile. The app's minimum OS is set to the orbit devices' version once known; the G1 and G2 simulator runtime and the G3 ground device must match the orbit devices' OS version and device class.
+10. Why the App Store refuses TestFlight on that iPad. A management profile would explain it and could also block ad hoc installs (W-74).
 
 ## Success Criteria
 
 - **Gate G2, on a simulator and then a ground device:** cold-launch offline; Earth draws; the ISS prediction moves; a target remains usable; an alert appears while locked; a recorded shot survives restart and uploads once.
+- **Updates keep state:** a new build installed over the previous one, with an installed plan and unsent log entries present, keeps the credential, the plan, the outbox, the kept tiles and the settings, and the queued entries upload once. This step is part of G2 and of the G3 checklist.
 - **In orbit, first two weeks:** no sign-in prompt after enrollment; the map is never blank from world view to the baseline's deepest zoom; the queue is never empty for lack of data while targets exist inside seven days; every logged shot reaches the server exactly once.
 - **For the mission:** no installed build reaches its expiry date.
 - **For the website:** the frontend suite, `typecheck` and `verify-map-pins.mjs` stay green on every pull request, and a browser cannot tell the seam was added.
 
 ## Distribution Plan
 
-- **Channel:** TestFlight internal testing for the operator first. An external TestFlight group for crewmates after the first Beta App Review. An unlisted App Store listing, started at release 1, as the route with no expiry.
+- **Channel:** the unlisted App Store listing for the operator and later the crew, because the App Store on the iPad in orbit refuses TestFlight. TestFlight for the ground tester. Ad hoc install over the air (W-74) as the fallback.
 - **Pipeline:** GitHub Actions on a hosted macOS runner. Pull requests build and test on a simulator with no secrets. A release job, limited to `main` and to an approved environment, signs with an App Store Connect API key and uploads.
 - **Cadence:** a new build whenever app code changes, and a scheduled refresh build at most every 45 days.
 - **Size budget:** set from the assignment's measurement. Working number: 80 MB download.
@@ -125,14 +131,21 @@ Visual design was skipped on purpose: release 1 adds no new screens beyond a sig
 
 The order is in `docs/ios/WORK_PLAN.md`. The short form:
 
-1. Owner steps in `docs/ios/OWNER_STEPS.md`: developer account, app record, API key, ground tester.
-2. Work that needs no account, starting now and in parallel: the hosted build pipeline with an unsigned simulator build (W-01), the host proof (W-02, gate G1), the web seam (W-10), the device sign-in path in the Worker (W-20), the pure Swift package for plan storage and the log outbox (W-30, W-31), the baseline map pack (W-40).
-3. Then the app shell wired to native storage and sync (W-32, W-33), the tile gateway (W-41), the days-long queue (W-12), alerts (W-50), diagnostics and recovery (W-60, W-61).
-4. Gate G2, a signed TestFlight build (W-70), the ground device test (G3), then the orbit checklist (G4).
+1. Owner steps in `docs/ios/OWNER_STEPS.md`: developer account, app record, API key, ground tester, orbit device details.
+2. Work that needs no account, starting now and in parallel: the hosted build pipeline with an unsigned simulator build (W-01), the simulator host proof (W-02, first half of gate G1), the web seam (W-10), the device sign-in path and log dedupe in the Worker (W-20), the pure Swift package for plan storage and the log outbox (W-30, W-31), the baseline map pack (W-40).
+3. As soon as the developer account is active: the signed host proof on a ground device (W-03, second half of G1).
+4. Then the iOS side of the seam (W-11), the Worker deploy the owner approves (W-21), the app shell wired to native storage and sync (W-32, W-33), the tile gateway and the map with no network (W-41, W-42), the days-long queue (W-12), alerts (W-50), enrollment (W-60), recovery (W-61), diagnostics (W-62).
+5. Gate G2 with the scripts that show it (W-72), the signed TestFlight build for the ground tester (W-70), the ground device test (G3), the App Store submission (W-71, gate G6), then the orbit checklist (G4).
 
 ## The Assignment
 
-On the iPad in orbit: install the TestFlight app from the App Store, then download any one app through the App Store, and note the app's size and how long the download took. This proves the install path over the real link and sets the size budget for SNAP. It needs no account and no code.
+On the iPad in orbit, three things, all from Settings and the App Store:
+
+1. Settings, General, About: note the model, the iPadOS version and the available storage. Do the same on the iPhone.
+2. Settings, General, VPN & Device Management: note whether a management profile is listed, and its name.
+3. Download one free App Store app of at least 50 MB and note its size and how long it took.
+
+TestFlight cannot be tried: the App Store refuses it on that iPad (2026-11-16). Step 3 measures the same App Store download the unlisted listing uses, so it sets SNAP's size budget. What it cannot prove is App Review acceptance; that is first proven when W-71's submission is approved.
 
 ## What I noticed about how you think
 

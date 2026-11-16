@@ -11,7 +11,11 @@ On the iPad in orbit, install the TestFlight app from the App Store. Then downlo
 **Why:** it proves apps can be installed over the station link, and the timing sets how big SNAP may be.
 **Send back:** the app's size and the minutes it took.
 
-**2026-11-16:** TestFlight could not be installed. To choose a delivery route (WORK_PLAN.md, "Delivery routes"), send back what you saw and whether any other App Store app installs. Testing does not wait on this: it runs in simulators and on a ground device.
+**2026-11-16:** the App Store refuses TestFlight on that iPad; other App Store apps install. So the route to orbit is the unlisted App Store listing, and TestFlight is only for the ground tester. Instead of TestFlight, send back:
+
+1. Settings, General, About, on the iPad and the iPhone: the model, the software version and the available storage.
+2. Settings, General, VPN & Device Management: whether a management profile is listed, and its name.
+3. One free App Store app of at least 50 MB: its size and how long the download took.
 
 ## 2. Apple Developer Program
 
@@ -58,11 +62,11 @@ When the organizer reports that the device-access design passed its review:
 ## 7. Decisions to send back when convenient
 
 - Alert defaults: how many minutes before a target, which targets (all, yours, launches), and a sleep window with no alerts.
-- Esri map layers: keep them online-only in the app (the plan's default), or ask Esri about offline rights.
+- Esri map layers: keep them as the website does today, viewed tiles cached briefly and never bundled (the plan's default), or ask Esri about offline rights.
 - When crewmates get the app. The plan's default is after fourteen days of your own use with no lockout and no lost log.
 
-## 8. Each release, and every 45 days
+## 8. Each release
 
-Approve the release job when the organizer asks. Install the new build from TestFlight when it arrives; turning on automatic updates in TestFlight does this for you. The app shows its own expiry date on the diagnostics page and warns 30 days ahead.
+Approve the release job when the organizer asks. Submit the App Store build for review when the organizer has the folder ready (W-71); after approval, install or update SNAP from its unlisted App Store link. The ground tester installs from TestFlight.
 
-**Why:** a TestFlight build stops opening 90 days after upload. The website stays as the fallback either way.
+**Why:** the App Store is the one install channel that works on the iPad in orbit. App Store builds do not expire. The website stays as the fallback either way.
