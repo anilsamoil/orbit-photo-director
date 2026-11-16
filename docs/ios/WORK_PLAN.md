@@ -106,7 +106,7 @@ Sizes are agent effort: S is under a day, M is one to three days, L is more.
   9. After the web process is terminated, the shell reloads and the same tab is showing.
   10. A ten-minute scripted pan and zoom on Map and on ISS view finishes without a web process termination; peak memory is recorded.
 - **Done when:** `docs/ios/G1-HOST-PROOF.md` lists each check with its result and the evidence, and `DECISIONS.md` records the host: the default, or a custom `WKWebView` host with its own scheme handler if a check fails under the default and passes under the custom host.
-- **Traps:** a simulator proves items 1 to 9. Item 10 is only indicative on a simulator; W-03 repeats all ten on a real device. Use a simulator runtime that matches the orbit devices' OS version once known. A custom scheme handler may not receive request bodies; that is why item 6 exists.
+- **Traps:** a simulator proves items 1 to 9. Item 10 is only indicative on a simulator; W-03 repeats all ten on a real device. The iPad in orbit runs iPadOS 26.6.2: set the deployment target to 26.0 and run the checks on an iPadOS 26 simulator runtime as well as the newest one. A custom scheme handler may not receive request bodies; that is why item 6 exists.
 
 ### W-03 Signed host proof on a ground device (S)
 - **Needs:** W-02, G0.
