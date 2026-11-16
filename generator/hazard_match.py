@@ -191,7 +191,7 @@ def _listings(sighting: Sighting, reason: str, texts: list[str]) -> list[dict]:
             "authority": notice.authority,
             "notice_id": notice.notice_id,
             "reason": reason,
-            "text": text[:MAX_LISTED_TEXT],
+            "text": text,
             "checked_at": utc(sighting.checked_at),
             "valid_until": utc(until),
             "source_url": notice.source_url,

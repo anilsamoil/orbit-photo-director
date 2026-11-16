@@ -1532,12 +1532,21 @@ def _uscg_areas(description: str, *, strict: bool) -> tuple[list[Area], list[str
                 raise NoticeError("USCG_ROW")
             else:
                 advice.append(raw.strip())
-    sentences = [
-        sentence.strip()
-        for unit in re.split(r"(?<=:)\n", "\n".join(advice))
-        for sentence in re.split(r"(?<=\w\w\.)\s+", " ".join(unit.split()))
-    ]
-    kept = [s for s in sentences if _USCG_ADVICE.search(s.upper()) and len(s) <= 400]
+    sentences: list[str] = []
+    for unit in advice:
+        remaining = " ".join(unit.replace("•", " ").split())
+        while remaining:
+            clause = _USCG_ADVICE_CLAUSE.match(remaining.upper())
+            if clause is None:
+                if strict:
+                    raise NoticeError("USCG_ROW")
+                problems.append("ADVICE_UNPARSED")
+                sentences.append(remaining)
+                break
+            sentence = remaining[:clause.end()].strip()
+            if _USCG_ADVICE.search(sentence.upper()):
+                sentences.append(sentence)
+            remaining = remaining[clause.end():]
     areas: list[Area] = []
     for draft in drafts:
         try:
@@ -1555,8 +1564,12 @@ def _uscg_areas(description: str, *, strict: bool) -> tuple[list[Area], list[str
         problems.extend(schedule.problems)
         windows = sorted(schedule.windows, key=lambda window: window.start)
         notes = tuple(
-            s for s in kept if draft.high or "HIGH RISK" not in s.upper().replace("-", " ")
+            s for s in sentences if draft.high or "HIGH RISK" not in s.upper().replace("-", " ")
         )
+        if any(len(instruction) > 400 for instruction in notes):
+            if strict:
+                raise NoticeError("USCG_ROW")
+            problems.append(f"INSTRUCTION_TOO_LONG:{draft.area_id}")
         if len(notes) > MAX_INSTRUCTIONS:
             if strict:
                 raise NoticeError("USCG_ROW")
@@ -1679,14 +1692,14 @@ def parse_uscg_space_operations(
                 " ".join(description.split("•", 1)[0].upper().split()),
             ) else None
         )
-        if kind in ("regulated_area", "recovery") and zone:
+        if kind == "recovery" or (kind == "regulated_area" and zone):
             areas, problems = [], []
         elif prose is not None:
             if strict and not prose.readable:
                 raise NoticeError("USCG_ROW")
             areas, problems = [], prose.problems
         else:
-            areas, problems = _uscg_areas(description, strict=strict and kind != "recovery")
+            areas, problems = _uscg_areas(description, strict=strict)
             if kind == "launch" and not areas and not problems:
                 raise NoticeError("USCG_ROW")
         if strict and kind == "regulated_area" and not areas and not zone:
@@ -1778,6 +1791,15 @@ _FAA_UAS_WARNING = (
     r"SECURITY ACTION THAT RESULTS IN THE INTERFERENCE, DISRUPTION, SEIZURE, "
     r"DAMAGING, OR DESTRUCTION OF UNMANNED ACFT DEEMED TO POSE A CREDIBLE SAFETY "
     r"OR SECURITY THREAT TO PROTECTED PERSONNEL, FAC, OR ASSETS\. "
+)
+_FAA_INSTRUCTION_BOILERPLATE: tuple[re.Pattern[str], ...] = (
+    re.compile(_FAA_UAS_WARNING),
+    re.compile(_FAA_AIRSPACE_STATUS),
+)
+_FAA_OPERATIVE_INSTRUCTION = re.compile(
+    r"(?:SPACE OPS AREA: ACFT OPS ARE PROHIBIT(?:IED|ED)\. |"
+    rf"{_FAA_MARITIME_LIMIT}|"
+    r"AIRCRAFT MUST AVOID THIS AREA FOR THREE HOURS BEFORE THE PUBLISHED START TIME\. )"
 )
 _FAA_SPACE_NARRATIVE = re.compile(
     r"!FDC (?P<number>\d/\d{4}) [A-Z]{3} [A-Z]{2}\.\.AIRSPACE "
@@ -2048,12 +2070,29 @@ def parse_faa_tfr(body: bytes, source_url: str) -> Notice:
         except ValueError:
             problems.append(f"GEOMETRY_UNPARSED:{area_id}")
             continue
-        instruction = " ".join(
-            _faa_text(group, "InstructionsGroup/txtInstr").split("\n\n")[0].split()
+        instruction_text = (
+            _faa_required(group, "InstructionsGroup/txtInstr")
+            if group.findall("InstructionsGroup") else ""
         )
+        instructions: list[str] = []
+        for raw_paragraph in re.split(r"\n\s*\n", instruction_text):
+            paragraph = " ".join(raw_paragraph.split())
+            if not paragraph:
+                continue
+            remaining = paragraph.upper() + " "
+            if any(pattern.fullmatch(remaining) for pattern in _FAA_INSTRUCTION_BOILERPLATE):
+                continue
+            while remaining:
+                clause = _FAA_OPERATIVE_INSTRUCTION.match(remaining)
+                if clause is None:
+                    raise NoticeError("FAA_ROW")
+                remaining = remaining[clause.end():]
+            instructions.append(paragraph)
         notes = tuple(
-            part for part in (f"{altitude}." if altitude else "", instruction) if part
+            part for part in (f"{altitude}." if altitude else "", *instructions) if part
         )
+        if len(notes) > MAX_INSTRUCTIONS or any(len(instruction) > 400 for instruction in notes):
+            raise NoticeError("FAA_ROW")
         areas.append(Area(area_id, ring, tuple(windows), "restricted_airspace", notes))
         last_end = max(
             [last_end, *(w.end for w in windows)],
