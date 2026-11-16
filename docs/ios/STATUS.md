@@ -4,12 +4,12 @@ Kept by the organizer. Short enough to read on a phone.
 
 Last updated: 2026-11-16
 
-- **Gate reached:** none. G0 (accounts) and G1 (host proof) are open.
+- **Gate reached:** none. G0 (accounts), G1 (host proof) and G7 (device approval) are open.
 - **Shipped:** nothing.
 - **In flight:** W-00, landing the plan (#373).
 - **Owner steps:**
-  - Step 1, the iPad in orbit: the App Store refuses TestFlight; other App Store apps install (2026-11-16). The route to orbit is now the unlisted App Store listing. Waiting on the device details in step 1.
-  - Step 2, Apple Developer Program: enrollment started 2026-11-16.
-  - Step 4, ground tester: the owner will ask someone.
-  - Step 3: waiting.
+  - Orbit devices: an iPad Pro with M4 and an iPhone 17 Pro, both managed. Every app needs the agency's approval; TestFlight will not be approved. The owner is seeking approval for SNAP (step 4a). Size is not a constraint. Still needed: OS versions and the iPad's screen size.
+  - Apple Developer Program: enrollment started 2026-11-16.
+  - Ground tester: named by the owner (name kept out of this public repository).
+  - App record and API key (step 3): waiting.
 - **Installed build expires in:** no build yet. App Store builds do not expire.

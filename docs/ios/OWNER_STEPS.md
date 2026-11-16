@@ -11,11 +11,11 @@ On the iPad in orbit, install the TestFlight app from the App Store. Then downlo
 **Why:** it proves apps can be installed over the station link, and the timing sets how big SNAP may be.
 **Send back:** the app's size and the minutes it took.
 
-**2026-11-16:** the App Store refuses TestFlight on that iPad; other App Store apps install. So the route to orbit is the unlisted App Store listing, and TestFlight is only for the ground tester. Instead of TestFlight, send back:
+**Answered 2026-11-16:**
 
-1. Settings, General, About, on the iPad and the iPhone: the model, the software version and the available storage.
-2. Settings, General, VPN & Device Management: whether a management profile is listed, and its name.
-3. One free App Store app of at least 50 MB: its size and how long the download took.
+- The devices are an iPad Pro with M4 and an iPhone 17 Pro. Both are managed: every app needs approval from the agency's device management before it can be installed. TestFlight will not be approved, so it is only for the ground tester.
+- Storage and download size are not constraints. Large downloads run overnight.
+- Still needed: the iPadOS and iOS versions (Settings, General, About, Software Version), and whether the iPad is the 11-inch or the 13-inch model.
 
 ## 2. Apple Developer Program
 
@@ -42,6 +42,17 @@ Then on GitHub, in the repository's Settings, Environments: create an environmen
 Name one person on Earth with an iPhone or iPad who can spend ten minutes on a checklist before a build goes to orbit. Add them as a TestFlight tester.
 
 **Why:** nobody can attach a cable to the iPad in orbit. A build that fails on the ground costs minutes. One that fails in orbit costs days.
+
+**Done 2026-11-16:** the owner named the ground tester. The name is kept out of this public repository.
+
+## 4a. Approval for the managed devices
+
+Ask the agency's device managers to approve SNAP for the iPad and the iPhone in orbit. The agents prepare an approval packet with W-71: what the app does, every server it contacts, what it stores, the one permission it asks for (notifications), and that it has no tracking and no third-party analytics.
+
+Ask them one question early: do they want SNAP as an unlisted App Store app that they approve, or as a custom app sent to the agency's Apple Business Manager, which their device management then installs? Both go through App Review. The second lets them push the app and its updates themselves.
+
+**Why:** no build reaches orbit without this approval. It may take longer than any code.
+**Send back:** which of the two they prefer, and anything they need in the packet.
 
 ## 5. Xcode on the Mac (optional)
 

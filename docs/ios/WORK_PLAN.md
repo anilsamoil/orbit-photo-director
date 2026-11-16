@@ -34,7 +34,8 @@ A gate is a point where work stops until something is shown. The organizer recor
 | G1 Host proof | W-02 on a simulator, then W-03 on a ground device | Every check in W-02 passes on a simulator, then on a signed build on a ground device; the host choice is recorded. W-11, W-32 and W-41 may start after the simulator half, at risk. | Try the other host. If neither can draw Map and ISS view from a local origin, stop and tell the owner: the fallback is hardening the website. |
 | G2 Offline acceptance | W-72, on the hosted workflow | Cold-launch offline; Earth draws; the ISS prediction moves; a target remains usable; an alert appears while locked; a recorded shot survives restart and uploads once. Then a new build installed over the previous one keeps the credential, the plan, the outbox, the kept tiles and the settings, and the queued entries upload once. | Fix before any signed release build |
 | G3 Ground device | Ground tester, checklist from W-72 | The same lines, on a real iPhone or iPad on Earth matching the orbit devices' OS version and device class, from a TestFlight install | Fix before the build goes to orbit |
-| G4 Orbit | Owner, ten-minute checklist from W-72 | Install from the unlisted App Store link, enroll, one LOS period, one alert, one logged shot | The website remains the tool. Fix and resend. |
+| G7 Device approval | Owner, with W-71's approval packet | The agency's device management approves SNAP for the iPad and the iPhone in orbit | The website remains the tool. Answer what the device managers ask. |
+| G4 Orbit | Owner, ten-minute checklist from W-72 | Needs G6 and G7. Install from the unlisted App Store link (or the device managers' push), enroll, one LOS period, one alert, one logged shot | The website remains the tool. Fix and resend. |
 | G5 Crew | Owner | Fourteen days of the owner's use with no lockout and no lost log | Hold the crew group |
 | G6 No-expiry route | W-71 | The unlisted App Store listing is approved and installed | Keep the 45-day refresh schedule |
 
@@ -48,10 +49,15 @@ On 2026-11-16 the App Store on the iPad in orbit refused TestFlight, while other
 
 ### Delivery routes to the iPad in orbit, in order of preference
 
-1. The unlisted App Store listing (W-71). Other App Store apps install on that iPad. Builds do not expire. Each build goes through App Review, which takes days, so orbit fixes are slower than with TestFlight.
-2. TestFlight, only if the reason the App Store refuses it is found and removed.
-3. Ad hoc install over the air (W-74). The iPad's device identifier is registered in the developer account, the build is signed for the registered devices, and the iPad installs it by tapping a link in Safari. It needs neither TestFlight nor the App Store. The signing lasts up to a year, so it also avoids the 90-day lapse. It does not work if device management on that iPad forbids installing apps.
-4. If no app can be installed on that iPad: the plan's fallback, hardening the website.
+The orbit devices (an iPad Pro with M4 and an iPhone 17 Pro) are managed: every app needs approval from the agency's device management (gate G7). The owner is seeking that approval.
+
+1. The unlisted App Store listing (W-71), approved by the device managers. Builds do not expire. Each build goes through App Review, which takes days, so orbit fixes are slower than with TestFlight.
+2. A custom app sent to the agency's Apple Business Manager, if the device managers prefer to install the app and its updates through their own device management. Also goes through App Review.
+3. TestFlight: the device managers will not approve it. Ground tester only.
+4. Ad hoc install over the air (W-74). Also needs the device managers' approval, so it is a last resort. The iPad's device identifier is registered in the developer account, the build is signed for the registered devices, and the iPad installs it by tapping a link in Safari. It needs neither TestFlight nor the App Store. The signing lasts up to a year, so it also avoids the 90-day lapse. It does not work if device management on that iPad forbids installing apps.
+5. If no app can be installed on that iPad: the plan's fallback, hardening the website.
+
+Download size is not a constraint: the owner downloads large apps overnight. Updates should still stay small, because each one is a download over the station link.
 
 ## Order of work
 
@@ -67,7 +73,7 @@ G0       W-03 (needs W-02, G0): signed host proof on a ground device, second hal
 Wave 1   W-11 (needs W-10, W-02)   W-12 (needs W-10)   W-32 (needs W-30, W-31, W-02)   W-41 (needs W-40, W-11)
          W-21 (needs W-20, owner)   W-60 (needs W-21, W-32)   W-63 (needs W-30, W-10)
 Wave 2   W-33   W-42   W-50   W-61   W-62          then W-72 (G2)
-Wave 3   W-70 (needs G0, G2)   G3   W-71 (needs G2, submits in parallel with G3)   G6   G4   W-74 (needs G0, W-01)   W-73 (G5)
+Wave 3   W-70 (needs G0, G2)   G3   W-71 (needs G2, submits in parallel with G3)   G6   G7 (owner, can run from Wave 1)   G4   W-74 (needs G0, W-01)   W-73 (G5)
 Later    W-80 and up, each with a measured reason
 ```
 
@@ -179,7 +185,7 @@ Sizes are agent effort: S is under a day, M is one to three days, L is more.
 - **Done when:** a first launch shows one screen with one button; the system sign-in sheet completes enrollment; the profile name shows; relaunch needs no sign-in; "Forget this device" removes the token and revokes it; a rejected token shows a banner and reading continues.
 
 ### W-61 Lifecycle and recovery (S)
-- **Done when:** web process termination reloads to the same tab; a lost WebGL context rebuilds the map; a memory warning reaches the web side; links to other sites open in Safari; the layouts hold at iPhone 17 Pro and iPad Pro 11 sizes in both orientations and at iPad split-view widths; the keep-awake setting works.
+- **Done when:** web process termination reloads to the same tab; a lost WebGL context rebuilds the map; a memory warning reaches the web side; links to other sites open in Safari; the layouts hold at iPhone 17 Pro and iPad Pro 11-inch and 13-inch sizes in both orientations and at iPad split-view widths; the keep-awake setting works.
 
 ### W-62 Diagnostics and build lifetime (S)
 - **Done when:** one page shows the build and its expiry date, the plan version and age, the orbit data age, storage in use, alert coverage, outbox and rejected counts, the last sync results and the token state; "Export" produces a text file with no token and no personal target coordinates; the expiry banner appears 30 days out.
@@ -196,7 +202,7 @@ Sizes are agent effort: S is under a day, M is one to three days, L is more.
 
 ### W-71 App Store submission, the route to orbit (M)
 - **Needs:** G2. Preparation can start in Wave 1.
-- **Change:** the privacy manifest; the export-compliance flag; a demo mode on the fixture plan with no sign-in, for App Review and for screenshots; the listing text and the privacy answers drafted for the owner; the review notes; the request for unlisted distribution prepared for the owner to submit.
+- **Change:** the privacy manifest; the export-compliance flag; a demo mode on the fixture plan with no sign-in, for App Review and for screenshots; the listing text and the privacy answers drafted for the owner; the review notes; the request for unlisted distribution prepared for the owner to submit. The approval packet for the device managers (gate G7), short enough to read in five minutes: what the app does, every server it contacts (taken from `routes.json` and `tile-layers.json`, not from memory), what it stores on the device, the one permission it asks for, and that it has no tracking and no third-party analytics. Prepare the packet early, in Wave 1: approval may take longer than the code.
 - **Done when:** the owner has everything needed to submit, in one folder; the demo mode passes G2's lines on fixtures; the review notes say what the app does that a website cannot: works with no network, stores plans, sets alerts, draws the map offline.
 - **Traps:** App Review guideline 4.2 (minimum functionality) rejects apps that only wrap a website. Demo mode must show the offline map, the stored plan and an alert without a sign-in. Builds installed from the App Store show no expiry date; the app tells them from TestFlight builds by the build's receipt environment.
 
@@ -244,6 +250,7 @@ W-80 Lock Screen countdown and a widget. W-81 Shoot and Skip buttons on the aler
 | The website moves under the seam | A new same-origin request or storage key | The boundary tests catch requests. The storage mirror covers keys. |
 | The installed build nears expiry | `STATUS.md` shows under 30 days | Cut a refresh build. Tell the owner to install it. |
 | Device memory on older iPads | Web process terminations at G3 | Lower the raster cache and the concurrent renderers; record the device floor. |
+| Device approval is slow or refused | G7 still open when G2 passes | Ask what the device managers need; offer the custom-app route through Apple Business Manager. The website stays the tool meanwhile. |
 | App Review rejects the app | W-71 rejected under guideline 4.2 or for sign-in | Fix the named reason; make demo mode show more offline value. Meanwhile prepare W-74. |
 | No app installs on the iPad in orbit | The App Store refused TestFlight on 2026-11-16; the App Store listing and W-74 also fail | Stop. Tell the owner. The fallback is website hardening. |
 | The download is too big for the link | The owner's timing from the assignment | Shrink the baseline to zoom 0 to 4 and fetch the rest on first online launch. |
