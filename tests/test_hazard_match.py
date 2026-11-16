@@ -504,7 +504,7 @@ def test_same_ring_allows_another_start_vertex_and_direction_but_not_another_sha
     assert not same_ring(ring, turned[:-1])
 
 
-def test_a_launch_with_more_areas_than_the_map_accepts_is_left_out_whole():
+def test_a_launch_with_more_areas_than_the_map_accepts_fails_without_omitting_it():
     notice = fx.broadcast_notice("navarea-xii-in-force-2026-11-13.txt", "NAVAREA XII 797/26")
     assert len(notice.areas) == 11
     decoy = fx.item(fx.USSF_317, net="2026-11-16T23:50:00Z", window_start="2026-11-16T23:45:00Z", window_end="2026-11-17T01:00:00Z")
@@ -512,9 +512,8 @@ def test_a_launch_with_more_areas_than_the_map_accepts_is_left_out_whole():
     others = ("NAVAREA XII 794/26", "NAVAREA XII 801/26", "NAVAREA XII 795/26")
     pins = {"pin": dict.fromkeys(("NAVAREA XII 797/26", *others), fx.USSF_317)}
     seen = _seen(notice, *(fx.broadcast_notice("navarea-xii-in-force-2026-11-13.txt", name) for name in others))
-    bundle, log = build_bundle([decoy], seen, NOW, pins)
-    assert bundle["launches"] == []
-    assert "TOO_MANY_AREAS" in _decisions(log)["NAVAREA XII 797/26"]["reasons"]
+    with pytest.raises(ValueError, match="^HAZARD_NOTICES$"):
+        build_bundle([decoy], seen, NOW, pins)
     fits, _ = build_bundle([decoy], seen[:1], NOW, pins)
     assert len(fx.launch(fits, fx.USSF_317)["notices"]) == 11
 

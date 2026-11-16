@@ -561,7 +561,7 @@ def test_legacy_cache_requires_every_source_to_confirm_with_the_current_parser(
         assert report["ok"] and report["published"] and len(uploads) == 2
     assert set(urls.values()) <= set(web.asked)
     restored = json.loads(state_path.read_bytes())
-    assert restored["schema_version"] == 4
+    assert restored["schema_version"] == 5
     for key, entry in restored["sources"].items():
         assert entry["attempted_at"] == "2026-11-13T23:41:00Z"
         if key == unavailable:
@@ -678,7 +678,7 @@ def test_interrupted_source_refresh_retries_before_its_interval_and_freezes_unti
     report = _run(tmp_path, web, upload=upload, now=NOW + timedelta(minutes=32))
     assert _RESTART_SOURCE_URLS[source] in web.asked
     restored = json.loads(state_path.read_bytes())
-    assert restored["schema_version"] == 4
+    assert restored["schema_version"] == 5
     entry = restored["sources"][source]
     assert entry["attempted_at"] == "2026-11-14T00:12:00Z"
     assert entry["notices"] == confirmed["notices"]
@@ -737,7 +737,7 @@ def test_unfinished_current_version_attempt_requires_fresh_confirmation(
     report = _run(tmp_path, web, upload=upload, now=NOW + timedelta(minutes=2))
     assert _RESTART_SOURCE_URLS[source] in web.asked
     restored = json.loads(state_path.read_bytes())
-    assert restored["schema_version"] == 4
+    assert restored["schema_version"] == 5
     entry = restored["sources"][source]
     assert entry["attempted_at"] == "2026-11-13T23:42:00Z"
     assert entry["notices"] == confirmed["notices"]
@@ -906,7 +906,7 @@ def test_version_two_gap_snapshot_cannot_publish_a_cached_withdrawal(tmp_path: P
         _run(tmp_path, web, upload=upload, now=NOW + timedelta(minutes=32))
     assert set(_RESTART_SOURCE_URLS.values()) <= set(web.asked)
     restored = json.loads(state_path.read_bytes())
-    assert restored["schema_version"] == 4
+    assert restored["schema_version"] == 5
     assert restored["sources"][source] == {
         "attempted_at": "2026-11-14T00:12:00Z", "error": "NGA_ROW",
     }
@@ -959,7 +959,7 @@ def test_prior_inline_ordinal_cache_requires_every_source_to_reconfirm(
     state_path.write_text(json.dumps(state))
     web.pages[FAA_LIST_URL] = b"[]"
     web.asked.clear()
-    if recovery == "unreadable":
+    if recovery in {"unreadable", "known_withdrawal"}:
         with pytest.raises(SourceError, match="^SOURCE_STATE_INCOMPLETE$"):
             _run(tmp_path, web, upload=upload, now=NOW + timedelta(minutes=32))
         assert target.read_bytes() == artifact and receipt_path.read_bytes() == receipt
@@ -970,10 +970,11 @@ def test_prior_inline_ordinal_cache_requires_every_source_to_reconfirm(
         assert len(uploads) == 2 and uploads[-1] == target.read_bytes()
     assert set(_RESTART_SOURCE_URLS.values()) <= set(web.asked)
     restored = json.loads(state_path.read_bytes())
-    assert restored["schema_version"] == 4
+    assert restored["schema_version"] == 5
     entry = restored["sources"][source]
-    if recovery == "unreadable":
-        assert entry == {"attempted_at": "2026-11-14T00:12:00Z", "error": "NGA_ROW"}
+    if recovery in {"unreadable", "known_withdrawal"}:
+        expected_error = "NGA_ROW" if recovery == "unreadable" else "NGA_RELEVANCE_DOWNGRADE"
+        assert entry == {"attempted_at": "2026-11-14T00:12:00Z", "error": expected_error}
     else:
         assert entry["error"] is None and entry["checked_at"] == "2026-11-14T00:12:00Z"
         assert len(entry["notices"]) == (1 if recovery == "restored" else 0)

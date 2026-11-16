@@ -388,7 +388,7 @@ def _launch_entry(
     if len(final) > MAX_NOTICES:
         for row in final:
             _note(log, row.sighting.notice.notice_id, "TOO_MANY_AREAS")
-        return None
+        raise ValueError("HAZARD_NOTICES")
     notices, features = [], []
     for row in final:
         notice = row.sighting.notice

@@ -62,6 +62,10 @@ def _sequential_numbers(numbers: tuple[int, ...]) -> bool:
     return numbers == tuple(range(1, len(numbers) + 1))
 
 
+def _consecutive_area_labels(labels: list[str]) -> bool:
+    return labels == ["1"] or labels == [chr(ord("A") + index) for index in range(len(labels))]
+
+
 def _known_fields(record: dict[str, object], allowed: frozenset[str], error: str) -> None:
     """Owned record keys are closed; listed unused metadata values remain opaque."""
     if not record.keys() <= allowed:
@@ -494,15 +498,53 @@ class _Relevance(Enum):
     UNCERTAIN = auto()
 
 
-_MARINE_ACTIVITY = re.compile(
-    r"(?:(?:INTERMITTENT )?MISSILE (?:FIRING )?OPERATIONS\b|"
-    r"FIRING OPERATIONS\b|"
-    r"(?:SURVEY|UNDERWATER|CABLE|PIPELINE) (?:LAYING )?OPERATIONS\b|"
-    r"(?:SCIENTIFIC )?MOORINGS?\b|DEPTHS LESS THAN CHARTED\b|"
-    r"(?:\d+(?:\.\d+)? METER )?SHOAL\b|UNCHARTED REEF\b|DANGEROUS WRECK\b|"
-    r"VESSEL\b|NAVAREA (?:IV|XII) (?:WARNINGS IN FORCE|MOBILE OFFSHORE DRILLING UNITS)\b|"
-    + "|".join(re.escape(subject) + r"\b" for subject in _NAVIGATION_SUBJECTS) + r")"
+_MARINE_VOCABULARY: tuple[str, ...] = (
+    r"(?:INTERMITTENT )?MISSILE (?:FIRING )?OPERATIONS\b",
+    r"FIRING OPERATIONS\b",
+    r"GUNNERY FIRING\b",
+    r"DREDGING OPERATIONS\b",
+    r"MILITARY EXERCISES\b",
+    r"(?:SURVEY|UNDERWATER|CABLE|PIPELINE) (?:LAYING )?OPERATIONS\b",
+    r"(?:SCIENTIFIC )?MOORINGS?\b",
+    r"DEPTHS LESS THAN CHARTED\b",
+    r"(?:\d+(?:\.\d+)? METER )?SHOAL\b",
+    r"UNCHARTED REEF\b",
+    r"DANGEROUS WRECK\b",
+    r"VESSEL\b",
+    r"NAVAREA (?:IV|XII) (?:WARNINGS IN FORCE|MOBILE OFFSHORE DRILLING UNITS)\b",
+    *(re.escape(subject) + r"\b" for subject in _NAVIGATION_SUBJECTS),
 )
+_MARINE_ACTIVITY = re.compile("(?:" + "|".join(_MARINE_VOCABULARY) + ")")
+_AUDITED_GENERIC_EXCLUSIONS: dict[str, str] = {
+    "NAVAREA XII 802/26": (
+        "Audited California one-mile closure at 32-35.82N 117-10.88W; "
+        "capture names no launch range or authority."
+    ),
+    "NAVAREA XII 795/26": (
+        "Audited California polygon near 33-59.00N 119-26.00W; "
+        "capture names no launch range or authority."
+    ),
+    "NAVAREA XII 752/26": (
+        "Audited California polygon near 32-55.00N 118-25.00W; "
+        "capture names no launch range or authority."
+    ),
+    "NAVAREA XII 751/26": (
+        "Audited California polygon near 32-52.70N 119-11.96W; "
+        "capture names no launch range or authority."
+    ),
+    "NAVAREA XII 750/26": (
+        "Audited California polygon near 32-33.00N 118-25.00W; "
+        "capture names no launch range or authority."
+    ),
+    "NAVAREA IV 1100/23": (
+        "Audited indefinite Venezuela closure under VENEZUELA 17/23; "
+        "capture names no launch authority."
+    ),
+    "NAVAREA IV 222/23": (
+        "Audited Anguilla anchoring prohibition and wide berth request under ANGUILLA 2/23; "
+        "capture names no launch authority."
+    ),
+}
 _GENERIC_MARINE = re.compile(
     r"^(?:HAZARDOUS OPERATIONS|(?:NAVIGATION|ANCHORING) PROHIBITED)\b[ ,:;]*(?:DUE TO )?"
 )
@@ -581,7 +623,7 @@ def _generic_broadcast(text: str, issued: datetime | None) -> _GenericBroadcast 
     else:
         return None
     labels = [letter for letter, _, _ in schedules]
-    if labels != ["1"] and labels != [chr(ord("A") + index) for index in range(len(labels))]:
+    if not _consecutive_area_labels(labels):
         return None
     indefinite = all(schedule == "UNTIL FURTHER NOTICE" for _, schedule, _ in schedules)
     areas: list[Area] = []
@@ -637,6 +679,7 @@ def _generic_broadcast(text: str, issued: datetime | None) -> _GenericBroadcast 
 
 def _launch_relevance(
     text: object, *, issued: datetime | None = None, authority: object = None,
+    notice_id: str | None = None,
 ) -> _Relevance:
     if not isinstance(text, str) or not text.strip():
         return _Relevance.UNCERTAIN
@@ -644,7 +687,7 @@ def _launch_relevance(
         return _Relevance.RELEVANT
     if _UNCERTAIN_FLIGHT.search(text):
         return _Relevance.UNCERTAIN
-    if _generic_broadcast(text, issued) is not None:
+    if notice_id in _AUDITED_GENERIC_EXCLUSIONS and _generic_broadcast(text, issued) is not None:
         return _Relevance.OTHER
     body = _broadcast_body(text)
     preamble = _after_broadcast_geography(body.preamble)
@@ -676,7 +719,12 @@ def _drop_other(notice_id: str, reason: str) -> None:
 def _other_broadcast_notice(
     text: str, notice_id: str, source_url: str, digest: str, issued: datetime | None = None,
 ) -> Notice:
-    _drop_other(notice_id, "NON_LAUNCH_MARINE_ACTIVITY")
+    _drop_other(
+        notice_id,
+        _AUDITED_GENERIC_EXCLUSIONS[notice_id]
+        if notice_id in _AUDITED_GENERIC_EXCLUSIONS and _generic_broadcast(text, issued) is not None
+        else "NON_LAUNCH_MARINE_ACTIVITY",
+    )
     return Notice(
         authority="NGA", notice_id=notice_id, kind="other", domain="maritime",
         subject=_lead(" ".join(text.split())), areas=(), cancels=(), valid_until=None,
@@ -695,7 +743,7 @@ def parse_broadcast_warning(
     authority: object = None,
 ) -> Notice:
     """Decode a warning body. Strict source confirmation requires every relevant structure."""
-    relevance = _launch_relevance(text, issued=issued, authority=authority)
+    relevance = _launch_relevance(text, issued=issued, authority=authority, notice_id=notice_id)
     if strict and relevance is _Relevance.OTHER:
         return _other_broadcast_notice(text, notice_id, source_url, source_sha256, issued)
     generic = _generic_broadcast(text, issued)
@@ -732,7 +780,9 @@ def parse_broadcast_warning(
     bound = _BOUND.search(first)
     label = _LABEL.search(first)
     schedules: list[tuple[str, str, str]] = []
-    problems: list[str] = ["PREAMBLE_UNPARSED"] if unread_preamble else []
+    problems: list[str] = ["RELEVANCE_UNCERTAIN"] if relevance is _Relevance.UNCERTAIN else []
+    if unread_preamble:
+        problems.append("PREAMBLE_UNPARSED")
     if bound and label and label.start() < bound.start():
         labelled = _labelled(first)
         phrase = labelled.prefix
@@ -785,7 +835,7 @@ def parse_broadcast_warning(
                    for problem in problems)
             or valid_until is None
             or valid_until <= issued
-            or len({letter for letter, _, _ in schedules}) != len(schedules)
+            or not _consecutive_area_labels([letter for letter, _, _ in schedules])
         ):
             raise NoticeError("NGA_ROW")
     if any(problem.startswith("GEOMETRY_UNPARSED") for problem in problems):
@@ -846,11 +896,15 @@ def parse_nga_payload(body: bytes, source_url: str) -> list[Notice]:
         if not _readable_relevance(supported, error="NGA_ROW"):
             continue
         number, year, text = row.get("msgNumber"), row.get("msgYear"), row.get("text")
-        if _launch_relevance(text, authority=row.get("authority")) is _Relevance.OTHER:
-            readable_number = str(number) if type(number) is int and number > 0 else "?"
-            readable_year = f"{year % 100:02d}" if type(year) is int else "?"
+        readable_number = str(number) if type(number) is int and number > 0 else "?"
+        readable_year = f"{year % 100:02d}" if type(year) is int else "?"
+        notice_id = f"{series} {readable_number}/{readable_year}"
+        if (
+            _launch_relevance(text, authority=row.get("authority"), notice_id=notice_id)
+            is _Relevance.OTHER
+        ):
             notices.append(_other_broadcast_notice(
-                str(text), f"{series} {readable_number}/{readable_year}", source_url, digest,
+                str(text), notice_id, source_url, digest,
             ))
             continue
         issue = (
@@ -872,7 +926,7 @@ def parse_nga_payload(body: bytes, source_url: str) -> list[Notice]:
         try:
             issued = _moment(int(issue_year), _MONTHS.index(month) + 1, int(day), hour + minute)
             notice = parse_broadcast_warning(
-                text, f"{series} {number}/{year % 100:02d}", issued, source_url, digest,
+                text, notice_id, issued, source_url, digest,
                 strict=True, authority=row.get("authority"),
             )
         except ValueError as exc:

@@ -10,10 +10,13 @@ import {
   activeHazardListings,
   HAZARD_LABEL,
   HAZARD_PATH,
+  hazardListingText,
   loadPublishedHazards,
   parseHazardBundle,
   publishHazardNotes,
   type HazardBundle,
+  type HazardListing,
+  type HazardNote,
   type HazardNotice,
   type LaunchHazards,
 } from '../src/launch-hazards';
@@ -405,6 +408,59 @@ afterEach(() => {
   setMapLaunchMode(false);
   vi.restoreAllMocks();
   document.body.replaceChildren();
+});
+
+describe('undrawn hazard listing wording', () => {
+  const listing = {
+    eventId: USSF_317_EVENT_ID,
+    noticeId: 'NAVAREA XII 801/26',
+    reason: 'not_drawn',
+    text: 'Area C is not drawn because its ring crosses the antimeridian.',
+    sourceUrl: 'https://msi.nga.mil/',
+    checkedAt: '2026-11-18T02:00:00Z',
+  } satisfies HazardListing;
+  const drawn = {
+    eventId: listing.eventId,
+    noticeId: listing.noticeId,
+    areaId: 'A',
+    also: '',
+    domain: 'maritime',
+    restriction: 'hazard',
+    windowStart: '2026-11-18T03:14:00Z',
+    windowEnd: '2026-11-18T07:37:00Z',
+    sourceUrl: listing.sourceUrl,
+    checkedAt: listing.checkedAt,
+    qualification: '',
+  } satisfies HazardNote;
+
+  it('retains whole-notice wording when no area is drawn', () => {
+    publishHazardNotes([], [listing]);
+    expect(hazardListingText(listing)).toBe(
+      'NAVAREA XII 801/26 is not drawn. Area C is not drawn because its ring crosses the antimeridian. Checked 2026-11-18T02:00:00Z.',
+    );
+  });
+
+  it('uses partial-coverage wording only for a drawn area of the same notice and launch', () => {
+    publishHazardNotes([drawn], [listing]);
+    expect(hazardListingText(listing)).toBe(
+      'NAVAREA XII 801/26 is partly drawn. Area C is not drawn because its ring crosses the antimeridian. Checked 2026-11-18T02:00:00Z.',
+    );
+  });
+
+  it('recognizes an exact notice alias on a drawn area', () => {
+    publishHazardNotes([{ ...drawn, noticeId: 'NAVAREA XII 1801/26', also: 'NAVAREA XII 800/26, NAVAREA XII 801/26' }], [listing]);
+    expect(hazardListingText(listing)).toContain('NAVAREA XII 801/26 is partly drawn. Area C is not drawn');
+  });
+
+  it.each([
+    { ...drawn, eventId: STARSHIP_FLIGHT15_EVENT_ID },
+    { ...drawn, noticeId: 'NAVAREA XII 797/26' },
+    { ...drawn, noticeId: 'NAVAREA XII 1801/26', also: 'NAVAREA XII 8010/26' },
+  ])('keeps whole-notice wording when another launch or notice is drawn', (other) => {
+    publishHazardNotes([other], [listing]);
+    expect(hazardListingText(listing)).toContain('NAVAREA XII 801/26 is not drawn.');
+    expect(hazardListingText(listing)).not.toContain('is partly drawn.');
+  });
 });
 
 describe('Starship Flight 15 hazard notices', () => {
@@ -1481,6 +1537,69 @@ describe('hazard areas for every catalog launch', () => {
     expect(areaIds(activeHazardFeatures(parsed(mixed), VULCAN_EVENT_ID, VULCAN_NOW, VULCAN_ATTEMPT))).toEqual(['6/7111', 'A', 'B', 'C']);
     maritime.valid_until = '2026-11-14T17:40:00Z';
     expect(areaIds(activeHazardFeatures(parsed(mixed), VULCAN_EVENT_ID, VULCAN_NOW, VULCAN_ATTEMPT))).toEqual(['6/7111', 'A', 'C']);
+  });
+
+  it.each([false, true])('describes a mixed notice as partly drawn while painting A and B and withholding C, aliased %s', (aliased) => {
+    const pin: TierLaunch = {
+      ...STARSHIP_PIN,
+      eventId: USSF_317_EVENT_ID,
+      name: 'Falcon 9 | USSF-317',
+      schedule: {
+        netMs: FALCON_ATTEMPT.startMs,
+        windowStartMs: FALCON_ATTEMPT.startMs,
+        windowEndMs: FALCON_ATTEMPT.endMs,
+        precision: 'Minute',
+        status: 'Go',
+      },
+      whenMs: FALCON_ATTEMPT.startMs,
+      liveUntilMs: FALCON_ATTEMPT.endMs,
+    };
+    vi.spyOn(launchCatalog, 'read').mockReturnValue({
+      revision: pin.revision,
+      pins: [],
+      mapPins: [pin],
+      upcoming: [],
+      highlights: [],
+      groups: { shot: [], likely: [], watch: [pin] },
+      all: [pin],
+      closedLabel: '',
+      find: (eventId) => eventId === pin.eventId ? pin : null,
+    });
+    vi.spyOn(launchCatalog, 'attempt').mockReturnValue(FALCON_ATTEMPT);
+    const file = reviewed(hazardFile(), '2026-11-18T02:00:00Z', USSF_317_EVENT_ID);
+    const launch = entryOf(file, USSF_317_EVENT_ID);
+    launch.notices = launch.notices.filter((notice) => notice.area_id !== 'C');
+    launch.geojson.features = launch.geojson.features.filter((feature) => feature.properties.area_id !== 'C');
+    launch.listed = [{
+      authority: 'NGA',
+      notice_id: 'NAVAREA XII 801/26',
+      reason: 'not_drawn',
+      text: 'Area C is not drawn because its ring crosses the antimeridian.',
+      checked_at: '2026-11-18T02:00:00Z',
+      valid_until: '2026-11-24T07:34:00Z',
+      source_url: 'https://msi.nga.mil/',
+      source_sha256: 'a'.repeat(64),
+    }];
+    if (aliased) {
+      for (const notice of launch.notices) {
+        notice.notice_id = 'NAVAREA XII 1801/26';
+        notice.also = ['NAVAREA XII 801/26'];
+      }
+      for (const feature of launch.geojson.features) {
+        feature.properties.notice_id = 'NAVAREA XII 1801/26';
+      }
+    }
+    const { vendor } = mount('2026-11-18T03:30:00Z');
+    useHazardBundleForTest(parsed(file));
+    setMapLaunchMode(true);
+    syncLaunchHazards(FALCON_NOW);
+    expect(areaIds(painted(vendor))).toEqual(['A', 'B']);
+    const text = renderTierCard(pin, () => {}).querySelector('[data-hazard-note]')?.textContent ?? '';
+    const identity = aliased ? 'NAVAREA XII 1801/26 (also NAVAREA XII 801/26)' : 'NAVAREA XII 801/26';
+    expect(text).toContain(`${identity} area A, maritime hazard.`);
+    expect(text).toContain(`${identity} area B, maritime hazard.`);
+    expect(text).toContain('NAVAREA XII 801/26 is partly drawn. Area C is not drawn because its ring crosses the antimeridian.');
+    expect(text).not.toContain('NAVAREA XII 801/26 is not drawn.');
   });
 
   it('paints every eligible launch with nothing selected and only the selected launch after a choice', () => {

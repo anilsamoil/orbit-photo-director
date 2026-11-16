@@ -112,18 +112,19 @@ def test_every_real_archived_nga_row_confirms() -> None:
 
 def test_no_real_nga_capture_is_uncertain() -> None:
     rows = [
-        (text, issued, None)
-        for name in fx.BROADCAST for _, issued, text in fx.broadcast_blocks(name)
+        (text, issued, None, notice_id)
+        for name in fx.BROADCAST for notice_id, issued, text in fx.broadcast_blocks(name)
     ]
     rows += [
         (row["text"], datetime.strptime(row["issueDate"], "%d%H%MZ %b %Y").replace(tzinfo=UTC),
-         row.get("authority"))
+         row.get("authority"), f"NAVAREA IV {row['msgNumber']}/{row['msgYear'] % 100:02d}")
         for row in json.loads((fx.NOTICES / fx.NGA_2023).read_bytes())["broadcast-warn"]
     ]
     assert len(rows) == 120
     assert not [
-        text for text, issued, authority in rows
-        if _launch_relevance(text, issued=issued, authority=authority).name == "UNCERTAIN"
+        text for text, issued, authority, notice_id in rows
+        if _launch_relevance(text, issued=issued, authority=authority, notice_id=notice_id).name
+        == "UNCERTAIN"
     ]
 
 

@@ -114,7 +114,7 @@ def refresh_hazards(
         except BlockingIOError as exc:
             raise RuntimeError("HAZARD_REFRESH_BUSY") from exc
         catalog = _current_catalog(output, now)
-        sources = refresh_sources(cache, now, fetch=fetch, pause=pause)
+        sources = refresh_sources(cache, now, fetch=fetch, pause=pause, last_good=output / ARTIFACT)
         health = {
             name: {"checked_at": entry.get("checked_at"), "error": entry.get("error")}
             for name, entry in sources.items()

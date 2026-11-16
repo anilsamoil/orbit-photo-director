@@ -105,7 +105,7 @@ def test_moorings_beside_launch_allow_publication_and_legacy_refresh(
     )
     state = json.loads((cache / STATE_NAME).read_bytes())
     assert report["ok"] and report["published"] and not report["degraded"]
-    assert state["schema_version"] == 4
+    assert state["schema_version"] == 5
     assert all(entry["error"] is None for entry in state["sources"].values())
     source = state["sources"]["nga:12"]
     assert source["checked_at"] == now.strftime("%Y-%m-%dT%H:%M:%SZ")

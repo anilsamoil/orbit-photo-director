@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from generator.hazard_notices import parse_nga_payload
 from generator.hazard_sources import (
     FAA_DETAIL_URL,
     FAA_LIST_URL,
@@ -66,6 +67,18 @@ def _retains_publication(published, source: str):
     assert (output / ARTIFACT).read_bytes() == artifact
     assert (output / PUBLICATION_RECEIPT).read_bytes() == receipt
     assert uploads == [artifact]
+
+
+def _retains_prior_relevance(published, source: str) -> None:
+    url = NGA_URL.format(area=source[4:])
+    unseen = json.loads(published[0].pages[url])
+    for row in unseen["broadcast-warn"]:
+        row["msgNumber"] += 100000
+    parsed = parse_nga_payload(json.dumps(unseen).encode(), url)
+    assert parsed and all(notice.kind == "other" for notice in parsed)
+    _retains_publication(published, source)
+    after = json.loads((published[1] / STATE_NAME).read_bytes())["sources"][source]
+    assert after["error"] == "NGA_RELEVANCE_DOWNGRADE"
 
 
 def _publishes_source(published, source: str, notice_ids: set[str]) -> None:
@@ -863,7 +876,7 @@ def test_strict_broadcast_parser_requires_consumed_geographic_preamble(prefix, f
 
 
 @pytest.mark.parametrize("numbered", (True, False))
-def test_nonspace_operative_header_excludes_unreadable_nonlaunch_details(tmp_path, numbered):
+def test_nonspace_header_cannot_withdraw_prior_launch(tmp_path, numbered):
     published, row = _preamble_published(tmp_path, "4", "navarea-iv-1078-26.txt")
     row["text"] = (
         "WESTERN NORTH ATLANTIC.\nFLORIDA.\n" + ("1. " if numbered else "")
@@ -871,7 +884,7 @@ def test_nonspace_operative_header_excludes_unreadable_nonlaunch_details(tmp_pat
         + "IN AREA BOUND BY UNREADABLE COORDINATES.\n"
     )
     published[0].pages[NGA_URL.format(area="4")] = json.dumps({"broadcast-warn": [row]}).encode()
-    _publishes_source(published, "nga:4", set())
+    _retains_prior_relevance(published, "nga:4")
 
 
 @pytest.mark.parametrize("numbered", (True, False))
@@ -1274,11 +1287,11 @@ def test_component_uscg_known_regulated_boundary_values_do_not_become_launch_geo
     "SURVEY OPERATIONS IN PROGRESS",
     "CABLE LAYING OPERATIONS IN PROGRESS",
 ))
-def test_nga_nonlaunch_subject_does_not_require_strict_body_parsing(tmp_path, area, subject):
+def test_nga_nonlaunch_subject_cannot_withdraw_prior_launch(tmp_path, area, subject):
     published, row = _preamble_published(tmp_path, area, "navarea-xii-785-26.txt")
     row["text"] = row["text"].replace("HAZARDOUS OPERATIONS, ROCKET LAUNCHING", subject)
     published[0].pages[NGA_URL.format(area=area)] = json.dumps({"broadcast-warn": [row]}).encode()
-    _publishes_source(published, f"nga:{area}", set())
+    _retains_prior_relevance(published, f"nga:{area}")
 
 
 @pytest.mark.parametrize("area", ("4", "12", "A", "P"))
@@ -1549,21 +1562,13 @@ def test_nga_consecutive_paragraphs_still_allow_healthy_withdrawal(published, ar
     "WESTERN CARIBBEAN SEA.\nCOLOMBIA.\nCOVE ROJO LIGHTHOUSE 12-30.95N 081-43.77W UNLIT.\n",
     "CABLE LAYING OPERATIONS IN PROGRESS.\n",
 ))
-def test_nga_unnumbered_known_nonspace_body_still_confirms(published, area, text):
-    web, cache, output, publication, uploads, _, _, _ = published
+def test_nga_unnumbered_nonspace_cannot_withdraw_prior_launch(published, area, text):
+    web = published[0]
     url = NGA_URL.format(area=area)
     payload = json.loads(web.pages[url])
     payload["broadcast-warn"][0]["text"] = text
     web.pages[url] = json.dumps(payload).encode()
-    report = refresh_hazards(
-        cache, output, NOW + timedelta(minutes=31), fetch=web, pause=lambda _: None,
-        publication=publication,
-    )
-    after = json.loads((cache / STATE_NAME).read_bytes())["sources"][f"nga:{area}"]
-    assert report["ok"] and report["published"] and not report["degraded"]
-    assert after["error"] is None and after["checked_at"] == "2026-11-14T00:11:00Z"
-    assert after["notices"] == [] and len(uploads) == 2
-    assert uploads[-1] == (output / ARTIFACT).read_bytes()
+    _retains_prior_relevance(published, f"nga:{area}")
 
 
 @pytest.mark.parametrize("uid", (58224, 58225))
@@ -1651,14 +1656,14 @@ def test_uscg_excluded_group_or_status_does_not_require_body_numbering(published
     "1. CABLE LAYING OPERATIONS IN PROGRESS. 2..CANCEL NAVAREA XII 784/26.",
     "1. CABLE LAYING OPERATIONS IN PROGRESS. 2?. CANCEL NAVAREA XII 784/26.",
 ))
-def test_nga_nonlaunch_inline_ordinal_damage_does_not_freeze_publication(published, area, text):
+def test_nga_nonlaunch_inline_ordinals_cannot_withdraw_prior_launch(published, area, text):
     web = published[0]
     url = NGA_URL.format(area=area)
     payload = json.loads(web.pages[url])
     payload["broadcast-warn"][0]["text"] = text
     web.pages[url] = json.dumps(payload).encode()
     web.pages[FAA_LIST_URL] = b"[]"
-    _publishes_source(published, f"nga:{area}", set())
+    _retains_prior_relevance(published, f"nga:{area}")
     after = json.loads((published[1] / STATE_NAME).read_bytes())["sources"]
     assert after["faa"]["notices"] == []
     assert after["faa"]["checked_at"] == "2026-11-14T00:11:00Z"
@@ -1667,10 +1672,10 @@ def test_nga_nonlaunch_inline_ordinal_damage_does_not_freeze_publication(publish
 @pytest.mark.parametrize("area", ("4", "12", "A", "P"))
 @pytest.mark.parametrize("space", ("", " ", "\t", "\n"))
 @pytest.mark.parametrize("tail", ("\n", " \t\n", " 3.CANCEL NAVAREA XII 783/26."))
-def test_nga_consecutive_inline_ordinals_and_cancellation_years_still_confirm(
+def test_nga_nonspace_inline_grammar_keeps_prior_launch(
     published, area, space, tail,
 ):
-    web, cache, output, publication, uploads, _, _, _ = published
+    web = published[0]
     url = NGA_URL.format(area=area)
     payload = json.loads(web.pages[url])
     payload["broadcast-warn"][0]["text"] = (
@@ -1678,15 +1683,7 @@ def test_nga_consecutive_inline_ordinals_and_cancellation_years_still_confirm(
         f"2.{space}CANCEL THIS MSG 150001Z NOV 26.{tail}"
     )
     web.pages[url] = json.dumps(payload).encode()
-    report = refresh_hazards(
-        cache, output, NOW + timedelta(minutes=31), fetch=web, pause=lambda _: None,
-        publication=publication,
-    )
-    after = json.loads((cache / STATE_NAME).read_bytes())["sources"][f"nga:{area}"]
-    assert report["ok"] and report["published"] and not report["degraded"]
-    assert after["error"] is None and after["checked_at"] == "2026-11-14T00:11:00Z"
-    assert after["notices"] == [] and len(uploads) == 2
-    assert uploads[-1] == (output / ARTIFACT).read_bytes()
+    _retains_prior_relevance(published, f"nga:{area}")
 
 
 @pytest.mark.parametrize("area", ("4", "12", "A", "P"))
@@ -1702,21 +1699,13 @@ def test_nga_consecutive_inline_ordinals_and_cancellation_years_still_confirm(
     "A.1023(26), PARAGRAPH 11.5.1, CONTACT NAVSAFETY@NGA.MIL SUBJ: MODU REPORT. "
     "3.CANCEL NAVAREA IV 1121/23.",
 ))
-def test_nga_inline_structure_preserves_numeric_body_fields(published, area, text):
-    web, cache, output, publication, uploads, _, _, _ = published
+def test_nga_nonspace_numeric_body_keeps_prior_launch(published, area, text):
+    web = published[0]
     url = NGA_URL.format(area=area)
     payload = json.loads(web.pages[url])
     payload["broadcast-warn"][0]["text"] = text
     web.pages[url] = json.dumps(payload).encode()
-    report = refresh_hazards(
-        cache, output, NOW + timedelta(minutes=31), fetch=web, pause=lambda _: None,
-        publication=publication,
-    )
-    after = json.loads((cache / STATE_NAME).read_bytes())["sources"][f"nga:{area}"]
-    assert report["ok"] and report["published"] and not report["degraded"]
-    assert after["error"] is None and after["checked_at"] == "2026-11-14T00:11:00Z"
-    assert after["notices"] == [] and len(uploads) == 2
-    assert uploads[-1] == (output / ARTIFACT).read_bytes()
+    _retains_prior_relevance(published, f"nga:{area}")
 
 
 @pytest.mark.parametrize("area", ("4", "12", "A", "P"))
@@ -1791,8 +1780,8 @@ def test_nga_nonlaunch_archived_cancellation_ordinal_does_not_freeze(published, 
 
 
 @pytest.mark.parametrize("area", ("4", "12", "A", "P"))
-def test_nga_wrapped_cancellation_fields_keep_their_year_value(published, area):
-    web, cache, output, publication, uploads, _, _, _ = published
+def test_nga_nonspace_wrapped_cancellation_keeps_prior_launch(published, area):
+    web = published[0]
     url = NGA_URL.format(area=area)
     payload = json.loads(web.pages[url])
     payload["broadcast-warn"][0]["text"] = (
@@ -1800,15 +1789,7 @@ def test_nga_wrapped_cancellation_fields_keep_their_year_value(published, area):
         "26. \t\n3.CANCEL NAVAREA XII 784/26."
     )
     web.pages[url] = json.dumps(payload).encode()
-    report = refresh_hazards(
-        cache, output, NOW + timedelta(minutes=31), fetch=web, pause=lambda _: None,
-        publication=publication,
-    )
-    after = json.loads((cache / STATE_NAME).read_bytes())["sources"][f"nga:{area}"]
-    assert report["ok"] and report["published"] and not report["degraded"]
-    assert after["error"] is None and after["checked_at"] == "2026-11-14T00:11:00Z"
-    assert after["notices"] == [] and len(uploads) == 2
-    assert uploads[-1] == (output / ARTIFACT).read_bytes()
+    _retains_prior_relevance(published, f"nga:{area}")
 
 
 @pytest.mark.parametrize("space", ("", " "))

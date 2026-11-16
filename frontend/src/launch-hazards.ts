@@ -158,10 +158,16 @@ export function hazardListingsFor(eventId: string): readonly HazardListing[] {
 }
 
 /** One undrawn notice in plain words. An unreadable time is quoted as published. */
-export function hazardListingText(listing: Pick<HazardListing, 'noticeId' | 'reason' | 'text' | 'checkedAt'>): string {
+export function hazardListingText(
+  listing: Pick<HazardListing, 'eventId' | 'noticeId' | 'reason' | 'text' | 'checkedAt'>,
+): string {
+  const hasDrawnArea = hazardNotesFor(listing.eventId).some((note) => (
+    note.noticeId === listing.noticeId || note.also.split(', ').includes(listing.noticeId)
+  ));
+  const coverage = hasDrawnArea ? 'is partly drawn.' : 'is not drawn.';
   const what = listing.reason === 'unread_time'
     ? `publishes a time the map could not read: "${listing.text}". Nothing is drawn for that time.`
-    : `is not drawn. ${listing.text}`;
+    : `${coverage} ${listing.text}`;
   return `${listing.noticeId} ${what} Checked ${listing.checkedAt}.`;
 }
 

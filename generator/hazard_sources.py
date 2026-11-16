@@ -16,7 +16,7 @@ from pathlib import Path
 
 import requests
 
-from .hazard_match import Sighting
+from .hazard_match import Sighting, validate_bundle
 from .hazard_notices import (
     MAX_SOURCE_BYTES,
     Notice,
@@ -55,7 +55,7 @@ TIMEOUT_SECONDS = 20
 PAUSE_SECONDS = 0.5
 USER_AGENT = "launch-hazard-notices/1"
 STATE_NAME = "hazard-notices.json"
-STATE_SCHEMA_VERSION = 4
+STATE_SCHEMA_VERSION = 5
 _REFRESH_PENDING = "SOURCE_REFRESH_PENDING"
 _MAX_FAA_DETAILS = 40
 _MAX_USCG_PARTS = 8
@@ -181,9 +181,12 @@ def _uscg(fetch: Fetch, pause: Callable[[float], None]) -> list[Notice]:
     return notices
 
 
-def _nga(area: str, fetch: Fetch) -> list[Notice]:
+def _nga(area: str, fetch: Fetch, relevant_ids: frozenset[str] = frozenset()) -> list[Notice]:
     url = NGA_URL.format(area=area)
-    return [notice for notice in parse_nga_payload(fetch(url), url) if notice.kind != "other"]
+    notices = parse_nga_payload(fetch(url), url)
+    if any(notice.kind == "other" and notice.notice_id in relevant_ids for notice in notices):
+        raise NoticeError("NGA_RELEVANCE_DOWNGRADE")
+    return [notice for notice in notices if notice.kind != "other"]
 
 
 def _confirm_notices(notices: list[Notice]) -> None:
@@ -204,11 +207,43 @@ def _read_state(path: Path) -> dict:
     except (OSError, ValueError, UnicodeError):
         return {}
     sources = state.get("sources") if isinstance(state, dict) else None
-    return sources if (
-        isinstance(sources, dict)
-        and type(state.get("schema_version")) is int
-        and state["schema_version"] == STATE_SCHEMA_VERSION
-    ) else {}
+    if (
+        not isinstance(sources, dict)
+        or type(state.get("schema_version")) is not int
+        or state["schema_version"] not in {4, STATE_SCHEMA_VERSION}
+    ):
+        return {}
+    if state["schema_version"] == 4:
+        for entry in sources.values():
+            if isinstance(entry, dict):
+                entry["error"] = _REFRESH_PENDING
+    return sources
+
+
+def _artifact_identities(path: Path | None) -> dict[str, frozenset[str]]:
+    if path is None:
+        return {}
+    try:
+        bundle = _decode_json(path.read_bytes())
+        validate_bundle(bundle)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return {}
+    identities: dict[str, set[str]] = {}
+    series = {
+        "NAVAREA IV": "nga:4", "NAVAREA XII": "nga:12",
+        "HYDROLANT": "nga:A", "HYDROPAC": "nga:P",
+    }
+    for launch in bundle["launches"]:
+        for notice in [*launch["notices"], *launch["listed"]]:
+            if notice["authority"] != "NGA":
+                continue
+            for identity in [notice["notice_id"], *notice.get("also", [])]:
+                matched = re.fullmatch(
+                    r"(NAVAREA IV|NAVAREA XII|HYDROLANT|HYDROPAC) [1-9]\d*/\d{2}", identity,
+                )
+                if matched:
+                    identities.setdefault(series[matched[1]], set()).add(identity)
+    return {name: frozenset(names) for name, names in identities.items()}
 
 
 def _cached_notice(record: object) -> Notice:
@@ -287,6 +322,7 @@ def refresh_sources(
     *,
     fetch: Fetch = http_fetch,
     pause: Callable[[float], None] = time.sleep,
+    last_good: Path | None = None,
 ) -> dict:
     """Ask each source that is due. Returns the per-source state after the attempts."""
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -297,10 +333,13 @@ def refresh_sources(
         except BlockingIOError as exc:
             raise SourceError("SOURCE_CACHE_BUSY") from exc
         sources = _read_state(path)
+        artifact_ids = _artifact_identities(last_good)
         for name in SOURCES:
             entry = sources.get(name) if isinstance(sources.get(name), dict) else {}
+            relevant_ids = artifact_ids.get(name, frozenset())
             try:
-                _confirmed_sightings(name, entry, now)
+                sightings = _confirmed_sightings(name, entry, now)
+                relevant_ids |= frozenset(sighting.notice.notice_id for sighting in sightings)
             except SourceError:
                 if "checked_at" in entry or "notices" in entry or entry.get("error") is None:
                     entry = {}
@@ -326,7 +365,7 @@ def refresh_sources(
                 elif name == "uscg":
                     notices = _uscg(fetch, pause)
                 else:
-                    notices = _nga(name.split(":")[1], fetch)
+                    notices = _nga(name.split(":")[1], fetch, relevant_ids)
                 _confirm_notices(notices)
             except (SourceError, NoticeError, requests.RequestException, OSError) as exc:
                 entry["error"] = (
