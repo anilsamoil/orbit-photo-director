@@ -158,6 +158,7 @@
   "test/profile-crud-edit.test.ts": 0.607,
   "test/profile-crud.test.ts": 2.392,
   "test/profile-csv-import.test.ts": 0.548,
+  "test/profile-device-hydration.test.ts": 1.5,
   "test/profile-events.test.ts": 0.44,
   "test/profile-geocode.test.ts": 0.48,
   "test/profile-hydration.test.ts": 0.755,
