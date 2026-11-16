@@ -85,6 +85,9 @@ class SourceError(RuntimeError):
 class _NoticeLifecycle:
     notice_id: str
     valid_until: datetime | None
+    observed_at: datetime
+    source_url: str
+    source_sha256: str
     cancels: tuple[str, ...] = ()
 
 
@@ -242,11 +245,19 @@ def _read_state(path: Path) -> dict:
 
 
 def _artifact_lifecycles(path: Path | None) -> dict[str, tuple[_NoticeLifecycle, ...]]:
+    """Recover aliases without borrowing the primary's expiry from older artifacts.
+
+    Artifacts omit each alias's own expiry and may combine different NGA feeds.
+    An alias needs its own validated cache evidence from the carrier's exact
+    source snapshot or a check strictly after artifact generation. Otherwise it
+    stays protected until validated cancellation establishes its release.
+    """
     if path is None:
         return {}
     try:
         bundle = _decode_json(path.read_bytes())
         validate_bundle(bundle)
+        observed_at = _parse_iso8601_z(bundle["generated_at"])
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         return {}
     lifecycles: dict[str, list[_NoticeLifecycle]] = {}
@@ -264,9 +275,28 @@ def _artifact_lifecycles(path: Path | None) -> dict[str, tuple[_NoticeLifecycle,
                 )
                 if matched:
                     lifecycles.setdefault(series[matched[1]], []).append(_NoticeLifecycle(
-                        identity, _parse_iso8601_z(notice["valid_until"]),
+                        notice_id=identity,
+                        valid_until=_parse_iso8601_z(notice["valid_until"])
+                        if identity == notice["notice_id"] else None,
+                        observed_at=observed_at,
+                        source_url=notice["source_url"],
+                        source_sha256=notice["source_sha256"],
                     ))
     return {name: tuple(notices) for name, notices in lifecycles.items()}
+
+
+def _cache_resolves_alias(alias: _NoticeLifecycle, own: Sighting) -> bool:
+    return (
+        alias.valid_until is None
+        and own.notice.notice_id == alias.notice_id
+        and (
+            (
+                own.notice.source_url == alias.source_url
+                and own.notice.source_sha256 == alias.source_sha256
+            )
+            or own.checked_at > alias.observed_at
+        )
+    )
 
 
 def _cached_notice(record: object) -> Notice:
@@ -362,11 +392,17 @@ def refresh_sources(
             previous = artifact_lifecycles.get(name, ())
             try:
                 sightings = _confirmed_sightings(name, entry, now)
-                previous += tuple(
+                previous = tuple(
+                    notice for notice in previous
+                    if not any(_cache_resolves_alias(notice, sighting) for sighting in sightings)
+                ) + tuple(
                     _NoticeLifecycle(
-                        sighting.notice.notice_id,
-                        sighting.notice.valid_until,
-                        sighting.notice.cancels,
+                        notice_id=sighting.notice.notice_id,
+                        valid_until=sighting.notice.valid_until,
+                        observed_at=sighting.checked_at,
+                        source_url=sighting.notice.source_url,
+                        source_sha256=sighting.notice.source_sha256,
+                        cancels=sighting.notice.cancels,
                     )
                     for sighting in sightings
                 )

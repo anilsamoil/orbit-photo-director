@@ -356,6 +356,8 @@ def _launch_entry(
                 for other in kept
                 if other.sighting.notice.authority == notice.authority
                 and other.sighting.notice.notice_id != notice.notice_id
+                and other.sighting.notice.valid_until == notice.valid_until
+                and other.sighting.notice.cancels == notice.cancels
                 and other.windows == row.windows
                 and same_ring(other.area.ring, row.area.ring)
             ),

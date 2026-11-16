@@ -1554,7 +1554,13 @@ def test_nga_consecutive_paragraphs_still_allow_healthy_withdrawal(published, ar
     assert after[source]["notices"][0]["areas"] == before[source]["notices"][0]["areas"]
     assert after["faa"]["notices"] == [] and len(uploads) == 2
     assert uploads[-1] == (output / ARTIFACT).read_bytes()
-    assert sum(len(launch["geojson"]["features"]) for launch in json.loads(uploads[-1])["launches"]) == 4
+    bundle = json.loads(uploads[-1])
+    assert sum(len(launch["geojson"]["features"]) for launch in bundle["launches"]) == (7 if count == 3 else 4)
+    if count == 3:
+        assert {
+            notice["area_id"] for launch in bundle["launches"] for notice in launch["notices"]
+            if notice["notice_id"] == after[source]["notices"][0]["notice_id"]
+        } == {"A", "B", "C"}
 
 
 @pytest.mark.parametrize("area", ("4", "12", "A", "P"))
@@ -1739,7 +1745,13 @@ def test_nga_inline_launch_schedule_bounds_and_cancellations_still_confirm(
     assert after[source]["notices"][0]["cancels"] == (["NAVAREA XII 784/26"] if count == 3 else [])
     assert after["faa"]["notices"] == [] and len(uploads) == 2
     assert uploads[-1] == (output / ARTIFACT).read_bytes()
-    assert sum(len(launch["geojson"]["features"]) for launch in json.loads(uploads[-1])["launches"]) == 4
+    bundle = json.loads(uploads[-1])
+    assert sum(len(launch["geojson"]["features"]) for launch in bundle["launches"]) == (7 if count == 3 else 4)
+    if count == 3:
+        assert {
+            notice["area_id"] for launch in bundle["launches"] for notice in launch["notices"]
+            if notice["notice_id"] == after[source]["notices"][0]["notice_id"]
+        } == {"A", "B", "C"}
 
 
 @pytest.mark.parametrize("area", ("4", "12", "A", "P"))

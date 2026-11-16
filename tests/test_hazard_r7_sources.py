@@ -253,9 +253,10 @@ def test_artifact_lifecycle_recovers_after_cache_loss(
     web.pages[URL] = _replacement_page(_cancellation_row() if lifecycle == "cancelled" else None)
     now = EXPIRY if lifecycle == "expired" else NOW + timedelta(minutes=31)
     sources = refresh_sources(cache, now, fetch=web, pause=lambda _: None, last_good=output / ARTIFACT)
-    expected = "NGA_RELEVANCE_DOWNGRADE" if lifecycle == "unexpired" else None
+    protected = lifecycle == "unexpired" or (representation == "alias" and lifecycle == "expired")
+    expected = "NGA_RELEVANCE_DOWNGRADE" if protected else None
     assert sources["nga:12"]["error"] == expected
-    if lifecycle != "unexpired":
+    if not protected:
         assert sources["nga:12"]["checked_at"] == utc(now)
         assert [row["notice_id"] for row in sources["nga:12"]["notices"]] == (
             [CANCELLATION_ID] if lifecycle == "cancelled" else []
