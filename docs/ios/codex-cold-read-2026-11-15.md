@@ -71,7 +71,7 @@ Premise 3 is feasible, but **TestFlight installation is not mission-length avail
 
 **F1 — High: A custom URL scheme is a compatibility gate.**
 
-Artifact loading currently calls `crypto.subtle.digest` in [manifest.ts](frontend/src/manifest.ts:154). The map also explicitly loads a bundled worker module through [worker-url.ts](frontend/src/map/adapters/maplibre/worker-url.ts:1). Serving HTML successfully proves neither capability.
+Artifact loading currently calls `crypto.subtle.digest` in [manifest.ts](../../frontend/src/manifest.ts#L154). The map also explicitly loads a bundled worker module through [worker-url.ts](../../frontend/src/map/adapters/maplibre/worker-url.ts#L1). Serving HTML successfully proves neither capability.
 
 A custom scheme handler does not itself establish full HTTPS-equivalent behavior. Apple also prevents registering handlers for schemes WKWebView already handles, so simply naming it `https` is not a solution. [Capacitor configuration](https://capacitorjs.com/docs/config).
 
@@ -85,7 +85,7 @@ Recommendation: **Measure sustained Map and ISS-view use on the actual device cl
 
 **F3 — High: Browser storage is currently carrying operational state.**
 
-The boot snapshot lives in localStorage in [snapshot.ts](frontend/src/snapshot.ts:29); cached account identity uses sessionStorage in [profile-session.ts](frontend/src/profile-session.ts:77). Neither should be the sole foundation of native offline availability.
+The boot snapshot lives in localStorage in [snapshot.ts](../../frontend/src/snapshot.ts#L32); cached account identity uses sessionStorage in [profile-session.ts](../../frontend/src/profile-session.ts#L77). Neither should be the sole foundation of native offline availability.
 
 Recommendation: **Keep installed plans, profile association, and unsent logs in native Application Support storage or SQLite, using atomic commits and a previous-good version, because web-storage failure or origin changes must not erase the app’s useful state.** Use a persistent WKWebsiteDataStore for remaining browser preferences and test upgrade migrations.
 
@@ -93,7 +93,7 @@ Recommendation: **Keep installed plans, profile association, and unsent logs in 
 
 Cloudflare service tokens authenticate a service at the Access boundary. They do not automatically establish SNAP’s user identity. [Cloudflare service-token documentation](https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/).
 
-The Worker requires `sub` and `email` for normal authenticated APIs in [calibration-auth.ts](worker/src/calibration-auth.ts:128), requires a human Access principal for [browser sessions](worker/src/browser-identity.ts:83), and rejects writes without the website’s origin in [the write guard](worker/src/calibration-auth.ts:94). Native URLSession requests and custom-origin web requests do not satisfy that contract automatically.
+The Worker requires `sub` and `email` for normal authenticated APIs in [calibration-auth.ts](../../worker/src/calibration-auth.ts#L128), requires a human Access principal for [browser sessions](../../worker/src/browser-identity.ts#L83), and rejects writes without the website’s origin in [the write guard](../../worker/src/calibration-auth.ts#L94). Native URLSession requests and custom-origin web requests do not satisfy that contract automatically.
 
 Recommendation: **Add an explicit device-authentication path with server-controlled profile ownership and per-device revocation because passing Access is only the first authorization gate.** For this small deployment, individually provisioned service tokens can be workable if each maps to permitted operations and profiles. Keep credentials in Keychain and native networking; never embed a shared secret in the public repository or JavaScript bundle.
 
@@ -103,7 +103,7 @@ Offline reading and logging must continue when online credentials expire.
 
 **F5 — High: Bundled tiles require a separate rights decision.**
 
-Current styles use Esri imagery, basemaps, and labels in [map/index.ts](frontend/src/map/index.ts:202). Existing browser caching is not evidence of permission to redistribute those layers in an application.
+Current styles use Esri imagery, basemaps, and labels in [map/index.ts](../../frontend/src/map/index.ts#L202). Existing browser caching is not evidence of permission to redistribute those layers in an application.
 
 - **Esri:** offline rights depend on the content, license, and supported export mechanism. [Esri terms](https://www.arcgis.com/home/termsofuse.html).
 - **NASA GIBS:** verify each selected product’s credits and third-party restrictions. NASA hosting does not erase third-party copyright. GIBS also publishes bulk-download coordination guidance. [NASA media policy](https://www.nasa.gov/nasa-brand-center/images-and-media/), [GIBS download guidance](https://nasa-gibs.github.io/gibs-api-docs/map-library-usage/).
@@ -119,7 +119,7 @@ Recommendation: **Bundle a modest global baseline, overzoom it when detail is mi
 
 **F7 — High: Current published artifacts cannot sustain a useful queue for days.**
 
-The default calculation window is 36 hours in [config.py](generator/config.py:22). Publication further trims the opportunities: `passes.json` receives the ranked top 25 and `top_24h.json` receives a limited upcoming list in [main.py](generator/main.py:1515). Those selections can expire long before the underlying horizon.
+The default calculation window is 36 hours in [config.py](../../generator/config.py#L22). Publication further trims the opportunities: `passes.json` receives the ranked top 25 and `top_24h.json` receives a limited upcoming list in [main.py](../../generator/main.py#L1515). Those selections can expire long before the underlying horizon.
 
 Recommendation: **Publish a bounded but complete multi-day opportunity artifact, or regenerate opportunities locally from targets and orbital elements, because retaining today’s selected cards cannot reveal omitted future passes.** Keep aging weather confidence separate from geometric opportunity.
 
@@ -137,7 +137,7 @@ Recommendation: **Schedule selected opportunities ahead during foreground use an
 
 **F10 — High: The existing outbox intentionally discards old entries.**
 
-The current queue caps each account at 200 entries and removes older ones in [calib.ts](frontend/src/calib.ts:210). The Worker already supports idempotent log writes, which should be retained.
+The current queue caps each account at 200 entries and removes older ones in [calib.ts](../../frontend/src/calib.ts#L210). The Worker already supports idempotent log writes, which should be retained.
 
 Recommendation: **Make the native outbox authoritative, durably commit before reporting success, preserve stable deduplication keys and account ownership, and delete only after an acknowledged receipt because interrupted links create ambiguous delivery outcomes.** Surface capacity problems instead of silently dropping shots.
 
