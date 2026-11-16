@@ -150,17 +150,9 @@ def _uscg_supported_length(_: Path) -> None:
         + "at OPS@EXAMPLE.COM or on VHF-FM Chan. 16 or 22."
     )
     payload = _uscg_payload(_with_advice(instruction))
-    with pytest.raises(NoticeError, match="^USCG_ROW$"):
-        parse_uscg_space_operations(payload, USCG_URL)
-    notice = next(
-        notice for notice in parse_uscg_space_operations(payload, USCG_URL, strict=False)
-        if notice.notice_id == "USCG LNM 58067"
-    )
-    assert notice.problems == (
-        "INSTRUCTION_TOO_LONG:HIGH RISK", "INSTRUCTION_TOO_LONG:HAZARD",
-    )
-    _assert_high(notice, (AVOID_LAUNCH_WINDOW, instruction, AVOID_THREE_HOURS))
-    assert all(instruction in area.instructions for area in notice.areas)
+    for strict in (True, False):
+        with pytest.raises(NoticeError, match="^USCG_ROW$"):
+            parse_uscg_space_operations(payload, USCG_URL, strict=strict)
 
 
 def _uscg_unread_schedule(_: Path) -> None:

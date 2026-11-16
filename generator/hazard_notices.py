@@ -962,6 +962,7 @@ def parse_nga_payload(body: bytes, source_url: str) -> list[Notice]:
     return notices
 
 
+_PHONE_NUMBER = r"(?:1-)?(?:\d{3}-\d{3}-\d{4}|\(\d{3}\) \d{3}-\d{4})"
 _USCG_HAZARD_LABEL = re.compile(r"^(HIGH RISK )?HAZARD AREA(?: ([A-Z]))?\s*:$")
 _USCG_FROM = re.compile(r"^([A-Z])\. FROM (.+)$")
 _USCG_NUMBERED = re.compile(r"(?m)^\d{1,2}\. ")
@@ -971,7 +972,7 @@ _USCG_GLOBAL_TIMES = re.compile(
 _USCG_LAUNCH_SECTION = re.compile(
     r"SPACE LAUNCH OPERATIONS, WHICH MAY BE HAZARDOUS TO SURFACE VESSELS, WILL "
     r"BE CONDUCTED WITHIN PORTIONS OF THE FOLLOWING HAZARD AREAS FOR "
-    r"(?:STARSHIP FLIGHT \d+|VULCAN [A-Z0-9-]+)"
+    r"(?:STARSHIP FLIGHT \d+|VULCAN [A-Z]{1,4}-\d{1,4})"
 )
 _USCG_SHARED_SECTION = (
     "HAZARD PERIODS FOR PRIMARY LAUNCH DAY AND BACKUP LAUNCH DAYS "
@@ -993,7 +994,7 @@ _USCG_REGULATED_SECTION = re.compile(
     r"AND CANCELLATION OF THIS BROADCAST NOTICE TO MARINERS MESSAGE\. DETAILED "
     r"LAUNCH INFORMATION IS AVAILABLE ON THE DAY OF LAUNCH BY CONTACTING THE U\.S\. "
     r"COAST GUARD VIA VHF-FM CHANNEL \d+ AND \d+[A-Z]? OR THROUGH THE U\.S\. SPACE "
-    r"FORCE LAUNCH INFORMATION HOTLINE AT [\d-]+\."
+    rf"FORCE LAUNCH INFORMATION HOTLINE AT {_PHONE_NUMBER}\."
 )
 _USCG_RESTRICTED_SECTION = re.compile(
     r"THE U\.S\. SPACE FORCE AND KENNEDY SPACE CENTER MAY CHOOSE TO ENFORCE A "
@@ -1006,9 +1007,9 @@ _USCG_INTRO = re.compile(
     r"(?:SPACE OPERATIONS/(?:HAZARDOUS WARNING AREA/GOVERNMENT SUPPORTED \(HAZARDOUS\)|"
     r"ACTIVE RNA/GOVERNMENT SUPPORTED \(RNA\))|"
     r"HAZARDOUS OPERATIONS WILL BE CONDUCTED FOR (?:"
-    r"(?:VANDENBERG SPACE FORCE BASE, WESTERN RANGE OPERATION [A-Z0-9-]+|"
-    r"SPACE X, [A-Z0-9-]+(?: LAUNCH OPERATIONS)?)\. HAZARDOUS OPERATION|"
-    r"LAUNCH OPERATION, [A-Z0-9-]+ OPERATION) AREAS ARE BOUNDED BY THE FOLLOWING "
+    r"(?:VANDENBERG SPACE FORCE BASE, WESTERN RANGE OPERATION W\d{4}|"
+    r"SPACE X, (?:R|TH)-\d+(?: LAUNCH OPERATIONS)?)\. HAZARDOUS OPERATION|"
+    r"LAUNCH OPERATION, INGRID OPERATION) AREAS ARE BOUNDED BY THE FOLLOWING "
     r"COORDINATES AND TIMES:|GULF OF AMERICA - CARIBBEAN SEA --- "
     + _USCG_LAUNCH_SECTION.pattern + r":)"
 )
@@ -1025,21 +1026,25 @@ _USCG_YEAR_GROUP = re.compile(
     rf"(\d{{2}})(\d{{4}})Z ({_MON}) (\d{{2}})\.?"
 )
 _USCG_TIME_LIKE = re.compile(r"^(?:\d{1,2}/\d|\d{4,}[ A-Z])")
-_OPERATION_WORD = re.compile(
-    r"\b(?:LAUNCH(?:ING|ES|ED)?|RE-?ENTRY|SPLASHDOWN|RECOVERY|RETURN|LANDING)\b"
-)
-_SUBJECT_ENTITY = re.compile(r"\b(?:SPACE X|SPACE FORCE BASE)\b")
 _VEHICLE_IDENTIFIER = re.compile(
     r"(?:LAUNCH VEHICLE|"
     r"(?:(?:SPACE X|SPACEX) CRS- ?\d+|STARSHIP(?: (?:FLIGHT )?\d+)?(?: STAGE \d+)?)"
     r"(?: LAUNCH VEHICLE)?|THE STARSHIP-SUPER HEAVY STARSHIP \| FLIGHT \d+ "
-    r"\| STARLINK [A-Z]\d+-\d+ STAGE \d+)"
+    r"\| STARLINK [A-Z]\d+-\d+ STAGE \d+|VULCAN [A-Z]{1,4}-\d{1,4})"
 )
-_SUBJECT_RESTRICTION = re.compile(
-    r"\b(?:MUST|SHOULD|SHALL|DO NOT|NEVER|APPROACH(?:ING)?|KEEP|REMAIN|STAY|SHUN\w*|TURN AWAY|"
-    r"ENTRY|ENTER(?:ING)?|PROHIBIT\w*|FORBID\w*|EXCLU\w*|CLOSED|NO ACCESS|"
-    r"NOT (?:PERMITTED|ALLOWED))\b"
+_OPERATOR_NAME = re.compile(r"(?:SPACE X|SPACEX|ULA|STRATOLAUNCH)")
+_CONTACT_NAME = re.compile(r"(?:SPACE X|SPACEX|STRATOLAUNCH)")
+_COAST_GUARD_SECTOR = re.compile(r"CORPUS CHRISTI")
+_LANDING_SITE = re.compile(r"STARBASE(?: TOWER \d+)?")
+_EMAIL_ADDRESS = re.compile(
+    r"[A-Z0-9]+(?:[._+-][A-Z0-9]+)*@"
+    r"[A-Z0-9]+(?:-[A-Z0-9]+)*(?:\.[A-Z0-9]+(?:-[A-Z0-9]+)*)+"
 )
+_VHF_CHANNEL = r"(?:[1-8]\d|0?[1-9])[A-Z]?"
+_MONTH_NAME = re.compile(
+    r"(?:JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)"
+)
+_OCEAN_NAME = re.compile(r"(?:PACIFIC|ATLANTIC|INDIAN|ARCTIC|SOUTHERN)")
 _USCG_ADVICE = re.compile(r"\bAVOID|\bREMAIN CLEAR")
 _USCG_ADVICE_CLAUSE = re.compile(
     r"(?:MARINERS ARE (?:STRONGLY )?ADVISED TO REMAIN CLEAR OF THESE AREAS "
@@ -1050,11 +1055,13 @@ _USCG_ADVICE_CLAUSE = re.compile(
     r"SURFACE VESSELS ARE STRONGLY ADVISED TO AVOID THIS AREA DEFINED DURING "
     r"SPECIFIED DATES / TIMES\.|"
     r"DURING OPERATIONS, FRONTIER CONTROL WILL BE MANAGING HAZARDOUS AREA SURFACE "
-    r"TRAFFIC ON VHF CH \d+ AND CH \d+\.|"
+    rf"TRAFFIC ON VHF CH {_VHF_CHANNEL} AND CH {_VHF_CHANNEL}\.|"
     r"FOR MORE DETAILS OR COMMENTS CONTACT 2 ROPS/DOS VIA TELEPHONE AT COMMERCIAL "
-    r"[\d-]+ OR DSN [\d-]+, OR EMAIL: [A-Z0-9@._-]+\.|"
-    r"FOR MORE DETAILS OR COMMENTS CONTACT [A-Z0-9 ]+ AT [A-Z0-9@._-]+"
-    r"(?:, [\d-]+,)? OR ON VHF-FM CHAN\. \d+(?:, \d+)? OR \d+\.?|"
+    rf"{_PHONE_NUMBER} OR DSN \d{{3}}-\d{{4}}, OR EMAIL: {_EMAIL_ADDRESS.pattern}\.|"
+    r"FOR MORE DETAILS OR COMMENTS CONTACT (?P<contact_name>[A-Z0-9 ]+) "
+    r"AT (?P<contact_address>[A-Z0-9@._+-]+)"
+    rf"(?:, {_PHONE_NUMBER},)? OR ON VHF-FM CHAN\. {_VHF_CHANNEL}"
+    rf"(?:, {_VHF_CHANNEL})? OR {_VHF_CHANNEL}\.?|"
     r"VESSELS SHOULD OPERATE IN A HEIGHTENED STATE OF AWARENESS DURING THE LAUNCH "
     r"TIME AND AVOID ALL WATERS WITHIN ROCKET FLIGHT TRAJECTORIES ORIGINATING FROM "
     r"THE LAUNCH SITE NEAR BOCA CHICA/STARBASE, TEXAS, AND EXTENDING ACROSS THE "
@@ -1076,7 +1083,7 @@ _USCG_ADVICE_CLAUSE = re.compile(
     r"MARINERS ARE URGED TO AVOID WATERS WITHIN ROCKET FLIGHT TRAJECTORIES/HAZARD "
     r"AREAS DURING LAUNCH WINDOWS AS DETAILED ABOVE\.|"
     r"FOR MORE INFORMATION, MARINERS MAY CONTACT THE U\.S\. SPACE FORCE LAUNCH "
-    r"INFORMATION HOTLINE AT [\d-]+ OR BY VISITING WWW\.PATRICK\.SPACEFORCE\.MIL\.|"
+    rf"INFORMATION HOTLINE AT {_PHONE_NUMBER} OR BY VISITING WWW\.PATRICK\.SPACEFORCE\.MIL\.|"
     r"FOR NAVIGATIONAL SAFETY, MARINERS ARE ADVISED TO REFER TO WWW\.NAVCEN\.USCG\.GOV/MSI "
     r"TO VIEW THE LOCAL NOTICE TO MARINERS \(LNM\) AND THE GEOSPATIAL CHART AT "
     r"WWW\.NAVCEN\.USCG\.GOV/CHART FOR INFORMATION ON SPACE LAUNCH AND RECOVERY "
@@ -1103,13 +1110,14 @@ _USCG_ZONE_BODY = re.compile(
     r"(?P<sector>[A-Z ]+) COMMAND CENTER AT \(\d{3}\) \d{3}-\d{4}\.",
 )
 _USCG_ZONE_BOUNDARY = re.compile(
-    rf"(?:FROM |OF [A-Z ]+, FROM THE SURFACE TO BOTTOM, AND IS BOUND BY THE "
+    rf"(?:FROM |OF (?:THE GULF OF AMERICA|SOUTH BAY), "
+    rf"FROM THE SURFACE TO BOTTOM, AND IS BOUND BY THE "
     rf"FOLLOWING POSITIONS: ){_USCG_DMS.pattern}"
     rf"(?:, (?:(?:TO |THEN FOLLOWING THE SHORELINE TO |AND FOLLOWING THE COAST BACK TO )?"
     rf"{_USCG_DMS.pattern}|THEN FOLLOWING THE 12 NAUTICAL MILE TERRITORIAL SEA LINE TO "
     rf"THE UNITED STATES OF AMERICA/MEXICO MARITIME BOUNDARY LINE|"
     rf"(?:AND )?FOLLOWING THE UNITED STATES OF AMERICA/MEXICO MARITIME BOUNDARY LINE "
-    rf"TO POSITION {_USCG_DMS.pattern}|AND FOLLOWING THE [A-Z ]+ INTERNAL COASTLINE "
+    rf"TO POSITION {_USCG_DMS.pattern}|AND FOLLOWING THE SOUTH BAY INTERNAL COASTLINE "
     rf"TO THE POINT OF ORIGIN))*\."
 )
 _USCG_LOCAL_CLOCK = r"\d{1,2}:\d{2} [AP]\.M\."
@@ -1204,14 +1212,33 @@ _USCG_RECOVERY_DETAIL = re.compile(
         r"UNDER VARIOUS MEANS OF CONTROL\. MARINERS ARE URGED TO AVOID THE REENTRY "
         r"SITES DURING REENTRY WINDOWS AS DETAILED ABOVE\.",
         r"FOR MORE DETAILS OR COMMENTS CONTACT (?P<contact_name>[A-Z0-9 ]+) "
-        r"AT (?P<contact_address>[A-Z0-9@._-]+) "
-        r"OR ON VHF-FM CHAN\. \d+, \d+ OR \d+\.?",
+        r"AT (?P<contact_address>[A-Z0-9@._+-]+) "
+        rf"OR ON VHF-FM CHAN\. {_VHF_CHANNEL}, {_VHF_CHANNEL} OR {_VHF_CHANNEL}\.?",
         r"FOR ADDITIONAL INFORMATION, CONTACT THE U\.S\. COAST GUARD SECTOR "
         r"(?P<contact_sector>[A-Z ]+) "
         r"COMMAND CENTER AT \(\d{3}\) \d{3}-\d{4}\.",
     ))
     + ")"
 )
+_USCG_RECOVERY_METADATA: dict[str, re.Pattern[str]] = {
+    "capsule": _VEHICLE_IDENTIFIER,
+    "trunk": _VEHICLE_IDENTIFIER,
+    "vehicle": _VEHICLE_IDENTIFIER,
+    "first_month": _MONTH_NAME,
+    "last_month": _MONTH_NAME,
+    "local_zone": re.compile(r"(?:HST|[ECMP][DS]T)"),
+    "utc_zone": re.compile(r"(?:UTC|GMT|ZULU)"),
+    "capsule_ocean": _OCEAN_NAME,
+    "trunk_ocean": _OCEAN_NAME,
+    "return_vehicle": _VEHICLE_IDENTIFIER,
+    "return_subject": _VEHICLE_IDENTIFIER,
+    "initial_vehicle": _VEHICLE_IDENTIFIER,
+    "landing_vehicle": _VEHICLE_IDENTIFIER,
+    "landing_site": _LANDING_SITE,
+    "contact_name": _CONTACT_NAME,
+    "contact_address": _EMAIL_ADDRESS,
+    "contact_sector": _COAST_GUARD_SECTOR,
+}
 
 
 def _uscg_point(line: str) -> Position | None:
@@ -1273,11 +1300,21 @@ class _UscgMode(Enum):
     ADVICE = auto()
 
 
+def _uscg_advice_clause(text: str) -> re.Match[str] | None:
+    clause = _USCG_ADVICE_CLAUSE.match(text)
+    if clause is not None and clause["contact_name"] is not None and not (
+        _CONTACT_NAME.fullmatch(clause["contact_name"])
+        and _EMAIL_ADDRESS.fullmatch(clause["contact_address"])
+    ):
+        raise NoticeError("USCG_ROW")
+    return clause
+
+
 def _uscg_advice(text: str) -> bool:
     if not text:
         return False
     while text:
-        clause = _USCG_ADVICE_CLAUSE.match(text)
+        clause = _uscg_advice_clause(text)
         if clause is None:
             return False
         text = text[clause.end():]
@@ -1360,24 +1397,13 @@ class _UscgZone:
     relevance: bool | None
 
 
-def _operation_subject(text: str, *, vehicle: bool = False) -> bool:
-    if vehicle and _VEHICLE_IDENTIFIER.fullmatch(text):
-        return True
-    text = _SUBJECT_ENTITY.sub("", text)
-    return not any(pattern.search(text) for pattern in (
-        _SPACE_OPERATIONS, _UNCERTAIN_FLIGHT, _OPERATION_WORD, _ACTIVITY_SUBJECT,
-        _SUBJECT_RESTRICTION, _USCG_ADVICE, _MARINE_ADVICE, _HAZARD_AREA_CONTENT,
-        _USCG_DMS, _USCG_DECIMAL, _DM_PAIR, _FAA_NARRATIVE_POINT,
-    ))
-
-
 def _uscg_zone_activity(activity: str | None) -> bool | None:
     if activity is None:
         return True
     text = activity.removeprefix("THE ").removesuffix(" OPERATION")
     for action, relevance in _USCG_ZONE_ACTIVITIES.items():
-        if text == action or text.endswith(f" {action}") and _operation_subject(
-            text[:-(len(action) + 1)], vehicle=True,
+        if text == action or text.endswith(f" {action}") and _VEHICLE_IDENTIFIER.fullmatch(
+            text[:-(len(action) + 1)],
         ):
             return relevance
     return None
@@ -1393,8 +1419,7 @@ def _uscg_zone(body: re.Match[str]) -> _UscgZone:
         if (
             header is None or last < first
             or not _USCG_ZONE_BOUNDARY.fullmatch(body["boundary"])
-            or not all(_operation_subject(body[name]) for name in ("port", "sector"))
-            or not _operation_subject(_USCG_DMS.sub("", body["boundary"]))
+            or not all(_COAST_GUARD_SECTOR.fullmatch(body[name]) for name in ("port", "sector"))
             or body["location"] not in {
                 "IN THE NEAR SHORE REGION OF THE SPACE LAUNCH HAZARD AREA IN THE GULF OF AMERICA",
                 "IN SOUTH BAY",
@@ -1408,7 +1433,7 @@ def _uscg_zone(body: re.Match[str]) -> _UscgZone:
         remaining = body["schedule"]
         preamble = _USCG_ZONE_REENTRY.match(remaining)
         if preamble:
-            if not _operation_subject(preamble["vehicle"], vehicle=True):
+            if not _VEHICLE_IDENTIFIER.fullmatch(preamble["vehicle"]):
                 raise ValueError("reentry vehicle")
             remaining = remaining[preamble.end():]
         for index in range(2):
@@ -1446,7 +1471,7 @@ def _uscg_zone(body: re.Match[str]) -> _UscgZone:
                     relevance = None
                 return _UscgZone(schedule, relevance)
             reentry = _USCG_ZONE_REENTRY.match(remaining)
-            if reentry is None or index or not _operation_subject(reentry["vehicle"], vehicle=True):
+            if reentry is None or index or not _VEHICLE_IDENTIFIER.fullmatch(reentry["vehicle"]):
                 raise ValueError("unknown schedule")
             remaining = remaining[reentry.end():]
         raise ValueError("missing reactivation schedule")
@@ -1470,10 +1495,10 @@ def _uscg_recovery_warning(flat: str) -> bool:
     complete = (
         prefix is not None
         and all(
-            _operation_subject(subject or "", vehicle=name in {"capsule", "trunk", "vehicle"})
+            subject is None or _USCG_RECOVERY_METADATA[name].fullmatch(subject)
             for name, subject in operation.groupdict().items()
         )
-        and _operation_subject(prefix["vehicle"] or "", vehicle=True)
+        and (prefix["vehicle"] is None or _VEHICLE_IDENTIFIER.fullmatch(prefix["vehicle"]))
     )
     remaining = flat[operation.end():]
     section = _UscgRecoverySection.COORDINATES
@@ -1484,9 +1509,7 @@ def _uscg_recovery_warning(flat: str) -> bool:
             break
         fields = detail.groupdict()
         if any(
-            value and not _operation_subject(value, vehicle=name in {
-                "return_vehicle", "return_subject", "initial_vehicle", "landing_vehicle",
-            })
+            value and not _USCG_RECOVERY_METADATA[name].fullmatch(value)
             for name, value in fields.items()
             if name not in {"label", "coordinate", "reference", "periods", "window"}
         ):
@@ -1617,7 +1640,7 @@ def _uscg_areas(description: str, *, strict: bool) -> tuple[list[Area], list[str
     for unit in advice:
         remaining = " ".join(unit.replace("•", " ").split())
         while remaining:
-            clause = _USCG_ADVICE_CLAUSE.match(remaining.upper())
+            clause = _uscg_advice_clause(remaining.upper())
             if clause is None:
                 if strict:
                     raise NoticeError("USCG_ROW")
@@ -1848,11 +1871,26 @@ _FAA_RECOVERY_NAME = re.compile(
     r"\d{6} (?P<operator>[A-Z0-9 .-]+?) (?:RECOVERY|RE-?ENTRY|LANDING) "
     r"(?P<vehicle>[A-Z0-9 |/-]+)"
 )
+_FAA_TITLE = re.compile(
+    rf"\d{{6}} (?:(?:SPACE X|SPACEX) (?:LAUNCH|RECOVERY|RE-?ENTRY|LANDING) "
+    rf"{_VEHICLE_IDENTIFIER.pattern}|ULA (?:VULCAN [A-Z]{{1,4}}-\d{{1,4}}"
+    r"(?: \([A-Z]\d{4}\))?|(?:RECOVERY|RE-?ENTRY|LANDING) VULCAN [A-Z]{1,4}-\d{1,4})|"
+    r"(?:VANDENBERG SPACE FORCE BASE|WALLOPS ISLAND) LAUNCH VEHICLE)"
+)
 _FAA_NARRATIVE_POINT = re.compile(r"(\d{2})(\d{2})(\d{2})([NS])(\d{3})(\d{2})(\d{2})([EW])")
 _FAA_LOCATION = r"[A-Z0-9][A-Z0-9 .'()/-]*, [A-Z]{2}"
+_FAA_LOCATION_NAME = re.compile(
+    r"(?:STARBASE, TX|CAPE CANAVERAL, FL|VANDENBERG SPACE FORCE BASE, CA|"
+    r"WALLOPS ISLAND, VA|PACIFIC SPACEPORT COMPLEX - ALASKA, AK)"
+)
+_FAA_FACILITY_NAME = re.compile(r"(?:THE )?(?:HOUSTON|MIAMI|LOS ANGELES|WASHINGTON|ANCHORAGE)")
+_FAA_OPTIONAL_METADATA: dict[str, re.Pattern[str]] = {
+    "txtNameCoordFacility": _FAA_FACILITY_NAME,
+    "txtAddrCoordPhone": re.compile(_PHONE_NUMBER),
+}
 _FAA_COORDINATION = (
     r"(?P<coordination>(?:THE )?[A-Z][A-Z .'-]*) /[A-Z0-9]{3}/ ARTCC,? TEL "
-    r"(?:[0-9]|\([0-9]{3}\))[0-9 ()-]*[0-9],? IS THE (?:FAA )?CDN FAC\."
+    rf"{_PHONE_NUMBER},? IS THE (?:FAA )?CDN FAC\."
 )
 _FAA_MARITIME_LIMIT = (
     r"EXCLUDING (?:AIRSPACE (?:OVER|BEYOND 12(?:NM| MILE) COASTAL LIMIT OVER) "
@@ -2053,19 +2091,28 @@ def parse_faa_tfr(body: bytes, source_url: str) -> Notice:
         relevance = _Relevance.UNCERTAIN
     relevant = relevance is not _Relevance.OTHER
     frame = _FAA_SPACE_NARRATIVE.fullmatch(narrative.upper())
-    if relevant and frame is not None and any(
-        not _operation_subject(frame[part])
-        for part in ("location", "coordination")
-    ):
-        raise NoticeError("FAA_ROW")
+    if relevant:
+        if not _FAA_TITLE.fullmatch(name.upper()):
+            raise NoticeError("FAA_ROW")
+        for path, shape in _FAA_OPTIONAL_METADATA.items():
+            nodes = notam.findall(path)
+            if nodes and (
+                len(nodes) != 1 or not shape.fullmatch(_faa_required(notam, path).upper())
+            ):
+                raise NoticeError("FAA_ROW")
+        if frame is not None and not (
+            _FAA_LOCATION_NAME.fullmatch(frame["location"])
+            and _FAA_FACILITY_NAME.fullmatch(frame["coordination"])
+        ):
+            raise NoticeError("FAA_ROW")
     if not relevant:
         kind = "other"
     elif _FAA_NOT_LAUNCH.search(name.upper()):
         operation = _FAA_RECOVERY_NAME.fullmatch(name.upper())
-        known_recovery = operation is not None and all(
-            _operation_subject(operation[part], vehicle=part == "vehicle")
-            for part in ("operator", "vehicle")
-        ) and frame is not None
+        known_recovery = (
+            operation is not None and _OPERATOR_NAME.fullmatch(operation["operator"])
+            and _VEHICLE_IDENTIFIER.fullmatch(operation["vehicle"]) and frame is not None
+        )
         _readable_relevance(False if known_recovery else None, error="FAA_ROW")
         kind = "recovery"
     else:
@@ -2101,7 +2148,7 @@ def parse_faa_tfr(body: bytes, source_url: str) -> Notice:
             if relevant else _faa_text(group, "aseTFRArea/txtName")
         )
         letter = raw_name.removeprefix("Area ").strip()
-        if relevant and not letter:
+        if relevant and not re.fullmatch(r"Area [A-Z]", raw_name):
             raise NoticeError("FAA_ROW")
         area_id = number if len(groups) == 1 else letter
         if relevant and area_id in area_ids:

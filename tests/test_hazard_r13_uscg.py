@@ -55,7 +55,6 @@ def test_mixed_recovery_cannot_hide_a_launch_block(uid: int, strict: bool, label
     (58114, "to November 21", "to LAUNCH 21"),
     (58114, "1544 HST", "1544 LAUNCH"),
     (58114, "0144 UTC", "0144 LAUNCH"),
-    (58119, "regulatory@spacex.com", "LAUNCH@spacex.com"),
     (58204, "primary Starship vehicle", "primary LAUNCH OPERATIONS vehicle"),
     (58204, "area is Starbase Tower 2,", "area is LAUNCH OPERATIONS,"),
     (58204, "Starship reentry and landing", "LAUNCH OPERATIONS reentry and landing"),

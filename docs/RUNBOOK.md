@@ -150,6 +150,8 @@ Every recognized operative FAA narrative clause must also appear in the structur
 
 FAA narrative location and coordination fields cannot contain launch operations, hazard or advice clauses, or coordinate blocks. Conflicting metadata raises `FAA_ROW` before recovery classification and retains last-good without upload.
 
+The Wallops and Vandenberg FAA fixtures, `tests/fixtures/hazards_r3/faa-wallops.xml` and `tests/fixtures/hazards_r3/faa-vandenberg.xml`, are synthetic with `origin="synthetic-regression"`. The first real TFR from either site could raise `FAA_ROW` and freeze publication on last-good. If that happens, check the real row and extend the allowlist to accept its complete supported shape.
+
 An NGA marine activity prefix cannot establish nonspace relevance when the body also contains a hazard-area label. Unsupported mixed content raises `NGA_ROW` and retains last-good without upload.
 
 Listing text is never clipped to fit the artifact. Text longer than 400 characters raises `HAZARD_LISTED` and retains the previous artifact and receipt without upload.

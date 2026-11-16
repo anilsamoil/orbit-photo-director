@@ -93,20 +93,15 @@ def test_overlength_uscg_instruction_is_retained_with_a_diagnostic() -> None:
     assert all(instruction in area.instructions for area in notice.areas)
 
 
-def test_supported_overlength_uscg_advice_fails_strictly() -> None:
+@pytest.mark.parametrize("strict", (True, False))
+def test_overlength_uscg_contact_name_fails_closed(strict: bool) -> None:
     instruction = (
         "For more details or comments contact AVOID " + "WATERS " * 60
         + "at OPS@EXAMPLE.COM or on VHF-FM Chan. 16 or 22."
     )
     payload = _uscg_payload(_with_advice(instruction))
     with pytest.raises(NoticeError, match="^USCG_ROW$"):
-        parse_uscg_space_operations(payload, USCG_URL, strict=True)
-    notice = next(
-        row for row in parse_uscg_space_operations(payload, USCG_URL, strict=False)
-        if row.notice_id == "USCG LNM 58067"
-    )
-    assert "INSTRUCTION_TOO_LONG:HIGH RISK" in notice.problems
-    assert all(instruction in area.instructions for area in notice.areas)
+        parse_uscg_space_operations(payload, USCG_URL, strict=strict)
 
 
 @pytest.mark.parametrize("before", (False, True))
