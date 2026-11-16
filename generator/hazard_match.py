@@ -358,6 +358,8 @@ def _launch_entry(
                 and other.sighting.notice.notice_id != notice.notice_id
                 and other.sighting.notice.valid_until == notice.valid_until
                 and other.sighting.notice.cancels == notice.cancels
+                and other.restriction_class == row.restriction_class
+                and other.instructions == row.instructions
                 and other.windows == row.windows
                 and same_ring(other.area.ring, row.area.ring)
             ),

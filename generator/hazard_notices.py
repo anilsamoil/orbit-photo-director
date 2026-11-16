@@ -63,6 +63,7 @@ def _sequential_numbers(numbers: tuple[int, ...]) -> bool:
 
 
 def _consecutive_area_labels(labels: list[str]) -> bool:
+    # A deleted final USCG/NGA block leaves a valid prefix that labels alone cannot detect.
     return labels == ["1"] or labels == [chr(ord("A") + index) for index in range(len(labels))]
 
 
