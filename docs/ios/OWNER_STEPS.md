@@ -34,7 +34,7 @@ In App Store Connect:
 2. Add yourself to an internal TestFlight group.
 3. Under Users and Access, Integrations, App Store Connect API, create a key with the App Manager role. Download the key file. Apple shows it once.
 
-Then on GitHub, in the repository's Settings, Environments: create an environment named `ios-release`, set yourself as its required reviewer, and add the key's three values as secrets of that environment. The work package W-70 names the three secrets.
+Then on GitHub, in the repository's Settings, Environments: create an environment named `ios-release`, set yourself as its required reviewer, and add the key's three values as secrets of that environment. Name the three secrets `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID` and `APP_STORE_CONNECT_PRIVATE_KEY` (the whole text of the downloaded `.p8` file). W-03 and W-70 read these names.
 
 **Why:** the release job signs and uploads with this key. Keeping it in a protected environment means no build can be signed without your approval.
 **Send back:** the bundle identifier and the name. Never the key.

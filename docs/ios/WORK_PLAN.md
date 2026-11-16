@@ -110,7 +110,7 @@ Sizes are agent effort: S is under a day, M is one to three days, L is more.
 
 ### W-03 Signed host proof on a ground device (S)
 - **Needs:** W-02, G0.
-- **Change:** the release job's first use. Sign the W-02 proof build with the App Store Connect API key, upload it to TestFlight, and have the ground tester install it and run the ten checks.
+- **Change:** the release job's first use. Sign the W-02 proof build with the App Store Connect API key from the `ios-release` environment secrets `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID` and `APP_STORE_CONNECT_PRIVATE_KEY`, upload it to TestFlight, and have the ground tester install it and run the ten checks.
 - **Done when:** the build reached TestFlight from a workflow run with only the owner's approval; the ground tester's results for all ten checks are in `G1-HOST-PROOF.md`, with the device model and OS version. This also proves signing, upload and install before any feature depends on them.
 
 ### W-10 Web host seam, browser side (M)
