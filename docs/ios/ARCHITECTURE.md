@@ -196,7 +196,7 @@ App                 system sign-in sheet        Cloudflare Access       Worker
  │ GET /d/manifest.json   Authorization: Bearer ... ───────────────────► check the hash, not revoked, act as that profile
 ```
 
-- `/api/device/enroll` stays behind Access. A person signs in once, in the system sheet, with Google or the one-time PIN.
+- `/api/device/enroll` stays behind Access. A person who chooses Google signs in once, in the system sheet, with Google or the one-time PIN.
 - `/d/*` gets an Access bypass application, as `/api/profiles` has today. The Worker is the only gate on that path, so it fails closed: no token, an unknown token or a revoked token is a 401 with no body detail.
 - A device token carries the account that enrolled it. The Worker resolves that account to the same profile and granted profiles as it does for the website (`worker/src/browser-identity.ts`), and `/d/*` acts inside them and no further.
 - A token does not expire. It is revoked per device, by the owner, through a route behind Access.
@@ -204,12 +204,37 @@ App                 system sign-in sheet        Cloudflare Access       Worker
 - Bearer-token requests carry no cookie, so the same-origin write rule that guards the website does not apply to `/d/*`. The design note for work package W-20 states that reasoning for the security review.
 - Reading the installed plan never needs a valid token. A rejected token shows a clear state and keeps every stored byte.
 
-The fallback, if the review prefers no new token code: one Cloudflare Access service token per device, mapped to a profile by its `common_name`, entered once by the owner. The Worker already recognises service principals on `/api/health` (`worker/src/calibration-auth.ts:149`).
+### Sign in with Apple
+
+```
+App                                   Worker
+ │ Sign in with Apple (native sheet)
+ │   identity token from Apple
+ │ POST /d/enroll/apple {identity_token, label} ─► verify the token's signature against Apple's published keys,
+ │                                               issuer appleid.apple.com, audience = the app's bundle ID, expiry
+ │                                               known account: mint a token for its profile
+ │                                               new account: create it pending until the owner approves
+ │ ◄──────────── {token, profile} or {pending} ─┘
+```
+
+The account key is the Apple user identifier, not the email: an Apple ID can hide its email behind a relay address. A pending account can use the baseline; its first sync after approval brings its profile.
+
+### Profiles, sign-out and deletion
+
+- Each account has its own profile, resolved by the Worker as for the website. A new account starts with an empty personal target list on top of the curated baseline.
+- One account per device at a time. Sign out keeps that account's unsent outbox entries, stamped with the account, and uploads them when it signs in again. It deletes the device token.
+- "Delete account" asks once, then calls `/d/account/delete`: the Worker removes the profile's targets, its device tokens and its account record, keeps the shot log only if the owner's retention rule says so, and the app returns to the baseline.
+- The owner's device list shows each account, its devices, their last build and whether it is pending approval.
+
+### Before sign-in
+
+A signed-out app needs no token. It reads the curated targets built into the app and fetches the ISS element set from CelesTrak directly, at most every few hours, falling back to the element set built into the app. Nothing behind the map's sign-in is served without a token.
 
 ## What happens when
 
 | Moment | What happens |
 | --- | --- |
+| First launch, no account | The baseline: curated targets built into the app, passes computed on the device, the map and the ISS view. A Sign in button offers Sign in with Apple and Google. |
 | Cold launch, no signal | The shell loads from the app. `/manifest.json` and the artifacts come from the installed plan. The map draws from the baseline and the tile store. The ISS moves from the stored orbit data. The banner says LOS and the plan's age. |
 | The link returns, app closed | If iOS grants a background refresh: sync installs a newer plan, the outbox drains, alerts roll forward. If it does not, all of that happens at the next open. |
 | Shoot tapped with no signal | The entry is written to the outbox, then the screen confirms. It uploads once when the link returns. |
