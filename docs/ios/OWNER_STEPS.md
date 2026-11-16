@@ -15,8 +15,7 @@ On the iPad in orbit, install the TestFlight app from the App Store. Then downlo
 
 - The devices are an iPad Pro with M4 and an iPhone 17 Pro. Both are managed: every app needs approval from the agency's device management before it can be installed. TestFlight will not be approved, so it is only for the ground tester.
 - Storage and download size are not constraints. Large downloads run overnight.
-- The iPad runs iPadOS 26.6.2.
-- Still needed: the iPhone's iOS version (Settings, General, About, Software Version), and whether the iPad is the 11-inch or the 13-inch model.
+- The iPad is the 11-inch model on iPadOS 26.6.2. The iPhone runs iOS 26.6.1.
 
 ## 2. Apple Developer Program
 

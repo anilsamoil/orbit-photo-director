@@ -49,7 +49,7 @@ On 2026-11-16 the App Store on the iPad in orbit refused TestFlight, while other
 
 ### Delivery routes to the iPad in orbit, in order of preference
 
-The orbit devices (an iPad Pro with M4 and an iPhone 17 Pro) are managed: every app needs approval from the agency's device management (gate G7). The owner is seeking that approval.
+The orbit devices (an 11-inch iPad Pro with M4 on iPadOS 26.6.2 and an iPhone 17 Pro on iOS 26.6.1) are managed: every app needs approval from the agency's device management (gate G7). The owner is seeking that approval.
 
 1. The unlisted App Store listing (W-71), approved by the device managers. Builds do not expire. Each build goes through App Review, which takes days, so orbit fixes are slower than with TestFlight.
 2. A custom app sent to the agency's Apple Business Manager, if the device managers prefer to install the app and its updates through their own device management. Also goes through App Review.
@@ -185,7 +185,7 @@ Sizes are agent effort: S is under a day, M is one to three days, L is more.
 - **Done when:** a first launch shows one screen with one button; the system sign-in sheet completes enrollment; the profile name shows; relaunch needs no sign-in; "Forget this device" removes the token and revokes it; a rejected token shows a banner and reading continues.
 
 ### W-61 Lifecycle and recovery (S)
-- **Done when:** web process termination reloads to the same tab; a lost WebGL context rebuilds the map; a memory warning reaches the web side; links to other sites open in Safari; the layouts hold at iPhone 17 Pro and iPad Pro 11-inch and 13-inch sizes in both orientations and at iPad split-view widths; the keep-awake setting works.
+- **Done when:** web process termination reloads to the same tab; a lost WebGL context rebuilds the map; a memory warning reaches the web side; links to other sites open in Safari; the layouts hold at iPhone 17 Pro and iPad Pro 11-inch sizes (the orbit devices) in both orientations and at iPad split-view widths; the keep-awake setting works.
 
 ### W-62 Diagnostics and build lifetime (S)
 - **Done when:** one page shows the build and its expiry date, the plan version and age, the orbit data age, storage in use, alert coverage, outbox and rejected counts, the last sync results and the token state; "Export" produces a text file with no token and no personal target coordinates; the expiry banner appears 30 days out.
