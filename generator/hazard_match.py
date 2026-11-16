@@ -335,7 +335,7 @@ def _launch_entry(
         for area in sighting.notice.areas:
             if not area.drawable:
                 continue
-            windows = [window for window in area.windows if window.end > now][:MAX_WINDOWS]
+            windows = [window for window in area.windows if window.end > now]
             if windows:
                 rows.append(
                     _Row(sighting, area, windows, area.restriction_class, area.instructions, [])
@@ -460,7 +460,7 @@ def build_bundle(
     bundle = {
         "schema_version": SCHEMA_VERSION,
         "label": LABEL,
-        "launches": entries[:MAX_LAUNCHES],
+        "launches": entries,
     }
     bundle["revision"] = hashlib.sha256(canonical_bytes(bundle)).hexdigest()[:16]
     bundle["generated_at"] = utc(now)

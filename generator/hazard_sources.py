@@ -11,6 +11,7 @@ import json
 import re
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -78,6 +79,13 @@ Fetch = Callable[[str], bytes]
 
 class SourceError(RuntimeError):
     """A source response or cached snapshot could not be used."""
+
+
+@dataclass(frozen=True)
+class _NoticeLifecycle:
+    notice_id: str
+    valid_until: datetime | None
+    cancels: tuple[str, ...] = ()
 
 
 def http_fetch(url: str) -> bytes:
@@ -181,12 +189,21 @@ def _uscg(fetch: Fetch, pause: Callable[[float], None]) -> list[Notice]:
     return notices
 
 
-def _nga(area: str, fetch: Fetch, relevant_ids: frozenset[str] = frozenset()) -> list[Notice]:
+def _nga(
+    area: str, fetch: Fetch, previous: tuple[_NoticeLifecycle, ...], now: datetime,
+) -> list[Notice]:
     url = NGA_URL.format(area=area)
     notices = parse_nga_payload(fetch(url), url)
+    relevant = [notice for notice in notices if notice.kind != "other"]
+    _confirm_notices(relevant)
+    cancelled = {identity for notice in (*previous, *relevant) for identity in notice.cancels}
+    relevant_ids = {
+        notice.notice_id for notice in previous
+        if notice.valid_until is None or now < notice.valid_until
+    } - cancelled
     if any(notice.kind == "other" and notice.notice_id in relevant_ids for notice in notices):
         raise NoticeError("NGA_RELEVANCE_DOWNGRADE")
-    return [notice for notice in notices if notice.kind != "other"]
+    return relevant
 
 
 def _confirm_notices(notices: list[Notice]) -> None:
@@ -195,6 +212,10 @@ def _confirm_notices(notices: list[Notice]) -> None:
             problem == "NUMBER_CONFLICT"
             or problem == "WINDOW_CONFLICT"
             or problem == "NARRATIVE_UNPARSED"
+            or (
+                notice.authority == "NGA"
+                and not problem.startswith(("WINDOW_UNPARSED:", "GEOMETRY_UNDRAWN:"))
+            )
             or problem.startswith("GEOMETRY_UNPARSED:")
             for problem in notice.problems
         ):
@@ -220,7 +241,7 @@ def _read_state(path: Path) -> dict:
     return sources
 
 
-def _artifact_identities(path: Path | None) -> dict[str, frozenset[str]]:
+def _artifact_lifecycles(path: Path | None) -> dict[str, tuple[_NoticeLifecycle, ...]]:
     if path is None:
         return {}
     try:
@@ -228,7 +249,7 @@ def _artifact_identities(path: Path | None) -> dict[str, frozenset[str]]:
         validate_bundle(bundle)
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         return {}
-    identities: dict[str, set[str]] = {}
+    lifecycles: dict[str, list[_NoticeLifecycle]] = {}
     series = {
         "NAVAREA IV": "nga:4", "NAVAREA XII": "nga:12",
         "HYDROLANT": "nga:A", "HYDROPAC": "nga:P",
@@ -242,8 +263,10 @@ def _artifact_identities(path: Path | None) -> dict[str, frozenset[str]]:
                     r"(NAVAREA IV|NAVAREA XII|HYDROLANT|HYDROPAC) [1-9]\d*/\d{2}", identity,
                 )
                 if matched:
-                    identities.setdefault(series[matched[1]], set()).add(identity)
-    return {name: frozenset(names) for name, names in identities.items()}
+                    lifecycles.setdefault(series[matched[1]], []).append(_NoticeLifecycle(
+                        identity, _parse_iso8601_z(notice["valid_until"]),
+                    ))
+    return {name: tuple(notices) for name, notices in lifecycles.items()}
 
 
 def _cached_notice(record: object) -> Notice:
@@ -333,13 +356,20 @@ def refresh_sources(
         except BlockingIOError as exc:
             raise SourceError("SOURCE_CACHE_BUSY") from exc
         sources = _read_state(path)
-        artifact_ids = _artifact_identities(last_good)
+        artifact_lifecycles = _artifact_lifecycles(last_good)
         for name in SOURCES:
             entry = sources.get(name) if isinstance(sources.get(name), dict) else {}
-            relevant_ids = artifact_ids.get(name, frozenset())
+            previous = artifact_lifecycles.get(name, ())
             try:
                 sightings = _confirmed_sightings(name, entry, now)
-                relevant_ids |= frozenset(sighting.notice.notice_id for sighting in sightings)
+                previous += tuple(
+                    _NoticeLifecycle(
+                        sighting.notice.notice_id,
+                        sighting.notice.valid_until,
+                        sighting.notice.cancels,
+                    )
+                    for sighting in sightings
+                )
             except SourceError:
                 if "checked_at" in entry or "notices" in entry or entry.get("error") is None:
                     entry = {}
@@ -365,7 +395,7 @@ def refresh_sources(
                 elif name == "uscg":
                     notices = _uscg(fetch, pause)
                 else:
-                    notices = _nga(name.split(":")[1], fetch, relevant_ids)
+                    notices = _nga(name.split(":")[1], fetch, previous, now)
                 _confirm_notices(notices)
             except (SourceError, NoticeError, requests.RequestException, OSError) as exc:
                 entry["error"] = (

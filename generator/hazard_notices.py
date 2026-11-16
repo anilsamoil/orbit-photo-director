@@ -515,34 +515,49 @@ _MARINE_VOCABULARY: tuple[str, ...] = (
     *(re.escape(subject) + r"\b" for subject in _NAVIGATION_SUBJECTS),
 )
 _MARINE_ACTIVITY = re.compile("(?:" + "|".join(_MARINE_VOCABULARY) + ")")
-_AUDITED_GENERIC_EXCLUSIONS: dict[str, str] = {
-    "NAVAREA XII 802/26": (
+
+
+@dataclass(frozen=True)
+class _AuditedGenericExclusion:
+    body_sha256: str
+    reason: str
+
+
+_AUDITED_GENERIC_EXCLUSIONS: dict[str, _AuditedGenericExclusion] = {
+    "NAVAREA XII 802/26": _AuditedGenericExclusion(
+        "e6fc38412cc123d3ff1a3ebc57302bf9ccc39812e2399591236582671086a126",
         "Audited California one-mile closure at 32-35.82N 117-10.88W; "
-        "capture names no launch range or authority."
+        "capture names no launch range or authority.",
     ),
-    "NAVAREA XII 795/26": (
+    "NAVAREA XII 795/26": _AuditedGenericExclusion(
+        "2d289e1cab7950c0c85fa352747c4037ae93a284d9c49ef125b120224c77941a",
         "Audited California polygon near 33-59.00N 119-26.00W; "
-        "capture names no launch range or authority."
+        "capture names no launch range or authority.",
     ),
-    "NAVAREA XII 752/26": (
+    "NAVAREA XII 752/26": _AuditedGenericExclusion(
+        "334ca9a77836d1abd61dd9814a5af9eebec4ce4147004840e1f3f18beb58aa4e",
         "Audited California polygon near 32-55.00N 118-25.00W; "
-        "capture names no launch range or authority."
+        "capture names no launch range or authority.",
     ),
-    "NAVAREA XII 751/26": (
+    "NAVAREA XII 751/26": _AuditedGenericExclusion(
+        "34d681b8ff5471f07cecac3b708ab3b84b05b39da26114aa61a98a967f94c610",
         "Audited California polygon near 32-52.70N 119-11.96W; "
-        "capture names no launch range or authority."
+        "capture names no launch range or authority.",
     ),
-    "NAVAREA XII 750/26": (
+    "NAVAREA XII 750/26": _AuditedGenericExclusion(
+        "aab1914fb54eb050ba1367b8f2b0032b1d4f0495aebb05c763012f70bce896af",
         "Audited California polygon near 32-33.00N 118-25.00W; "
-        "capture names no launch range or authority."
+        "capture names no launch range or authority.",
     ),
-    "NAVAREA IV 1100/23": (
+    "NAVAREA IV 1100/23": _AuditedGenericExclusion(
+        "8ec731b7bf5b30500fe0fb8a0660a796dd0c13904f282d61f5d9081250f0192d",
         "Audited indefinite Venezuela closure under VENEZUELA 17/23; "
-        "capture names no launch authority."
+        "capture names no launch authority.",
     ),
-    "NAVAREA IV 222/23": (
+    "NAVAREA IV 222/23": _AuditedGenericExclusion(
+        "594d893f0a37071188cffb3ea421fc22193d5ee7600aa38a9b7ccc0217da2a64",
         "Audited Anguilla anchoring prohibition and wide berth request under ANGUILLA 2/23; "
-        "capture names no launch authority."
+        "capture names no launch authority.",
     ),
 }
 _GENERIC_MARINE = re.compile(
@@ -683,11 +698,16 @@ def _launch_relevance(
 ) -> _Relevance:
     if not isinstance(text, str) or not text.strip():
         return _Relevance.UNCERTAIN
+    exclusion = _AUDITED_GENERIC_EXCLUSIONS.get(notice_id) if notice_id is not None else None
+    if exclusion is not None and (
+        hashlib.sha256(" ".join(text.split()).encode()).hexdigest() != exclusion.body_sha256
+    ):
+        return _Relevance.UNCERTAIN
     if _SPACE_OPERATIONS.search(text) or _space_authority(authority):
         return _Relevance.RELEVANT
     if _UNCERTAIN_FLIGHT.search(text):
         return _Relevance.UNCERTAIN
-    if notice_id in _AUDITED_GENERIC_EXCLUSIONS and _generic_broadcast(text, issued) is not None:
+    if exclusion is not None and _generic_broadcast(text, issued) is not None:
         return _Relevance.OTHER
     body = _broadcast_body(text)
     preamble = _after_broadcast_geography(body.preamble)
@@ -721,8 +741,8 @@ def _other_broadcast_notice(
 ) -> Notice:
     _drop_other(
         notice_id,
-        _AUDITED_GENERIC_EXCLUSIONS[notice_id]
-        if notice_id in _AUDITED_GENERIC_EXCLUSIONS and _generic_broadcast(text, issued) is not None
+        _AUDITED_GENERIC_EXCLUSIONS[notice_id].reason
+        if notice_id in _AUDITED_GENERIC_EXCLUSIONS
         else "NON_LAUNCH_MARINE_ACTIVITY",
     )
     return Notice(
