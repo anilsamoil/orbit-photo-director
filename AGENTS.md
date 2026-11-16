@@ -58,3 +58,7 @@ Structure changes; behavior does not. A real bug found during structure work goe
 ## The rest of the repository
 
 Generator: `pip install -e ".[dev]"`, then `ruff check generator/ tests/` and `pytest tests/`. Worker: `cd worker && bun run typecheck && bun run test`. CI runs all three jobs in `.github/workflows/test.yml`.
+
+## iOS app
+
+SNAP is becoming an iPhone and iPad app: a native shell around this frontend, so it keeps working when the link drops. No app code exists yet. Start at `docs/ios/README.md`. The work packages, their order and the rules for every pull request are in `docs/ios/WORK_PLAN.md`. The website's behaviour does not change, and every rule above still holds.
