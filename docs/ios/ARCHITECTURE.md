@@ -213,18 +213,18 @@ App                                   Worker
  │ POST /d/enroll/apple {identity_token, label} ─► verify the token's signature against Apple's published keys,
  │                                               issuer appleid.apple.com, audience = the app's bundle ID, expiry
  │                                               known account: mint a token for its profile
- │                                               new account: create it pending until the owner approves
- │ ◄──────────── {token, profile} or {pending} ─┘
+ │                                               new account: create it and mint a token
+ │ ◄──────────── {token, profile} ─────────────┘
 ```
 
-The account key is the Apple user identifier, not the email: an Apple ID can hide its email behind a relay address. A pending account can use the baseline; its first sync after approval brings its profile.
+The account key is the Apple user identifier, not the email: an Apple ID can hide its email behind a relay address. Sign-up is open: any Apple ID or Google account gets a profile at once. The Worker's email allowlist does not apply to `/d/*`; abuse control is the daily rate limit, per-account quotas on targets and log entries, and revocation from the owner's device list.
 
 ### Profiles, sign-out and deletion
 
 - Each account has its own profile, resolved by the Worker as for the website. A new account starts with an empty personal target list on top of the curated baseline.
 - One account per device at a time. Sign out keeps that account's unsent outbox entries, stamped with the account, and uploads them when it signs in again. It deletes the device token.
 - "Delete account" asks once, then calls `/d/account/delete`: the Worker removes the profile's targets, its device tokens and its account record, keeps the shot log only if the owner's retention rule says so, and the app returns to the baseline.
-- The owner's device list shows each account, its devices, their last build and whether it is pending approval.
+- The owner's device list shows each account, its devices and their last build, and can revoke any of them.
 
 ### Before sign-in
 

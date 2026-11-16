@@ -74,7 +74,6 @@ When the organizer reports that the device-access design passed its review:
 
 ## 7. Decisions to send back when convenient
 
-- Who may create an account: the plan's default is that Google accounts on the existing email allowlist sign in at once and every other account, including Apple IDs, waits for your one-time approval in the device list. The alternative is open sign-up for anyone.
 
 - Alert defaults: how many minutes before a target, which targets (all, yours, launches), and a sleep window with no alerts.
 - Esri map layers: keep exactly the tiles the website keeps today, never bundled (the plan's default), or ask Esri about offline rights.
