@@ -56,15 +56,23 @@ def test_readable_nonspace_components_do_not_require_launch_fields(text: str) ->
 
 
 @pytest.mark.parametrize("damage", (
-    "15 METERS, ESTABLISHED IN:\n   A. UNREADABLE.\n",
     "15 METERS, ESTABLISHED IN:\n   A. 65-46.86N 168-34.06W. UNKNOWN ACTIVITY.\n",
     "15 METERS, ESTABLISHED IN:\n   A. 65-46.86N 168-34.06W.\n"
     "2. HAZARDOUS OPERATIONS, ROCKET LAUNCHING UNREADABLE.\n",
 ))
-def test_ambiguous_or_damaged_mooring_rows_still_fail_the_source(damage: str) -> None:
+def test_ambiguous_or_launch_mooring_rows_still_fail_the_source(damage: str) -> None:
     text = "BERING STRAIT.\nALASKA.\n1. SCIENTIFIC MOORINGS, AT DEPTH " + damage
     with pytest.raises(NoticeError, match="^NGA_ROW$"):
         parse_nga_payload(_page(text), NGA_URL.format(area="12"))
+
+
+def test_nonlaunch_mooring_geometry_does_not_freeze_the_source() -> None:
+    text = "BERING STRAIT.\nALASKA.\n1. SCIENTIFIC MOORINGS, AT DEPTH "
+    text += "15 METERS, ESTABLISHED IN:\n   A. UNREADABLE.\n"
+    notices = parse_nga_payload(_page(text), NGA_URL.format(area="12"))
+    assert {notice.notice_id: notice.kind for notice in notices} == {
+        "NAVAREA XII 639/26": "other", "NAVAREA XII 801/26": "launch",
+    }
 
 
 @pytest.mark.parametrize("legacy_version", (None, 1, 2, 3))

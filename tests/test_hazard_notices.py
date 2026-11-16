@@ -150,12 +150,12 @@ def test_in_force_bulletin_holds_the_vandenberg_amendment_and_unrelated_operatio
     assert by_id["NAVAREA XII 761/26"].kind == "other" and by_id["NAVAREA XII 761/26"].areas == ()
 
 
-def test_published_text_the_grammar_does_not_cover_is_reported_not_repaired():
+def test_dateline_and_bounded_through_abbreviation_are_valid_but_undrawn():
     by_id = {notice.notice_id: notice for notice in fx.broadcast_notices("navarea-xii-in-force-2026-11-13.txt")}
     crossing = by_id["NAVAREA XII 788/26"]
-    assert crossing.areas == () and crossing.problems == ("GEOMETRY_UNPARSED:1",)
+    assert crossing.areas == () and crossing.problems == ("GEOMETRY_UNDRAWN:ANTIMERIDIAN:1",)
     typo = by_id["NAVAREA XII 787/26"]
-    assert "WINDOW_UNPARSED:2217Z TO 0144Z DAILY 14 THR 20 NOV" in typo.problems
+    assert typo.areas == () and typo.problems == ("GEOMETRY_UNDRAWN:ANTIMERIDIAN:1",)
     month_long = by_id["NAVAREA XII 752/26"]
     assert month_long.problems == ("WINDOW_UNPARSED:010800Z NOV TO 010800Z DEC",)
     assert month_long.areas[0].windows == ()
@@ -223,8 +223,10 @@ def test_archived_nga_answer_holds_the_falcon_9_cape_canaveral_warning():
     raw = (fx.NOTICES / fx.NGA_2023).read_bytes()
     rows = json.loads(raw)["broadcast-warn"]
     url = "https://msi.nga.mil/api/publications/broadcast-warn"
-    with pytest.raises(NoticeError, match="^NGA_ROW$"):
-        parse_nga_payload(raw, url)
+    confirmed = parse_nga_payload(raw, url)
+    assert {notice.notice_id for notice in confirmed if notice.kind != "other"} == {
+        "NAVAREA IV 1231/23", "NAVAREA IV 1130/23",
+    }
     notices = [
         parse_broadcast_warning(
             row["text"], f"NAVAREA IV {row['msgNumber']}/{row['msgYear'] % 100:02d}",

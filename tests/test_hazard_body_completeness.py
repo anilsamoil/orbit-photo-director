@@ -68,6 +68,19 @@ def _retains_publication(published, source: str):
     assert uploads == [artifact]
 
 
+def _publishes_source(published, source: str, notice_ids: set[str]) -> None:
+    web, cache, output, publication, uploads, _, _, _ = published
+    report = refresh_hazards(
+        cache, output, NOW + timedelta(minutes=31), fetch=web, pause=lambda _: None,
+        publication=publication,
+    )
+    after = json.loads((cache / STATE_NAME).read_bytes())["sources"][source]
+    assert report["ok"] and report["published"] and not report["degraded"]
+    assert after["error"] is None and after["checked_at"] == "2026-11-14T00:11:00Z"
+    assert {notice["notice_id"] for notice in after["notices"]} == notice_ids
+    assert len(uploads) == 2 and uploads[-1] == (output / ARTIFACT).read_bytes()
+
+
 @pytest.mark.parametrize("damage", (
     "start_zone", "end_zone", "start_digits", "unknown_schedule", "schedule_suffix",
     "missing_schedule_and_invalid_other", "missing_schedule_and_long_other",
@@ -852,7 +865,7 @@ def test_strict_broadcast_parser_requires_consumed_geographic_preamble(prefix, f
 
 
 @pytest.mark.parametrize("numbered", (True, False))
-def test_nonspace_operative_header_cannot_exclude_unreadable_body_details(tmp_path, numbered):
+def test_nonspace_operative_header_excludes_unreadable_nonlaunch_details(tmp_path, numbered):
     published, row = _preamble_published(tmp_path, "4", "navarea-iv-1078-26.txt")
     row["text"] = (
         "WESTERN NORTH ATLANTIC.\nFLORIDA.\n" + ("1. " if numbered else "")
@@ -860,7 +873,7 @@ def test_nonspace_operative_header_cannot_exclude_unreadable_body_details(tmp_pa
         + "IN AREA BOUND BY UNREADABLE COORDINATES.\n"
     )
     published[0].pages[NGA_URL.format(area="4")] = json.dumps({"broadcast-warn": [row]}).encode()
-    _retains_publication(published, "nga:4")
+    _publishes_source(published, "nga:4", set())
 
 
 @pytest.mark.parametrize("numbered", (True, False))
@@ -1262,6 +1275,16 @@ def test_component_uscg_known_regulated_boundary_values_do_not_become_launch_geo
     "ANCHORING PROHIBITED UNTIL FURTHER NOTICE",
     "SURVEY OPERATIONS IN PROGRESS. HAZARDOUS OPERATIONS IN PROGRESS",
     "CABLE LAYING OPERATIONS IN PROGRESS. HAZARDOUS OPERATIONS IN PROGRESS",
+))
+def test_nga_nonlaunch_subject_does_not_require_strict_body_parsing(tmp_path, area, subject):
+    published, row = _preamble_published(tmp_path, area, "navarea-xii-785-26.txt")
+    row["text"] = row["text"].replace("HAZARDOUS OPERATIONS, ROCKET LAUNCHING", subject)
+    published[0].pages[NGA_URL.format(area=area)] = json.dumps({"broadcast-warn": [row]}).encode()
+    _publishes_source(published, f"nga:{area}", set())
+
+
+@pytest.mark.parametrize("area", ("4", "12", "A", "P"))
+@pytest.mark.parametrize("subject", (
     "PIPELINE OPERATIONS IN PROGRESS. UNKNOWN ACTIVITY",
     "UNDERWATER OPERATIONS IN PROGRESS. UNKNOWN ACTIVITY",
     "COVE ROJO LIGHTHOUSE 12-30.95N 081-43.77W UNLIT. UNKNOWN ACTIVITY",
@@ -1269,7 +1292,7 @@ def test_component_uscg_known_regulated_boundary_values_do_not_become_launch_geo
     "DEPTHS LESS THAN CHARTED. UNKNOWN ACTIVITY",
     "NAVAREA IV WARNINGS IN FORCE AS OF 131700Z NOV. UNKNOWN ACTIVITY",
 ))
-def test_nga_exclusion_needs_a_complete_positive_nonspace_body(tmp_path, area, subject):
+def test_nga_nonlaunch_subject_cannot_hide_uncertain_activity(tmp_path, area, subject):
     published, row = _preamble_published(tmp_path, area, "navarea-xii-785-26.txt")
     before = row["text"]
     row["text"] = before.replace("HAZARDOUS OPERATIONS, ROCKET LAUNCHING", subject)
@@ -1294,18 +1317,18 @@ def test_nga_nonspace_clause_does_not_own_an_unknown_tail(tmp_path, area, paragr
 
 
 @pytest.mark.parametrize("number", (1100, 329, 222))
-def test_nga_ambiguous_archived_activity_retains_publication(tmp_path, number):
+def test_nga_archived_nonlaunch_activity_allows_publication(tmp_path, number):
     published, _ = _preamble_published(tmp_path, "4", "navarea-xii-785-26.txt")
     rows = json.loads((fx.NOTICES / fx.NGA_2023).read_bytes())["broadcast-warn"]
     row = next(row for row in rows if row["msgNumber"] == number and row["msgYear"] == 2023)
     published[0].pages[NGA_URL.format(area="4")] = json.dumps({"broadcast-warn": [row]}).encode()
-    _retains_publication(published, "nga:4")
+    _publishes_source(published, "nga:4", set())
 
 
-def test_nga_unfiltered_archived_source_retains_publication(tmp_path):
+def test_nga_unfiltered_archived_source_allows_publication(tmp_path):
     published, _ = _preamble_published(tmp_path, "4", "navarea-xii-785-26.txt")
     published[0].pages[NGA_URL.format(area="4")] = (fx.NOTICES / fx.NGA_2023).read_bytes()
-    _retains_publication(published, "nga:4")
+    _publishes_source(published, "nga:4", {"NAVAREA IV 1231/23", "NAVAREA IV 1130/23"})
 
 
 @pytest.mark.parametrize("number", (1215, 1212, 1178, 1118, 1198, 1142, 274, 1244, 1204))
@@ -1603,16 +1626,15 @@ def test_uscg_excluded_group_or_status_does_not_require_body_numbering(published
     "1. CABLE LAYING OPERATIONS IN PROGRESS. 2..CANCEL NAVAREA XII 784/26.",
     "1. CABLE LAYING OPERATIONS IN PROGRESS. 2?. CANCEL NAVAREA XII 784/26.",
 ))
-def test_nga_inline_ordinal_damage_cannot_confirm_or_publish(published, area, text):
+def test_nga_nonlaunch_inline_ordinal_damage_does_not_freeze_publication(published, area, text):
     web = published[0]
     url = NGA_URL.format(area=area)
     payload = json.loads(web.pages[url])
     payload["broadcast-warn"][0]["text"] = text
     web.pages[url] = json.dumps(payload).encode()
     web.pages[FAA_LIST_URL] = b"[]"
-    _retains_publication(published, f"nga:{area}")
+    _publishes_source(published, f"nga:{area}", set())
     after = json.loads((published[1] / STATE_NAME).read_bytes())["sources"]
-    assert after[f"nga:{area}"]["error"] == "NGA_ROW"
     assert after["faa"]["notices"] == []
     assert after["faa"]["checked_at"] == "2026-11-14T00:11:00Z"
 
@@ -1731,7 +1753,7 @@ def test_nga_inline_launch_ordinals_cannot_discard_body_structure(published, are
 
 @pytest.mark.parametrize("area", ("4", "12", "A", "P"))
 @pytest.mark.parametrize("inline", (False, True))
-def test_nga_compact_archived_cancellation_ordinal_cannot_disappear(published, area, inline):
+def test_nga_nonlaunch_archived_cancellation_ordinal_does_not_freeze(published, area, inline):
     rows = json.loads((fx.NOTICES / fx.NGA_2023).read_bytes())["broadcast-warn"]
     row = next(row for row in rows if row["msgNumber"] == 1118 and row["msgYear"] == 2023)
     assert "\n2.CANCEL THIS MSG 010001Z JAN 24." in row["text"]
@@ -1740,7 +1762,7 @@ def test_nga_compact_archived_cancellation_ordinal_cannot_disappear(published, a
         row["text"] = " ".join(row["text"].split())
     row["navArea"] = area
     published[0].pages[NGA_URL.format(area=area)] = json.dumps({"broadcast-warn": [row]}).encode()
-    _retains_publication(published, f"nga:{area}")
+    _publishes_source(published, f"nga:{area}", set())
 
 
 @pytest.mark.parametrize("area", ("4", "12", "A", "P"))

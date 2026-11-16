@@ -940,10 +940,14 @@ def test_prior_inline_ordinal_cache_requires_every_source_to_reconfirm(
     state = json.loads(state_path.read_bytes())
     url = NGA_URL.format(area=area)
     payload = json.loads(web.pages[url])
-    if recovery != "restored":
-        number = 3 if recovery == "unreadable" else 2
+    if recovery == "unreadable":
+        row = payload["broadcast-warn"][0]
+        assert "2. CANCEL" in row["text"]
+        row["text"] = row["text"].replace("2. CANCEL", "3. CANCEL", 1)
+        web.pages[url] = json.dumps(payload).encode()
+    elif recovery == "known_withdrawal":
         payload["broadcast-warn"][0]["text"] = (
-            f"1. CABLE LAYING OPERATIONS IN PROGRESS. {number}. CANCEL NAVAREA XII 784/26."
+            "1. CABLE LAYING OPERATIONS IN PROGRESS. 2. CANCEL NAVAREA XII 784/26."
         )
         web.pages[url] = json.dumps(payload).encode()
     state["schema_version"] = legacy_version

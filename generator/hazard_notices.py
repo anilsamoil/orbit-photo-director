@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -37,6 +38,10 @@ Position = tuple[float, float]
 
 class NoticeError(ValueError):
     """A source document or possibly relevant row that cannot be read completely."""
+
+
+class _UndrawnRingError(ValueError):
+    pass
 
 
 def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -232,7 +237,7 @@ def _ring(points: list[Position]) -> tuple[Position, ...]:
         raise ValueError("ring size")
     closed = [*points, points[0]]
     if any(abs(b[0] - a[0]) > 180 for a, b in zip(closed, closed[1:], strict=False)):
-        raise ValueError("ring crosses the antimeridian")
+        raise _UndrawnRingError("ring crosses the antimeridian")
     return tuple(points)
 
 
@@ -260,8 +265,13 @@ _ISSUE = re.compile(rf"^(\d{{2}})(\d{{2}})(\d{{2}})Z ({_MON}) (\d{{4}})$")
 _CANCEL_SELF = re.compile(rf"CANCEL\s+THIS\s+MSG\s+(\d{{2}})(\d{{4}})Z\s+({_MON})\s+(\d{{2}})\b")
 _CANCEL_OTHER = re.compile(r"CANCEL (NAVAREA (?:IV|XII)|HYDROLANT|HYDROPAC|HYDROARC) (\d+/\d{2})")
 _SPACE_OPERATIONS = re.compile(
-    r"\b(?:ROCKET\w*|SPACE(?:CRAFT)?|SATELLITE)\b|\bLAUNCH(?:ING|ES|ED)?\b",
+    r"\b(?:ROCKET\w*|SPACE(?:CRAFT)?|SATELLITE\w*|BOOSTER\w*|STAGES?|"
+    r"RE-?ENTR(?:Y|IES)|RE-?ENTER(?:S|ED|ING)?)\b"
+    r"|\bLAUNCH(?:ING|ES|ED)?\b",
     re.IGNORECASE,
+)
+_UNCERTAIN_FLIGHT = re.compile(
+    r"\b(?:(?:DE|SUB)?ORBIT\w*|FLIGHTS?|FLYING|AIRBORNE|AIRCRAFT|AERIAL)\b", re.IGNORECASE,
 )
 _BROADCAST_LOCATIONS = (
     "ALASKA", "ANGUILLA", "ANTIGUA AND BARBUDA", "BAHAMAS", "BAY OF CAMPECHE",
@@ -302,86 +312,10 @@ _NAVIGATION_SUBJECTS = (
     "SANDBORE CAY LIGHT", "TONALA LIGHT", "TULUM LIGHT", "UNARE LIGHT",
     "USCG REMOTE COMMUNICATION FACILITY", "ZORRITA LIGHT",
 )
-_OTHER_POINT = r"\d{2}-\d{2}(?:\.\d+|-\d{2})?[NS] \d{2,3}-\d{2}(?:\.\d+|-\d{2})?[EW]"
-_OTHER_PATH = rf"{_OTHER_POINT}(?:, {_OTHER_POINT})+"
-_OTHER_AREA = (
-    rf"(?:(?:IN AREA BOUND BY|ALONG TRACKLINE JOINING|IN VICINITY OF TRACKLINE JOINING) "
-    rf"{_OTHER_PATH}\.|(?:IN AREAS BOUND BY:?|ALONG TRACKLINES JOINING:) "
-    rf"(?:[A-Z][.:] {_OTHER_PATH}\. ?)+|IN {_OTHER_POINT}\.)"
-)
-_OTHER_DATE = rf"(?:\d{{1,2}}(?:\d{{4}}Z)? {_MON}(?: \d{{2}})?)"
-_OTHER_VESSEL = r"(?:M/V|CABLESHIP|BARGE|SSC|OSV) (?:[A-Z0-9]+|[A-Z]\.)(?: (?:[A-Z0-9]+|[A-Z]\.))*"
-_OTHER_VESSELS = rf" BY {_OTHER_VESSEL}(?:(?:, | AND ){_OTHER_VESSEL})*"
-_OTHER_OPERATION_DATES = (
-    rf"(?:(?:IN PROGRESS )?UNTIL|{_OTHER_DATE} (?:THRU|UNTIL)) "
-    rf"(?:FURTHER NOTICE|{_OTHER_DATE})"
-)
-_OTHER_BERTH = r"(?: (?:WIDE|(?:ONE|TWO|SIX|\d+) (?:MILE|METER)) BERTH REQUESTED\.)?"
-_OTHER_CANCEL = (
-    rf"CANCEL (?:THIS MSG \d{{6}}Z {_MON} \d{{2}}|"
-    r"(?:NAVAREA (?:IV|XII)|HYDROLANT|HYDROPAC|HYDROARC) \d+/\d{2})\."
-)
-_OTHER_WARNING = re.compile(
-    rf"(?:(?:SURVEY OPERATIONS {_OTHER_OPERATION_DATES}{_OTHER_VESSELS}|"
-    rf"(?:UNDERWATER|CABLE|PIPELINE) (?:LAYING )?OPERATIONS "
-    rf"{_OTHER_OPERATION_DATES}(?:{_OTHER_VESSELS})?)"
-    rf"(?: TOWING (?:\d+ )?\d+ METER LONG CABLES)? {_OTHER_AREA}{_OTHER_BERTH}"
-    r"|CABLE LAYING OPERATIONS IN PROGRESS\."
-    rf"|DEPTHS LESS THAN CHARTED: (?:[A-Z]\. \d+(?:\.\d+)? METERS IN {_OTHER_POINT}\. ?)+"
-    rf"|(?:(?:\d+(?:\.\d+)? METER )?SHOAL|UNCHARTED REEF|DANGEROUS WRECK) "
-    rf"(?:REPORTED )?IN {_OTHER_POINT}\."
-    rf"|(?:SCIENTIFIC )?MOORINGS?, AT DEPTH \d+(?:\.\d+)? METERS?, "
-    rf"(?:TEMPORARILY )?ESTABLISHED IN(?:: (?:[A-Z]\. {_OTHER_POINT}\. ?)+| {_OTHER_POINT}\.)"
-    rf"|VESSEL (?:JUST POUR LE FUN )?AGROUND(?: IN {_OTHER_POINT}\.|\. "
-    rf"NAVIGATION PROHIBITED IN AREA BOUND BY {_OTHER_PATH}\.{_OTHER_BERTH})"
-    rf"|NAVAREA (?:IV|XII) WARNINGS IN FORCE AS OF \d{{6}}Z {_MON}\. "
-    r"ALL THE INFORCE WARNINGS ARE LISTED HERE\. (?:\d+/\d{4}[,.](?: |$))+"
-    rf"|NAVAREA (?:IV|XII) MOBILE OFFSHORE DRILLING UNITS POSITIONS AT \d{{6}}Z {_MON}: "
-    rf"(?:[A-Z]{{1,3}}\. (?:\(NEW (?:POSITION|RIG)\) )?[A-Z0-9&/-]+"
-    rf"(?: [A-Z0-9&/-]+)* {_OTHER_POINT}\. ?)+)"
-)
-_OTHER_LIGHT_CHARACTER = r"FL [WR](?: \d+ SEC \d+ METERS \d+ MILES)?"
-_OTHER_FACILITY = (
-    r"(?:MIAMI|KODIAK|HONOLULU|GUAM|PT REYES|POINT REYES|NOME|COLD BAY|ST PAUL|"
-    r"SHEMYA|PT HIGGINS|ASTORIA|BERING SEA|CAMBRIA)"
-)
-_NAVIGATION_WARNING = re.compile(
-    r"(?:" + "|".join(re.escape(subject) for subject in _NAVIGATION_SUBJECTS) + r")(?:"
-    rf"(?:, FRONT AND REAR)? (?:AT )?{_OTHER_POINT} "
-    rf"(?:UNLIT|UNRELIABLE|INOPERATIVE|DESTROYED|OFF STATION|(?:TEMPORARILY )?REMOVED|"
-    rf"CHANGED TO {_OTHER_LIGHT_CHARACTER}|MF DSC SERVICES UNRELIABLE)\."
-    rf"| (?:ESTABLISHED IN|RELOCATED TO) {_OTHER_POINT}\."
-    rf"|, (?:FL \d+ SEC \d+ METERS \d+ MILES|{_OTHER_LIGHT_CHARACTER}), "
-    rf"(?:TEMPORARILY )?ESTABLISHED IN {_OTHER_POINT}\."
-    rf"|, YELLOW, FL W \d+ SEC, \d+ METER HEIGHT, WITH AIS, "
-    rf"TEMPORARILY ESTABLISHED IN {_OTHER_POINT}\."
-    rf"| AT NIPPER ISLAND {_OTHER_POINT} INOPERATIVE\."
-    rf"| (?:MOISIE|CURACAO|ASTORIA) \([A-Z]\) {_OTHER_POINT} OFF AIR\."
-    rf"| (?:{_OTHER_FACILITY}(?: \([A-Z]\))? )?{_OTHER_POINT} "
-    r"(?:HF |DSC )?(?:TRANSMIT|RECEIVE|RECEPTION)(?: AND (?:TRANSMIT|RECEIVE))? "
-    r"(?:CAPABILITIES|CAPABILITES|SERVICES) (?:UNRELIABLE|INOPERABLE|INOPERATIVE)\."
-    r"| UNRELIABLE UNTIL FURTHER NOTICE\. FOR INFORCE NAVIGATIONAL WARNINGS "
-    r"EMAIL (?:[A-Z0-9_.+-]+@[A-Z0-9.-]+|\[EMAIL PROTECTED\])"
-    rf"| UNRELIABLE AT USCG REMOTE COMMUNICATION FACILITIES: "
-    rf"(?:[A-Z]\. {_OTHER_FACILITY} {_OTHER_POINT}\. ?)+"
-    rf"| FOR THE APPROACH TO ST JOHN'S HARBOR \({_OTHER_POINT}\) ARE UNRELIABLE\. "
-    r"MARINERS IN VICINITY ARE REQUESTED TO KEEP A SHARP LOOKOUT AND EXERCISE CAUTION\.)"
-)
-_OTHER_ADMIN = re.compile(
-    rf"(?:{_OTHER_CANCEL}|THE COMPLETE TEXT OF ALL IN-FORCE NAVAREA (?:IV|XII) "
-    r"BROADCAST WARNINGS ARE AVAILABLE ON THE NGA MARITIME SAFETY INFORMATION "
-    r"WEBSITE AT: MSI\.NGA\.MIL/NAVWARNINGS\. ALTERNATIVELY, THESE MAY BE REQUESTED "
-    r"BY E-MAIL FROM THE NAVAREA (?:IV|XII) COORDINATOR AT "
-    r"(?:[A-Z0-9_.+-]+@[A-Z0-9.-]+|\[EMAIL PROTECTED\])\.|"
-    r"TO REPORT A MOBILE OFFSHORE DRILLING UNIT AS PER IMO RESOLUTION "
-    r"A\.1023\(26\), PARAGRAPH 11\.5\.1, CONTACT NAVSAFETY@NGA\.MIL SUBJ: MODU REPORT\.|"
-    rf"(?:HONOLULU BROADCASTS|DSC RESPONSES) WILL BE TRANSMITTED FROM "
-    rf"USCG REMOTE COMMUNICATION FACILITY {_OTHER_FACILITY} {_OTHER_POINT}\.)"
-)
 _TIME_GROUP = re.compile(
     rf"(?<![\dA-Z])(?:"
     rf"(?P<opens>\d{{4}})Z TO (?P<closes>\d{{4}})Z DAILY (?P<first_day>\d{{1,2}})"
-    rf"(?: (?P<first_month>{_MON}))? THRU (?P<last_day>\d{{1,2}}) (?P<last_month>{_MON})"
+    rf"(?: (?P<first_month>{_MON}))? THRU? (?P<last_day>\d{{1,2}}) (?P<last_month>{_MON})"
     rf"|(?P<start_day>\d{{2}})(?P<start_time>\d{{4}})Z(?: (?P<start_month>{_MON}))?"
     rf" TO (?P<end_day>\d{{2}})?(?P<end_time>\d{{4}})Z(?: (?P<end_month>{_MON}))?"
     rf")(?![\dA-Z])"
@@ -538,38 +472,73 @@ def _after_broadcast_geography(text: str) -> str:
     return text[offset:].strip()
 
 
-def _other_broadcast_warning(body: _BroadcastBody) -> bool:
-    """Exclude only complete marine, navigation, or administrative components.
+class _Relevance(Enum):
+    RELEVANT = auto()
+    OTHER = auto()
+    UNCERTAIN = auto()
 
-    A generic hazard, missile operation, or prohibition gives no non-space cause.
-    A supported subject cannot own an unknown tail or another unreadable paragraph.
-    Coordinates and dates in these proven non-space components remain unused.
-    """
-    if body.paragraphs:
-        if _after_broadcast_geography(body.preamble):
-            return False
-        components = [text for _, text in body.paragraphs]
-    else:
-        components = [body.preamble]
+
+_MARINE_ACTIVITY = re.compile(
+    r"(?:HAZARDOUS OPERATIONS\b|(?:INTERMITTENT )?MISSILE (?:FIRING )?OPERATIONS\b|"
+    r"FIRING OPERATIONS\b|"
+    r"(?:NAVIGATION|ANCHORING) PROHIBITED\b|"
+    r"(?:SURVEY|UNDERWATER|CABLE|PIPELINE) (?:LAYING )?OPERATIONS\b|"
+    r"(?:SCIENTIFIC )?MOORINGS?\b|DEPTHS LESS THAN CHARTED\b|"
+    r"(?:\d+(?:\.\d+)? METER )?SHOAL\b|UNCHARTED REEF\b|DANGEROUS WRECK\b|"
+    r"VESSEL\b|NAVAREA (?:IV|XII) (?:WARNINGS IN FORCE|MOBILE OFFSHORE DRILLING UNITS)\b|"
+    + "|".join(re.escape(subject) + r"\b" for subject in _NAVIGATION_SUBJECTS) + r")"
+)
+_MARINE_ADVICE = re.compile(
+    r"(?:CANCEL\b|VESSELS\b|MARINERS\b|THE COMPLETE TEXT OF ALL IN-FORCE\b|"
+    r"TO REPORT A MOBILE OFFSHORE DRILLING UNIT\b|HONOLULU BROADCASTS\b|DSC RESPONSES\b)"
+)
+_ACTIVITY_SUBJECT = re.compile(r"\b(OPERATIONS?|ACTIVIT(?:Y|IES))\b")
+_SUBJECT_BREAK = re.compile(r"[^A-Z -]+")
+_MARINE_SUBJECT = re.compile(rf"{_MARINE_ACTIVITY.pattern}$")
+
+
+def _launch_relevance(text: object) -> _Relevance:
+    if not isinstance(text, str) or not text.strip():
+        return _Relevance.UNCERTAIN
+    if _SPACE_OPERATIONS.search(text):
+        return _Relevance.RELEVANT
+    if _UNCERTAIN_FLIGHT.search(text):
+        return _Relevance.UNCERTAIN
+    body = _broadcast_body(text)
+    preamble = _after_broadcast_geography(body.preamble)
+    components = ([preamble] if preamble else []) + [content for _, content in body.paragraphs]
+    if not components:
+        return _Relevance.UNCERTAIN
     for index, component in enumerate(components):
-        operative = " ".join(_after_broadcast_geography(component).upper().split())
-        consumed = False
-        while operative:
-            match = (
-                _OTHER_WARNING.fullmatch(operative)
-                or _NAVIGATION_WARNING.fullmatch(operative)
-                or _OTHER_WARNING.match(operative)
-                or _NAVIGATION_WARNING.match(operative)
-            )
-            if match is None and (index or consumed):
-                match = _OTHER_ADMIN.fullmatch(operative) or _OTHER_ADMIN.match(operative)
-            if not match:
-                return False
-            operative = operative[match.end():].lstrip()
-            consumed = True
-        if not consumed:
-            return False
-    return True
+        operative = " ".join(_after_broadcast_geography(component).upper().split()).lstrip(" .:;?,")
+        if not _MARINE_ACTIVITY.match(operative) and not (
+            index and _MARINE_ADVICE.match(operative)
+        ):
+            return _Relevance.UNCERTAIN
+        subject_start = 0
+        for activity in _ACTIVITY_SUBJECT.finditer(operative):
+            subject = _SUBJECT_BREAK.split(operative[subject_start:activity.start()])[-1].strip()
+            subject_start = activity.end()
+            if not subject and activity[1].startswith("OPERATION"):
+                continue
+            if not _MARINE_SUBJECT.search(f"{subject} {activity[1]}"):
+                return _Relevance.UNCERTAIN
+    return _Relevance.OTHER
+
+
+def _drop_other(notice_id: str, reason: str) -> None:
+    logging.getLogger(__name__).warning("DROP_OTHER notice_id=%s reason=%s", notice_id, reason)
+
+
+def _other_broadcast_notice(
+    text: str, notice_id: str, source_url: str, digest: str, issued: datetime | None = None,
+) -> Notice:
+    _drop_other(notice_id, "NON_LAUNCH_MARINE_ACTIVITY")
+    return Notice(
+        authority="NGA", notice_id=notice_id, kind="other", domain="maritime",
+        subject=_lead(" ".join(text.split())), areas=(), cancels=(), valid_until=None,
+        problems=(), source_url=source_url, source_sha256=digest, valid_from=issued,
+    )
 
 
 def parse_broadcast_warning(
@@ -582,6 +551,9 @@ def parse_broadcast_warning(
     strict: bool = False,
 ) -> Notice:
     """Decode a warning body. Strict source confirmation requires every relevant structure."""
+    relevance = _launch_relevance(text)
+    if strict and relevance is _Relevance.OTHER:
+        return _other_broadcast_notice(text, notice_id, source_url, source_sha256, issued)
     body = _broadcast_body(text)
     if strict and not _sequential_numbers(tuple(number for number, _ in body.paragraphs)):
         raise NoticeError("NGA_ROW")
@@ -627,12 +599,9 @@ def parse_broadcast_warning(
         phrase = first[: digit.start()] if digit else first
     kind = _broadcast_kind(phrase.strip(" :,"))
     if strict and kind == "other":
-        _readable_relevance(
-            False if _other_broadcast_warning(body) and not _SPACE_OPERATIONS.search(text)
-            else None,
-            error="NGA_ROW",
-        )
+        raise NoticeError("NGA_ROW")
     areas: list[Area] = []
+    undrawn = False
     for letter, schedule, coordinates in schedules:
         decoded = _broadcast_windows(schedule, issued)
         problems.extend(decoded.problems)
@@ -640,6 +609,10 @@ def parse_broadcast_warning(
             raise NoticeError("NGA_ROW")
         try:
             ring = _broadcast_ring(coordinates)
+        except _UndrawnRingError:
+            problems.append(f"GEOMETRY_UNDRAWN:ANTIMERIDIAN:{letter}")
+            undrawn = True
+            continue
         except (ValueError, InvalidOperation):
             problems.append(f"GEOMETRY_UNPARSED:{letter}")
             continue
@@ -649,14 +622,15 @@ def parse_broadcast_warning(
         if len(_CANCEL_SELF.findall(rest)) != 1 or remaining:
             problems.append("CANCEL_UNPARSED")
         if strict and (
-            not areas
-            or problems and any(not problem.startswith("WINDOW_UNPARSED:") for problem in problems)
+            not areas and not undrawn
+            or any(not problem.startswith(("WINDOW_UNPARSED:", "GEOMETRY_UNDRAWN:"))
+                   for problem in problems)
             or valid_until is None
             or valid_until <= issued
-            or len({area.area_id for area in areas}) != len(areas)
+            or len({letter for letter, _, _ in schedules}) != len(schedules)
         ):
             raise NoticeError("NGA_ROW")
-    if any(problem.startswith("GEOMETRY_UNPARSED") for problem in problems):
+    if undrawn or any(problem.startswith("GEOMETRY_UNPARSED") for problem in problems):
         areas = []
     return Notice(
         authority="NGA",
@@ -695,6 +669,7 @@ def parse_nga_payload(body: bytes, source_url: str) -> list[Notice]:
     requested_area = requested_areas[0] if len(requested_areas) == 1 else None
     digest = sha256_hex(body)
     notices: list[Notice] = []
+    relevant_ids: set[str] = set()
     for row in rows:
         if not isinstance(row, dict):
             raise NoticeError("NGA_ROW")
@@ -713,6 +688,13 @@ def parse_nga_payload(body: bytes, source_url: str) -> list[Notice]:
         if not _readable_relevance(supported, error="NGA_ROW"):
             continue
         number, year, text = row.get("msgNumber"), row.get("msgYear"), row.get("text")
+        if _launch_relevance(text) is _Relevance.OTHER:
+            readable_number = str(number) if type(number) is int and number > 0 else "?"
+            readable_year = f"{year % 100:02d}" if type(year) is int else "?"
+            notices.append(_other_broadcast_notice(
+                str(text), f"{series} {readable_number}/{readable_year}", source_url, digest,
+            ))
+            continue
         issue = (
             _ISSUE.fullmatch(row["issueDate"])
             if isinstance(row.get("issueDate"), str) else None
@@ -737,13 +719,15 @@ def parse_nga_payload(body: bytes, source_url: str) -> list[Notice]:
             )
         except ValueError as exc:
             raise NoticeError("NGA_ROW") from exc
-        if any(existing.notice_id == notice.notice_id for existing in notices):
+        if notice.notice_id in relevant_ids:
             raise NoticeError("NGA_ROW")
+        relevant_ids.add(notice.notice_id)
         notices.append(notice)
     return notices
 
 
 _USCG_HAZARD_LABEL = re.compile(r"^(HIGH RISK )?HAZARD AREA(?: ([A-Z]))?\s*:$")
+_USCG_HAZARD_HEADING = re.compile(r"(?im)^[ \t]*(?:HIGH RISK )?HAZARD AREAS?\b")
 _USCG_FROM = re.compile(r"^([A-Z])\. FROM (.+)$")
 _USCG_NUMBERED = re.compile(r"(?m)^\d{1,2}\. ")
 _USCG_GLOBAL_TIMES = re.compile(
@@ -1396,6 +1380,7 @@ def parse_uscg_space_operations(
         geometry = feature.get("geometry")
         if isinstance(geometry, dict):
             _known_fields(geometry, _USCG_GEOMETRY_FIELDS, "USCG_ROW")
+        relevance = _launch_relevance(props.get("DESCRIPTION"))
         if not _readable_relevance(
             _equals_if_readable(props.get("STATUS"), "Approved", frozenset({"Draft", "Pending"})),
             _equals_if_readable(
@@ -1403,8 +1388,13 @@ def parse_uscg_space_operations(
             ),
             error="USCG_ROW",
         ):
+            _drop_other(f"USCG LNM {props.get('MSI_UID', '?')}", "INACTIVE_OR_NONSPACE_GROUP")
             continue
         uid, description = props.get("MSI_UID"), props.get("DESCRIPTION")
+        if relevance is _Relevance.OTHER and not _USCG_HAZARD_HEADING.search(str(description)):
+            readable_uid = str(uid) if type(uid) is int and uid > 0 else "?"
+            _drop_other(f"USCG LNM {readable_uid}", "NON_LAUNCH_MARINE_ACTIVITY")
+            continue
         if (
             type(uid) is not int
             or uid <= 0
@@ -1533,8 +1523,8 @@ _FAA_COORDINATION = (
     r"(?:[0-9]|\([0-9]{3}\))[0-9 ()-]*[0-9],? IS THE (?:FAA )?CDN FAC\."
 )
 _FAA_MARITIME_LIMIT = (
-    r"EXCLUDING AIRSPACE (?:OVER|BEYOND 12(?:NM| MILE) COASTAL LIMIT OVER) "
-    r"INTERNATIONAL WATERS\. "
+    r"EXCLUDING (?:AIRSPACE (?:OVER|BEYOND 12(?:NM| MILE) COASTAL LIMIT OVER) "
+    r"INTERNATIONAL WATERS|INTERNATIONAL AIRSPACE)[.,;:]? "
 )
 _FAA_AIRSPACE = r"(?:PORTIONS OF )?[RW]\d{3,4}[A-Z]?"
 _FAA_AIRSPACE_STATUS = (
@@ -1697,14 +1687,21 @@ def parse_faa_tfr(body: bytes, source_url: str) -> Notice:
     code = _faa_required(notam, "TfrNot/codeType")
     if not re.fullmatch(r"\d{2}\.\d{3}", code):
         raise NoticeError("FAA_ROW")
-    relevant = code == "91.143"
+    declared_space = code == "91.143"
     name = (
         _faa_required(notam, "NotUid/txtLocalName")
-        if relevant else _faa_text(notam, "NotUid/txtLocalName")
+        if declared_space else _faa_text(notam, "NotUid/txtLocalName")
     )
     narrative = " ".join((
-        _faa_required(notam, "txtDescrUSNS") if relevant else _faa_text(notam, "txtDescrUSNS")
+        _faa_required(notam, "txtDescrUSNS") if declared_space else _faa_text(notam, "txtDescrUSNS")
     ).split())
+    relevance = _launch_relevance(narrative)
+    if not declared_space:
+        relevance = _Relevance.OTHER
+        _drop_other(f"TFR {number}", f"NONSPACE_FAA_TYPE:{code}")
+    elif relevance is _Relevance.OTHER:
+        relevance = _Relevance.UNCERTAIN
+    relevant = relevance is not _Relevance.OTHER
     frame = _FAA_SPACE_NARRATIVE.fullmatch(narrative.upper())
     if not relevant:
         kind = "other"
