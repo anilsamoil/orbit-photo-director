@@ -115,23 +115,31 @@ def refresh_hazards(
             raise RuntimeError("HAZARD_REFRESH_BUSY") from exc
         catalog = _current_catalog(output, now)
         sources = refresh_sources(cache, now, fetch=fetch, pause=pause)
+        health = {
+            name: {"checked_at": entry.get("checked_at"), "error": entry.get("error")}
+            for name, entry in sources.items()
+            if isinstance(entry, dict)
+        }
+        degraded = any(entry["error"] is not None for entry in health.values())
         bundle, log = build_bundle(
             catalog["items"], sightings_from_state(sources, now), now, _overrides(overrides)
         )
         target = output / ARTIFACT
+        retained: dict | None = None
         try:
             previous = json.loads(target.read_bytes())
             validate_bundle(previous)
+            retained = previous
             previous = canonical_bytes({k: v for k, v in previous.items() if k != "generated_at"})
         except (OSError, ValueError, TypeError, KeyError, AttributeError):
             previous = None
         changed = previous != canonical_bytes(
             {k: v for k, v in bundle.items() if k != "generated_at"}
         )
-        if changed:
+        if changed and not degraded:
             _write_bytes_atomic(target, canonical_bytes(bundle))
         published = False
-        if publication is not None:
+        if publication is not None and not degraded:
             receipt_path = output / PUBLICATION_RECEIPT
             receipt = PublicationReceipt(
                 hashlib.sha256(
@@ -148,18 +156,17 @@ def refresh_hazards(
                 )
                 _sync_directory(output)
                 published = True
-        health = {
-            name: {"checked_at": entry.get("checked_at"), "error": entry.get("error")}
-            for name, entry in sources.items()
-            if isinstance(entry, dict)
-        }
-        degraded = any(entry["error"] is not None for entry in health.values())
+        reported = retained if degraded else bundle
         _write_bytes_atomic(
             output / RUN_LOG,
             canonical_bytes(
                 {
                     "generated_at": bundle["generated_at"],
-                    "revision": bundle["revision"],
+                    "revision": reported["revision"] if reported else None,
+                    "candidate_revision": bundle["revision"],
+                    "degraded": degraded,
+                    "written": changed and not degraded,
+                    "published": published,
                     "catalog_revision": catalog["revision"],
                     "sources": health,
                     "decisions": log,
@@ -171,9 +178,9 @@ def refresh_hazards(
             "degraded": degraded,
             "reason": "SOURCE_REFRESH_DEGRADED" if degraded else None,
             "published": published,
-            "written": changed,
-            "revision": bundle["revision"],
-            "launches": len(bundle["launches"]),
+            "written": changed and not degraded,
+            "revision": reported["revision"] if reported else None,
+            "launches": len(reported["launches"]) if reported else 0,
             "sources": health,
             "undrawn": sorted(
                 entry["notice_id"]

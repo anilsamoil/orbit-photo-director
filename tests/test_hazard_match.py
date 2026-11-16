@@ -20,7 +20,7 @@ from generator.hazard_match import (
     same_ring,
     validate_bundle,
 )
-from generator.hazard_notices import parse_nga_payload
+from generator.hazard_notices import parse_broadcast_warning
 from tests import hazard_fixtures as fx
 
 NOW = fx.SCENARIO_NOW
@@ -161,7 +161,15 @@ def test_falcon_9_from_cape_canaveral_gets_the_areas_of_the_archived_nga_warning
     facts = json.loads((fx.FIXTURES / "launch-starlink-6-25-2023.json").read_text())["item"]
     raw = (fx.NOTICES / fx.NGA_2023).read_bytes()
     seen = _utc("2023-10-30T21:00")
-    notices = parse_nga_payload(raw, "https://msi.nga.mil/api/publications/broadcast-warn?navArea=4&status=active&output=json")
+    notices = [
+        parse_broadcast_warning(
+            row["text"], f"NAVAREA IV {row['msgNumber']}/{row['msgYear'] % 100:02d}",
+            datetime.strptime(row["issueDate"], "%d%H%MZ %b %Y").replace(tzinfo=UTC),
+            "https://msi.nga.mil/api/publications/broadcast-warn?navArea=4&status=active&output=json",
+            fx.file_sha256(fx.NGA_2023),
+        )
+        for row in json.loads(raw)["broadcast-warn"]
+    ]
     bundle, log = build_bundle([facts], _seen(*notices, at=seen), _utc("2023-10-30T22:00"))
     assert _drawn(bundle, fx.STARLINK_6_25) == [("NAVAREA IV 1231/23", "A"), ("NAVAREA IV 1231/23", "B")]
     text = next(row["text"] for row in json.loads(raw)["broadcast-warn"] if row["msgNumber"] == 1231)

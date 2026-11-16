@@ -222,7 +222,17 @@ def test_time_groups_resolve_month_and_year_from_the_notice_itself():
 def test_archived_nga_answer_holds_the_falcon_9_cape_canaveral_warning():
     raw = (fx.NOTICES / fx.NGA_2023).read_bytes()
     rows = json.loads(raw)["broadcast-warn"]
-    notices = parse_nga_payload(raw, "https://msi.nga.mil/api/publications/broadcast-warn")
+    url = "https://msi.nga.mil/api/publications/broadcast-warn"
+    with pytest.raises(NoticeError, match="^NGA_ROW$"):
+        parse_nga_payload(raw, url)
+    notices = [
+        parse_broadcast_warning(
+            row["text"], f"NAVAREA IV {row['msgNumber']}/{row['msgYear'] % 100:02d}",
+            datetime.strptime(row["issueDate"], "%d%H%MZ %b %Y").replace(tzinfo=UTC),
+            url, fx.file_sha256(fx.NGA_2023),
+        )
+        for row in rows
+    ]
     assert len(rows) == len(notices) == 85
     by_id = {notice.notice_id: notice for notice in notices}
     launch = by_id["NAVAREA IV 1231/23"]
@@ -249,7 +259,10 @@ def test_archived_nga_answer_holds_the_falcon_9_cape_canaveral_warning():
 def test_nga_rows_from_an_unsupported_area_are_skipped_and_a_wrong_document_is_refused():
     payload = json.loads((fx.NOTICES / fx.NGA_2023).read_bytes())
     rows = payload["broadcast-warn"][:4]
-    irrelevant = {**rows[1], "navArea": "1"}
+    irrelevant = {
+        **rows[1], "navArea": "1", "text": None, "issueDate": None,
+        "msgNumber": None, "msgYear": None,
+    }
     notices = parse_nga_payload(json.dumps({"broadcast-warn": [irrelevant, rows[3]]}).encode(), "https://msi.nga.mil/x")
     assert [notice.notice_id for notice in notices] == ["NAVAREA IV 1217/23"]
     for body, code in ((b"<html>", "NGA_NOT_JSON"), (b"[]", "NGA_SHAPE"), (b" " * 4_000_001, "NGA_TOO_LARGE")):
@@ -434,7 +447,7 @@ def test_coast_guard_area_with_an_unreadable_line_is_not_drawn_short():
         assert old in feature["properties"]["DESCRIPTION"]
         feature["properties"]["DESCRIPTION"] = feature["properties"]["DESCRIPTION"].replace(old, new)
         feature["properties"].update(props)
-        return parse_uscg_space_operations(json.dumps({"features": [feature, {"properties": None}, 7]}).encode(), "https://navcen.uscg.gov/x")
+        return parse_uscg_space_operations(json.dumps({"type": "FeatureCollection", "features": [feature]}).encode(), "https://navcen.uscg.gov/x", strict=False)
 
     (bad,) = reparse(58067, "26-04-00N 096-49-00W", "26-04-00N 096-49-00")
     assert bad.areas == () and bad.problems == ("GEOMETRY_UNPARSED:HIGH RISK",)
@@ -445,14 +458,16 @@ def test_coast_guard_area_with_an_unreadable_line_is_not_drawn_short():
     assert len(odd_time.areas[0].windows) == 6
     assert reparse(58067, "Gulf", "Gulf", STATUS="Draft") == []
     assert reparse(58067, "Gulf", "Gulf", MSI_GROUP="Bridges") == []
-    assert reparse(58067, "Gulf", "Gulf", END_DATE="soon")[0].valid_until is None
-    assert reparse(58067, "Gulf", "Gulf", BEGIN_DATE=True)[0].valid_from is None
+    with pytest.raises(NoticeError, match="USCG_ROW"):
+        reparse(58067, "Gulf", "Gulf", END_DATE="soon")
+    with pytest.raises(NoticeError, match="USCG_ROW"):
+        reparse(58067, "Gulf", "Gulf", BEGIN_DATE=True)
     assert len(reparse(58067, "Gulf", "Gulf")[0].outline) > 20
     payload["features"][0]["geometry"] = {"type": "Polygon", "coordinates": [[[0, 0], [1, 1]]]}
     payload["features"][1]["geometry"] = {"type": "Point", "coordinates": [0, 0]}
     payload["features"][2]["geometry"] = {"type": "Polygon", "coordinates": "none"}
-    reread = parse_uscg_space_operations(json.dumps(payload).encode(), "https://navcen.uscg.gov/x")
-    assert [notice.outline for notice in reread[:3]] == [(), (), ()]
+    with pytest.raises(NoticeError, match="USCG_ROW"):
+        parse_uscg_space_operations(json.dumps(payload).encode(), "https://navcen.uscg.gov/x")
     for body, code in ((b"{", "USCG_NOT_JSON"), (b"{}", "USCG_SHAPE"), (b" " * 4_000_001, "USCG_TOO_LARGE")):
         with pytest.raises(NoticeError, match=code):
             parse_uscg_space_operations(body, "https://navcen.uscg.gov/x")

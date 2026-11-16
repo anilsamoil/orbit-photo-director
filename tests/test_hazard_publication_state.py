@@ -64,8 +64,11 @@ def test_unknown_source_state_preserves_the_exact_publication(tmp_path: Path, da
             state["schema_version"] = True
         elif damage == "wrong_nga_area":
             nga = complete_web()
-            nga.pages[NGA_URL.format(area="4")] = (fx.NOTICES / fx.NGA_2023).read_bytes()
+            payload = json.loads((fx.NOTICES / fx.NGA_2023).read_bytes())
+            payload["broadcast-warn"] = [row for row in payload["broadcast-warn"] if row["msgNumber"] == 1231]
+            nga.pages[NGA_URL.format(area="4")] = json.dumps(payload).encode()
             confirmed = refresh_sources(tmp_path / "other-cache", NOW, fetch=nga, pause=lambda _: None)
+            assert confirmed["nga:4"]["error"] is None and confirmed["nga:4"]["notices"]
             state["sources"]["nga:P"] = confirmed["nga:4"]
         (cache / STATE_NAME).write_text("{broken" if damage == "unreadable" else json.dumps(state))
     web = Web()
@@ -418,3 +421,559 @@ def test_cli_refuses_to_replace_populated_hazards_without_source_confirmation(tm
     assert report["ok"] is False
     assert report["reason"] == ("SOURCE_CACHE_BUSY" if state == "busy" else "SOURCE_STATE_INCOMPLETE")
     assert target.read_bytes() == original and uploads == []
+
+
+@pytest.mark.parametrize(("source", "notice_id", "problem"), (
+    ("uscg", "USCG LNM 58217", "GEOMETRY_UNPARSED:C"),
+    ("faa", "TFR 6/7111", "NUMBER_CONFLICT"),
+    ("faa", "TFR 6/7111", "WINDOW_CONFLICT"),
+    ("faa", "TFR 6/7111", "NARRATIVE_UNPARSED"),
+    ("nga:4", "NAVAREA IV 1231/23", "GEOMETRY_UNPARSED:A"),
+))
+@pytest.mark.parametrize("available", (False, True))
+def test_cached_fatal_diagnostic_requires_refetch_before_the_poll_interval(
+    tmp_path: Path, source: str, notice_id: str, problem: str, available: bool,
+):
+    output = _output(tmp_path)
+    web = complete_web()
+    if source == "nga:4":
+        payload = json.loads((fx.NOTICES / fx.NGA_2023).read_bytes())
+        payload["broadcast-warn"] = [row for row in payload["broadcast-warn"] if row["msgNumber"] == 1231]
+        web.pages[NGA_URL.format(area="4")] = json.dumps(payload).encode()
+    uploads = []
+    seeded = _run(tmp_path, web, upload=lambda path, *_: uploads.append(path.read_bytes()))
+    assert seeded["ok"] is True and seeded["launches"] == 2 and len(uploads) == 1
+    target = output / ARTIFACT
+    receipt_path = output / PUBLICATION_RECEIPT
+    original, receipt = target.read_bytes(), receipt_path.read_bytes()
+    state_path = tmp_path / "cache" / STATE_NAME
+    state = json.loads(state_path.read_bytes())
+    confirmed = json.loads(state_path.read_bytes())["sources"][source]
+    record = next(row for row in state["sources"][source]["notices"] if row["notice_id"] == notice_id)
+    record["problems"].append(problem)
+    if problem.startswith("GEOMETRY_UNPARSED:"):
+        record["areas"] = []
+    elif problem == "WINDOW_CONFLICT":
+        for area in record["areas"]:
+            area["windows"] = []
+    state_path.write_text(json.dumps(state))
+    web.asked.clear()
+    if not available:
+        web.pages = {}
+        with pytest.raises(SourceError, match="SOURCE_STATE_INCOMPLETE"):
+            _run(tmp_path, web, upload=lambda path, *_: uploads.append(path.read_bytes()), now=NOW + timedelta(minutes=1))
+        assert target.read_bytes() == original
+        assert receipt_path.read_bytes() == receipt
+        assert len(uploads) == 1
+    else:
+        report = _run(tmp_path, web, upload=lambda path, *_: uploads.append(path.read_bytes()), now=NOW + timedelta(minutes=1))
+        assert report["ok"] is True and report["degraded"] is False
+        assert report["sources"][source] == {"checked_at": "2026-11-13T23:41:00Z", "error": None}
+        restored = json.loads(target.read_bytes())
+        assert {launch["event_id"] for launch in restored["launches"]} == {fx.USSF_317, fx.VULCAN}
+        assert [(row["notice_id"], row["area_id"]) for row in fx.launch(restored, fx.VULCAN)["notices"]] == [
+            ("USCG LNM 58224", "A"), ("TFR 6/7111", "6/7111"),
+        ]
+    expected_url = {"faa": FAA_LIST_URL, "uscg": USCG_INDEX_URL, "nga:4": NGA_URL.format(area="4")}[source]
+    assert web.asked and web.asked[0] == expected_url
+    refreshed = json.loads(state_path.read_bytes())["sources"]
+    if available:
+        assert refreshed[source]["notices"] == confirmed["notices"]
+        assert refreshed[source]["checked_at"] == "2026-11-13T23:41:00Z"
+    else:
+        assert web.asked == [expected_url]
+        assert refreshed[source] == {"attempted_at": "2026-11-13T23:41:00Z", "error": "HTTP_503"}
+    assert all(entry == state["sources"][name] for name, entry in refreshed.items() if name != source)
+
+
+def test_cached_valid_long_window_diagnostic_is_reused_without_http_or_another_upload(tmp_path: Path):
+    output = _output(tmp_path)
+    web = complete_web()
+    uploads = []
+    _run(tmp_path, web, upload=lambda path, *_: uploads.append(path.read_bytes()))
+    state_path = tmp_path / "cache" / STATE_NAME
+    original_state = state_path.read_bytes()
+    notices = json.loads(original_state)["sources"]["uscg"]["notices"]
+    long_window = next(record for record in notices if record["notice_id"] == "USCG LNM 58219")
+    assert long_window["areas"] and long_window["problems"]
+    assert all(problem.startswith("WINDOW_UNPARSED:") for problem in long_window["problems"])
+    original = (output / ARTIFACT).read_bytes()
+    receipt = (output / PUBLICATION_RECEIPT).read_bytes()
+    web.asked.clear()
+    web.pages = {}
+    report = _run(tmp_path, web, upload=lambda path, *_: uploads.append(path.read_bytes()), now=NOW + timedelta(minutes=1))
+    assert report["ok"] is True and report["launches"] == 2
+    assert report["written"] is False and report["published"] is False
+    assert web.asked == [] and len(uploads) == 1
+    assert (output / ARTIFACT).read_bytes() == original
+    assert (output / PUBLICATION_RECEIPT).read_bytes() == receipt
+    assert state_path.read_bytes() == original_state
+
+
+@pytest.mark.parametrize("unavailable", (None, "faa", "uscg", "nga:4", "nga:12", "nga:A", "nga:P"))
+@pytest.mark.parametrize("legacy_shape", ("complete", "missing_area", "unreadable_window"))
+@pytest.mark.parametrize("legacy_version", (1, 2, 3))
+def test_legacy_cache_requires_every_source_to_confirm_with_the_current_parser(
+    tmp_path: Path, unavailable: str | None, legacy_shape: str, legacy_version: int,
+):
+    output = _output(tmp_path)
+    web = complete_web()
+    _, issued, body = fx.broadcast_blocks("navarea-xii-785-26.txt")[0]
+    row = {
+        "navArea": "12", "msgNumber": 785, "msgYear": 2026,
+        "issueDate": issued.strftime("%d%H%MZ %b %Y").upper(), "text": body,
+    }
+    web.pages[NGA_URL.format(area="12")] = json.dumps({"broadcast-warn": [row]}).encode()
+    uploads = []
+
+    def upload(path, *_):
+        uploads.append(path.read_bytes())
+
+    assert _run(tmp_path, web, upload=upload)["published"]
+    artifact = (output / ARTIFACT).read_bytes()
+    receipt = (output / PUBLICATION_RECEIPT).read_bytes()
+    state_path = tmp_path / "cache" / STATE_NAME
+    state = json.loads(state_path.read_bytes())
+    state["schema_version"] = legacy_version
+    notice = state["sources"]["nga:12"]["notices"][0]
+    assert len(notice["areas"]) == 3
+    if legacy_shape == "missing_area":
+        notice["areas"].pop()
+        assert notice["problems"] == []
+    elif legacy_shape == "unreadable_window":
+        notice["areas"][0]["windows"] = []
+        notice["problems"] = ["WINDOW_UNPARSED:130423X TO 130846X NOV"]
+    state_path.write_text(json.dumps(state))
+    urls = {"faa": FAA_LIST_URL, "uscg": USCG_INDEX_URL}
+    urls.update({f"nga:{area}": NGA_URL.format(area=area) for area in ("4", "12", "A", "P")})
+    if unavailable:
+        del web.pages[urls[unavailable]]
+    web.asked.clear()
+    now = NOW + timedelta(minutes=1)
+    if unavailable:
+        with pytest.raises(SourceError, match="^SOURCE_STATE_INCOMPLETE$"):
+            _run(tmp_path, web, upload=upload, now=now)
+        assert (output / ARTIFACT).read_bytes() == artifact
+        assert (output / PUBLICATION_RECEIPT).read_bytes() == receipt
+        assert uploads == [artifact]
+    else:
+        report = _run(tmp_path, web, upload=upload, now=now)
+        assert report["ok"] and report["published"] and len(uploads) == 2
+    assert set(urls.values()) <= set(web.asked)
+    restored = json.loads(state_path.read_bytes())
+    assert restored["schema_version"] == 4
+    for key, entry in restored["sources"].items():
+        assert entry["attempted_at"] == "2026-11-13T23:41:00Z"
+        if key == unavailable:
+            assert entry == {"attempted_at": "2026-11-13T23:41:00Z", "error": "HTTP_503"}
+        else:
+            assert entry["checked_at"] == "2026-11-13T23:41:00Z" and entry["error"] is None
+    if unavailable != "nga:12":
+        assert len(restored["sources"]["nga:12"]["notices"][0]["areas"]) == 3
+
+
+_RESTART_SOURCE_URLS = {
+    "faa": FAA_LIST_URL,
+    "uscg": USCG_INDEX_URL,
+    **{f"nga:{area}": NGA_URL.format(area=area) for area in ("4", "12", "A", "P")},
+}
+
+
+def _restart_web(source: str) -> Web:
+    web = complete_web()
+    if source.startswith("nga:"):
+        _, issued, body = fx.broadcast_blocks("navarea-xii-785-26.txt")[0]
+        row = {
+            "navArea": source[4:], "msgNumber": 785, "msgYear": 2026,
+            "issueDate": issued.strftime("%d%H%MZ %b %Y").upper(), "text": body,
+        }
+        web.pages[_RESTART_SOURCE_URLS[source]] = json.dumps({"broadcast-warn": [row]}).encode()
+    return web
+
+
+def _unreadable_restart_answer(web: Web, source: str) -> str:
+    from generator.hazard_sources import USCG_FILE_URL
+
+    url = _RESTART_SOURCE_URLS[source]
+    if source == "faa":
+        web.pages[url] = b'[{"type": null}]'
+    elif source == "uscg":
+        url = USCG_FILE_URL.format(part=1)
+        web.pages[url] = b'{"type":"FeatureCollection","features":[null]}'
+    else:
+        web.pages[url] = b'{"broadcast-warn":[null]}'
+    return url
+
+
+def _interrupt_source_write(
+    monkeypatch: pytest.MonkeyPatch, source: str, at: datetime, stage: str,
+    failure: type[BaseException] = SystemExit,
+) -> list[str]:
+    from generator import hazard_sources
+
+    write = hazard_sources._atomic_write
+    stopped = []
+    stamp = at.strftime("%Y-%m-%dT%H:%M:%SZ")
+    row_error = f"{source.split(':')[0].upper()}_ROW"
+
+    def interrupt(path: Path, data: str):
+        entry = json.loads(data)["sources"].get(source, {})
+        if entry.get("attempted_at") == stamp and (
+            stage in {"before_attempt", "after_attempt"}
+            or (stage == "after_failure" and entry.get("error") == row_error)
+            or (stage == "after_success" and entry.get("checked_at") == stamp)
+        ):
+            if stage == "after_attempt":
+                write(path, data)
+            stopped.append(stage)
+            raise failure("SOURCE_STATE_WRITE_INTERRUPTED")
+        return write(path, data)
+
+    monkeypatch.setattr(hazard_sources, "_atomic_write", interrupt)
+    return stopped
+
+
+@pytest.mark.parametrize("source", _RESTART_SOURCE_URLS)
+@pytest.mark.parametrize("stage", ("after_attempt", "after_failure", "after_success"))
+@pytest.mark.parametrize("recovery", ("unreadable", "unavailable", "confirmed"))
+def test_interrupted_source_refresh_retries_before_its_interval_and_freezes_until_confirmed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str, stage: str, recovery: str,
+):
+    output = _output(tmp_path)
+    web = _restart_web(source)
+    valid_pages = web.pages.copy()
+    uploads = []
+
+    def upload(path, *_):
+        uploads.append(path.read_bytes())
+
+    assert _run(tmp_path, web, upload=upload)["published"]
+    target, receipt_path = output / ARTIFACT, output / PUBLICATION_RECEIPT
+    artifact, receipt = target.read_bytes(), receipt_path.read_bytes()
+    state_path = tmp_path / "cache" / STATE_NAME
+    confirmed = json.loads(state_path.read_bytes())["sources"][source]
+    assert confirmed["notices"]
+    if source == "faa":
+        web.pages[USCG_INDEX_URL] = b'{"spaceOpsPoly_":{"counter":0}}'
+    else:
+        web.pages[FAA_LIST_URL] = b"[]"
+    bad_url = _unreadable_restart_answer(web, source)
+    if stage == "after_success":
+        web.pages[bad_url] = valid_pages[bad_url]
+    with monkeypatch.context() as cut:
+        stopped = _interrupt_source_write(cut, source, NOW + timedelta(minutes=31), stage)
+        with pytest.raises(SystemExit, match="SOURCE_STATE_WRITE_INTERRUPTED"):
+            _run(tmp_path, web, upload=upload, now=NOW + timedelta(minutes=31))
+    assert stopped == [stage]
+    interrupted = json.loads(state_path.read_bytes())["sources"][source]
+    assert target.read_bytes() == artifact and receipt_path.read_bytes() == receipt
+    assert uploads == [artifact]
+    if recovery == "confirmed":
+        web.pages[bad_url] = valid_pages[bad_url]
+    elif recovery == "unavailable":
+        del web.pages[_RESTART_SOURCE_URLS[source]]
+    else:
+        _unreadable_restart_answer(web, source)
+    web.asked.clear()
+    report = _run(tmp_path, web, upload=upload, now=NOW + timedelta(minutes=32))
+    assert _RESTART_SOURCE_URLS[source] in web.asked
+    restored = json.loads(state_path.read_bytes())
+    assert restored["schema_version"] == 4
+    entry = restored["sources"][source]
+    assert entry["attempted_at"] == "2026-11-14T00:12:00Z"
+    assert entry["notices"] == confirmed["notices"]
+    if recovery == "confirmed":
+        assert report["ok"] and not report["degraded"] and report["published"]
+        assert entry["error"] is None and entry["checked_at"] == entry["attempted_at"]
+        assert len(uploads) == 2
+    else:
+        assert not report["ok"] and report["degraded"]
+        assert report["reason"] == "SOURCE_REFRESH_DEGRADED"
+        assert not report["written"] and not report["published"]
+        expected_error = "HTTP_503" if recovery == "unavailable" else f"{source.split(':')[0].upper()}_ROW"
+        assert entry["error"] == expected_error
+        assert entry["checked_at"] == confirmed["checked_at"]
+        assert target.read_bytes() == artifact and receipt_path.read_bytes() == receipt
+        assert uploads == [artifact]
+    assert interrupted["error"] == "SOURCE_REFRESH_PENDING"
+    assert interrupted["checked_at"] == confirmed["checked_at"]
+    assert interrupted["notices"] == confirmed["notices"]
+    stable_state, stable_artifact, stable_receipt = state_path.read_bytes(), target.read_bytes(), receipt_path.read_bytes()
+    upload_count = len(uploads)
+    web.asked.clear()
+    repeated = _run(tmp_path, web, upload=upload, now=NOW + timedelta(minutes=33))
+    assert repeated["ok"] == report["ok"] and not repeated["published"]
+    assert web.asked == [] and len(uploads) == upload_count
+    assert state_path.read_bytes() == stable_state
+    assert target.read_bytes() == stable_artifact and receipt_path.read_bytes() == stable_receipt
+
+
+@pytest.mark.parametrize("source", _RESTART_SOURCE_URLS)
+@pytest.mark.parametrize("recovery", ("unreadable", "unavailable", "confirmed"))
+def test_unfinished_current_version_attempt_requires_fresh_confirmation(
+    tmp_path: Path, source: str, recovery: str,
+):
+    output = _output(tmp_path)
+    web = _restart_web(source)
+    uploads = []
+
+    def upload(path, *_):
+        uploads.append(path.read_bytes())
+
+    assert _run(tmp_path, web, upload=upload)["published"]
+    target, receipt_path = output / ARTIFACT, output / PUBLICATION_RECEIPT
+    artifact, receipt = target.read_bytes(), receipt_path.read_bytes()
+    state_path = tmp_path / "cache" / STATE_NAME
+    state = json.loads(state_path.read_bytes())
+    confirmed = json.loads(state_path.read_bytes())["sources"][source]
+    state["sources"][source]["attempted_at"] = "2026-11-13T23:41:00Z"
+    assert state["sources"][source]["error"] is None
+    state_path.write_text(json.dumps(state))
+    if recovery == "unreadable":
+        _unreadable_restart_answer(web, source)
+    elif recovery == "unavailable":
+        del web.pages[_RESTART_SOURCE_URLS[source]]
+    web.asked.clear()
+    report = _run(tmp_path, web, upload=upload, now=NOW + timedelta(minutes=2))
+    assert _RESTART_SOURCE_URLS[source] in web.asked
+    restored = json.loads(state_path.read_bytes())
+    assert restored["schema_version"] == 4
+    entry = restored["sources"][source]
+    assert entry["attempted_at"] == "2026-11-13T23:42:00Z"
+    assert entry["notices"] == confirmed["notices"]
+    if recovery == "confirmed":
+        assert report["ok"] and report["published"] and len(uploads) == 2
+        assert entry["error"] is None and entry["checked_at"] == entry["attempted_at"]
+    else:
+        assert not report["ok"] and report["degraded"]
+        assert not report["written"] and not report["published"]
+        assert entry["error"] == ("HTTP_503" if recovery == "unavailable" else f"{source.split(':')[0].upper()}_ROW")
+        assert entry["checked_at"] == confirmed["checked_at"]
+        assert target.read_bytes() == artifact and receipt_path.read_bytes() == receipt
+        assert uploads == [artifact]
+
+
+@pytest.mark.parametrize("source", _RESTART_SOURCE_URLS)
+@pytest.mark.parametrize("recovery", ("unreadable", "unavailable", "confirmed"))
+def test_interrupted_initial_source_attempt_still_requires_a_validated_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str, recovery: str,
+):
+    target, artifact = _populated_output(tmp_path)
+    receipt_path = tmp_path / "launch-output" / PUBLICATION_RECEIPT
+    receipt = b'{"previous":"confirmation"}'
+    receipt_path.write_bytes(receipt)
+    web = _restart_web(source)
+    uploads = []
+
+    def upload(path, *_):
+        uploads.append(path.read_bytes())
+
+    with monkeypatch.context() as cut:
+        stopped = _interrupt_source_write(cut, source, NOW, "after_attempt")
+        with pytest.raises(SystemExit, match="SOURCE_STATE_WRITE_INTERRUPTED"):
+            _run(tmp_path, web, upload=upload)
+    assert stopped == ["after_attempt"]
+    state_path = tmp_path / "cache" / STATE_NAME
+    interrupted = json.loads(state_path.read_bytes())["sources"][source]
+    if recovery == "unreadable":
+        _unreadable_restart_answer(web, source)
+    elif recovery == "unavailable":
+        del web.pages[_RESTART_SOURCE_URLS[source]]
+    web.asked.clear()
+    if recovery == "confirmed":
+        report = _run(tmp_path, web, upload=upload, now=NOW + timedelta(minutes=1))
+        assert report["ok"] and report["published"] and len(uploads) == 1
+    else:
+        with pytest.raises(SourceError, match="^SOURCE_STATE_INCOMPLETE$"):
+            _run(tmp_path, web, upload=upload, now=NOW + timedelta(minutes=1))
+        assert target.read_bytes() == artifact and receipt_path.read_bytes() == receipt
+        assert uploads == []
+    assert _RESTART_SOURCE_URLS[source] in web.asked
+    assert interrupted == {"attempted_at": "2026-11-13T23:40:00Z", "error": "SOURCE_REFRESH_PENDING"}
+    entry = json.loads(state_path.read_bytes())["sources"][source]
+    assert entry["attempted_at"] == "2026-11-13T23:41:00Z"
+    if recovery == "confirmed":
+        assert entry["error"] is None and entry["notices"]
+    else:
+        assert "checked_at" not in entry and "notices" not in entry
+        assert entry["error"] == ("HTTP_503" if recovery == "unavailable" else f"{source.split(':')[0].upper()}_ROW")
+
+
+@pytest.mark.parametrize("source", _RESTART_SOURCE_URLS)
+def test_failed_attempt_persistence_aborts_before_fetch_and_remains_due(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str,
+):
+    output = _output(tmp_path)
+    web = _restart_web(source)
+    uploads = []
+
+    def upload(path, *_):
+        uploads.append(path.read_bytes())
+
+    assert _run(tmp_path, web, upload=upload)["published"]
+    target, receipt_path = output / ARTIFACT, output / PUBLICATION_RECEIPT
+    artifact, receipt = target.read_bytes(), receipt_path.read_bytes()
+    state_path = tmp_path / "cache" / STATE_NAME
+    confirmed = json.loads(state_path.read_bytes())["sources"][source]
+    _unreadable_restart_answer(web, source)
+    web.asked.clear()
+    with monkeypatch.context() as cut:
+        stopped = _interrupt_source_write(cut, source, NOW + timedelta(minutes=31), "before_attempt", OSError)
+        with pytest.raises(OSError, match="SOURCE_STATE_WRITE_INTERRUPTED"):
+            _run(tmp_path, web, upload=upload, now=NOW + timedelta(minutes=31))
+    assert stopped == ["before_attempt"] and _RESTART_SOURCE_URLS[source] not in web.asked
+    assert json.loads(state_path.read_bytes())["sources"][source] == confirmed
+    assert target.read_bytes() == artifact and receipt_path.read_bytes() == receipt
+    assert uploads == [artifact]
+    web.asked.clear()
+    report = _run(tmp_path, web, upload=upload, now=NOW + timedelta(minutes=32))
+    assert _RESTART_SOURCE_URLS[source] in web.asked
+    assert not report["ok"] and report["degraded"]
+    assert target.read_bytes() == artifact and receipt_path.read_bytes() == receipt
+    assert uploads == [artifact]
+
+
+@pytest.mark.parametrize("source", _RESTART_SOURCE_URLS)
+def test_repeated_failed_result_persistence_keeps_restart_degraded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str,
+):
+    output = _output(tmp_path)
+    web = _restart_web(source)
+    uploads = []
+
+    def upload(path, *_):
+        uploads.append(path.read_bytes())
+
+    assert _run(tmp_path, web, upload=upload)["published"]
+    target, receipt_path = output / ARTIFACT, output / PUBLICATION_RECEIPT
+    artifact, receipt = target.read_bytes(), receipt_path.read_bytes()
+    state_path = tmp_path / "cache" / STATE_NAME
+    confirmed = json.loads(state_path.read_bytes())["sources"][source]
+    _unreadable_restart_answer(web, source)
+    for minute in (31, 32):
+        web.asked.clear()
+        with monkeypatch.context() as cut:
+            stopped = _interrupt_source_write(cut, source, NOW + timedelta(minutes=minute), "after_failure", OSError)
+            with pytest.raises(OSError, match="SOURCE_STATE_WRITE_INTERRUPTED"):
+                _run(tmp_path, web, upload=upload, now=NOW + timedelta(minutes=minute))
+        assert stopped == ["after_failure"] and _RESTART_SOURCE_URLS[source] in web.asked
+        entry = json.loads(state_path.read_bytes())["sources"][source]
+        assert entry["error"] == "SOURCE_REFRESH_PENDING"
+        assert entry["checked_at"] == confirmed["checked_at"] and entry["notices"] == confirmed["notices"]
+        assert target.read_bytes() == artifact and receipt_path.read_bytes() == receipt
+        assert uploads == [artifact]
+    del web.pages[_RESTART_SOURCE_URLS[source]]
+    report = _run(tmp_path, web, upload=upload, now=NOW + timedelta(minutes=33))
+    assert not report["ok"] and report["degraded"] and not report["written"] and not report["published"]
+    assert report["sources"][source] == {"checked_at": confirmed["checked_at"], "error": "HTTP_503"}
+    assert target.read_bytes() == artifact and receipt_path.read_bytes() == receipt
+    assert uploads == [artifact]
+
+
+@pytest.mark.parametrize("area", ("4", "12", "A", "P"))
+def test_version_two_gap_snapshot_cannot_publish_a_cached_withdrawal(tmp_path: Path, area: str):
+    output = _output(tmp_path)
+    source = f"nga:{area}"
+    web = _restart_web(source)
+    uploads = []
+
+    def upload(path, *_):
+        uploads.append(path.read_bytes())
+
+    assert _run(tmp_path, web, upload=upload)["published"]
+    target, receipt_path = output / ARTIFACT, output / PUBLICATION_RECEIPT
+    artifact, receipt = target.read_bytes(), receipt_path.read_bytes()
+    state_path = tmp_path / "cache" / STATE_NAME
+    state = json.loads(state_path.read_bytes())
+    url = NGA_URL.format(area=area)
+    payload = json.loads(web.pages[url])
+    row = payload["broadcast-warn"][0]
+    assert "\n2. CANCEL THIS MSG" in row["text"]
+    row["text"] = row["text"].replace("\n2. CANCEL THIS MSG", "\n3. CANCEL THIS MSG", 1)
+    web.pages[url] = json.dumps(payload).encode()
+    state["schema_version"] = 2
+    for entry in state["sources"].values():
+        entry.update(checked_at="2026-11-14T00:11:00Z", attempted_at="2026-11-14T00:11:00Z")
+        assert entry["error"] is None
+    notice = state["sources"][source]["notices"][0]
+    assert notice["problems"] == [] and len(notice["areas"]) == 3
+    notice["source_sha256"] = hashlib.sha256(web.pages[url]).hexdigest()
+    state["sources"]["faa"]["notices"] = []
+    state_path.write_text(json.dumps(state))
+    web.pages[FAA_LIST_URL] = b"[]"
+    web.asked.clear()
+    with pytest.raises(SourceError, match="^SOURCE_STATE_INCOMPLETE$"):
+        _run(tmp_path, web, upload=upload, now=NOW + timedelta(minutes=32))
+    assert set(_RESTART_SOURCE_URLS.values()) <= set(web.asked)
+    restored = json.loads(state_path.read_bytes())
+    assert restored["schema_version"] == 4
+    assert restored["sources"][source] == {
+        "attempted_at": "2026-11-14T00:12:00Z", "error": "NGA_ROW",
+    }
+    for key, entry in restored["sources"].items():
+        if key != source:
+            assert entry["error"] is None and entry["checked_at"] == "2026-11-14T00:12:00Z"
+    assert restored["sources"]["faa"]["notices"] == []
+    assert target.read_bytes() == artifact and receipt_path.read_bytes() == receipt
+    assert uploads == [artifact] and json.loads(artifact)["schema_version"] == 2
+    assert sum(len(launch["geojson"]["features"]) for launch in json.loads(artifact)["launches"]) == 5
+
+
+@pytest.mark.parametrize("area", ("4", "12", "A", "P"))
+@pytest.mark.parametrize("legacy_version", (1, 2, 3))
+@pytest.mark.parametrize("recovery", ("unreadable", "known_withdrawal", "restored"))
+def test_prior_inline_ordinal_cache_requires_every_source_to_reconfirm(
+    tmp_path: Path, area: str, legacy_version: int, recovery: str,
+):
+    output = _output(tmp_path)
+    source = f"nga:{area}"
+    web = _restart_web(source)
+    uploads = []
+
+    def upload(path, *_):
+        uploads.append(path.read_bytes())
+
+    assert _run(tmp_path, web, upload=upload)["published"]
+    target, receipt_path = output / ARTIFACT, output / PUBLICATION_RECEIPT
+    artifact, receipt = target.read_bytes(), receipt_path.read_bytes()
+    state_path = tmp_path / "cache" / STATE_NAME
+    state = json.loads(state_path.read_bytes())
+    url = NGA_URL.format(area=area)
+    payload = json.loads(web.pages[url])
+    if recovery != "restored":
+        number = 3 if recovery == "unreadable" else 2
+        payload["broadcast-warn"][0]["text"] = (
+            f"1. CABLE LAYING OPERATIONS IN PROGRESS. {number}. CANCEL NAVAREA XII 784/26."
+        )
+        web.pages[url] = json.dumps(payload).encode()
+    state["schema_version"] = legacy_version
+    for entry in state["sources"].values():
+        entry.update(checked_at="2026-11-14T00:11:00Z", attempted_at="2026-11-14T00:11:00Z")
+        assert entry["error"] is None
+    state["sources"][source]["notices"] = []
+    state["sources"]["faa"]["notices"] = []
+    state_path.write_text(json.dumps(state))
+    web.pages[FAA_LIST_URL] = b"[]"
+    web.asked.clear()
+    if recovery == "unreadable":
+        with pytest.raises(SourceError, match="^SOURCE_STATE_INCOMPLETE$"):
+            _run(tmp_path, web, upload=upload, now=NOW + timedelta(minutes=32))
+        assert target.read_bytes() == artifact and receipt_path.read_bytes() == receipt
+        assert uploads == [artifact]
+    else:
+        report = _run(tmp_path, web, upload=upload, now=NOW + timedelta(minutes=32))
+        assert report["ok"] and report["published"] and not report["degraded"]
+        assert len(uploads) == 2 and uploads[-1] == target.read_bytes()
+    assert set(_RESTART_SOURCE_URLS.values()) <= set(web.asked)
+    restored = json.loads(state_path.read_bytes())
+    assert restored["schema_version"] == 4
+    entry = restored["sources"][source]
+    if recovery == "unreadable":
+        assert entry == {"attempted_at": "2026-11-14T00:12:00Z", "error": "NGA_ROW"}
+    else:
+        assert entry["error"] is None and entry["checked_at"] == "2026-11-14T00:12:00Z"
+        assert len(entry["notices"]) == (1 if recovery == "restored" else 0)
+    for key, entry in restored["sources"].items():
+        if key != source:
+            assert entry["error"] is None and entry["checked_at"] == "2026-11-14T00:12:00Z"
+    assert json.loads(artifact)["schema_version"] == 2

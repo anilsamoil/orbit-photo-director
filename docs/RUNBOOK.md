@@ -102,13 +102,23 @@ curl -s https://map.astroanil.dev/manifest.json | jq '.forecast_clouds'
 
 Use the intended service checkout and interpreter. Verify their revision and dependencies before running `python -m scripts.hazard_refresh --cache-dir <dedicated cache> --output <launch output>` without `--publish`. The output folder must contain a current verified launch catalog. This preflight fetches public notices and writes local artifacts, but does not confirm an upload.
 
+Preserve the old cache before the first preflight with the strict parsers. Older cache versions are automatically invalidated because a structurally valid snapshot truncated by an older parser cannot reveal its omitted rows. Every source must pass the new reader before publication can proceed. A failed transition reports `SOURCE_STATE_INCOMPLETE` and preserves the existing artifact and upload receipt.
+
 Require `ok=true` in the JSON result before scheduling publication. Exit code 2 and `SOURCE_STATE_INCOMPLETE` mean that at least one source has no validated last-good snapshot. A cold or damaged cache needs a successful response from all six configured sources before publication can proceed. `SOURCE_CACHE_BUSY` stops the run. Neither condition replaces the existing hazard artifact or uploads it.
 
-With complete cached snapshots, a failed source check retains its notices and original `checked_at`. The result reports `ok=false`, `degraded=true`, and `SOURCE_REFRESH_DEGRADED`, and exits 2. Inspect the per-source errors and checked times. Failed checks do not renew notice validity or the map's 48-hour review limit.
+With complete cached snapshots, a failed source check retains its notices and original `checked_at`. The result reports `ok=false`, `degraded=true`, and `SOURCE_REFRESH_DEGRADED`, and exits 2. A degraded run preserves the hazard artifact and upload receipt and uploads nothing, even if another source succeeds. Its revision and launch count describe the retained artifact. Inspect the per-source errors and checked times. Failed checks do not renew notice validity or the map's 48-hour review limit.
+
+An interrupted check remains pending in the cache and retries before normal interval reuse. It cannot masquerade as a successful check after a restart. Failure to save the attempt stops before fetching.
+
+`FAA_ROW`, `USCG_ROW`, and `NGA_ROW` mean a row could be relevant but cannot be read completely. Missing classification fields cannot prove irrelevance. A supported readable exclusion, such as a non-space FAA type or an unrelated USCG group, can exclude a malformed row. Unknown classification labels and unfamiliar NGA body formats fail conservatively. Scoped NGA responses must match their requested area. Explicit complete empty answers still withdraw notices after a healthy run. An incomplete or wrong-shaped response fails the source instead.
+
+Geographic headers, complete non-space operative components, and JSON record fields use explicit supported sets. Generic hazardous operations, missile operations, and navigation prohibitions do not prove irrelevance. A legitimate new location, subject, or metadata field can therefore degrade the run until support is added. Mixed activities cannot be excluded by a title or leading non-space clause alone.
+
+Source confirmation also requires complete area, schedule, and cancellation parsing, with consistent FAA narrative and XML identity and geometry. Numbered NGA paragraphs and USCG sections must be consecutive from 1. A readable valid span beyond the drawing limit can remain a text listing. Damaged time tokens, unexplained sections, and ambiguous JSON with repeated keys fail instead of reducing the confirmed answer. One area's diagnostic cannot excuse another area's missing schedule.
 
 The first authorized run with `--publish` uploads even after an identical dry run. A separate `.hazard-publication.json` receipt records the destination hash and revision only after upload succeeds. Failed or interrupted uploads retry on the next identical run. `written` describes a local artifact replacement. `published` describes an upload completed by that invocation. A matching receipt skips a repeat upload and assumes this publisher is the sole writer of that remote object.
 
-Only `hazards/v2/launches.json` uploads. `hazards/v2/run.json` and the receipt stay local. Rclone failures report controlled error codes and bounded safe diagnostics. Verify the first published artifact separately before relying on a scheduler. This procedure does not install or load a launchd agent.
+Only `hazards/v2/launches.json` uploads. `hazards/v2/run.json` and the receipt stay local. The run log's `candidate_revision` identifies the evaluated decisions. Its `revision` identifies the retained artifact during degradation, with `written=false` and `published=false`. Rclone failures report controlled error codes and bounded safe diagnostics. Verify the first published artifact separately before relying on a scheduler. This procedure does not install or load a launchd agent.
 
 ## Adding personal targets
 

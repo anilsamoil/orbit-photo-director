@@ -113,7 +113,9 @@ def test_a_notice_gone_from_a_good_answer_is_withdrawn_and_an_amended_one_replac
     _refresh(tmp_path, web)
     listing = [row for row in json.loads(web.pages[FAA_LIST_URL]) if row["notam_id"] != "6/7129"]
     web.pages[FAA_LIST_URL] = json.dumps(listing).encode()
-    amended = web.pages[FAA_DETAIL_URL.format(year="6", sequence="7130")].replace(b"26.1N", b"26.2N")
+    amended = web.pages[FAA_DETAIL_URL.format(year="6", sequence="7130")].replace(
+        b"26.1N", b"26.2N",
+    ).replace(b"260600N0965500W", b"261200N0965500W")
     web.pages[FAA_DETAIL_URL.format(year="6", sequence="7130")] = amended
     sources = _refresh(tmp_path, web, NOW + timedelta(minutes=15))
     assert _ids(sources, "faa") == ["TFR 6/7111", "TFR 6/7112", "TFR 6/7130", "TFR 6/7131"]
@@ -143,7 +145,13 @@ def test_no_source_is_asked_again_before_its_interval(tmp_path: Path):
 
 def test_nga_answer_is_kept_without_the_warnings_that_are_not_space_operations(tmp_path: Path):
     web = Web()
-    web.pages[NGA_URL.format(area="4")] = (fx.NOTICES / fx.NGA_2023).read_bytes()
+    payload = json.loads((fx.NOTICES / fx.NGA_2023).read_bytes())
+    payload["broadcast-warn"] = [
+        row for row in payload["broadcast-warn"] if (row["msgNumber"], row["msgYear"])
+        not in {(1100, 2023), (329, 2023), (222, 2023)}
+    ]
+    assert len(payload["broadcast-warn"]) == 82
+    web.pages[NGA_URL.format(area="4")] = json.dumps(payload).encode()
     sources = _refresh(tmp_path, web)
     assert _ids(sources, "nga:4") == ["NAVAREA IV 1130/23", "NAVAREA IV 1231/23"]
     assert sources["nga:4"]["error"] is None and sources["nga:12"]["error"] == "HTTP_503"
@@ -168,7 +176,9 @@ def test_source_documents_of_the_wrong_shape_fail_that_source_only(tmp_path: Pat
     web.pages[FAA_LIST_URL] = json.dumps([{"type": "SPACE OPERATIONS", "notam_id": "../../x"}, {"type": "SECURITY", "notam_id": "6/7507"}, 4]).encode()
     web.pages[USCG_INDEX_URL] = b'{"spaceOpsPoly_": {"counter": 0}}'
     sources = _refresh(tmp_path / "empty", web)
-    assert sources["faa"]["notices"] == [] and sources["uscg"]["notices"] == []
+    assert sources["faa"]["error"] == "FAA_ROW" and "checked_at" not in sources["faa"]
+    assert sources["uscg"]["notices"] == []
+    assert not any(url.startswith("https://tfr.faa.gov/download/") for url in web.asked)
     for incomplete in (sources, {"faa": "broken"}):
         with pytest.raises(SourceError, match="SOURCE_STATE_INCOMPLETE"):
             sightings_from_state(incomplete, NOW)
