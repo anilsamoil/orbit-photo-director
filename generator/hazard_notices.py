@@ -520,7 +520,9 @@ def _broadcast_body(text: str) -> _BroadcastBody:
         tuple(
             (
                 int(mark[1]),
-                text[mark.end():(marks[index + 1].start() if index + 1 < len(marks) else len(text))],
+                text[
+                    mark.end():(marks[index + 1].start() if index + 1 < len(marks) else len(text))
+                ],
             )
             for index, mark in enumerate(marks)
         ),
