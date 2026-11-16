@@ -45,17 +45,15 @@ On 2026-11-16 the App Store on the iPad in orbit refused TestFlight, while other
 
 - **Every day: simulators.** The hosted workflow runs the app in the iOS Simulator on GitHub's Macs from W-01 on, with no Apple account. G2 runs there. Once Xcode is on the Mac on Earth (owner step 5), Claude and Codex can also drive the simulator from their own sessions and take screenshots.
 - **Before orbit: one real device on Earth.** G3 needs a person on the ground with an iPhone or iPad (owner step 4). A simulator cannot show real memory limits, real background refresh or real alert delivery.
-- **Orbit: a route that works on that iPad.** The App Store works there, so the unlisted App Store listing (W-71) is the route. W-74 prepares a fallback that needs neither TestFlight nor the App Store.
+- **Orbit: the App Store, installed by NASA.** The unlisted App Store listing (W-71) is the only route to the orbit devices. No TestFlight and no direct install reaches them.
 
 ### Delivery routes to the iPad in orbit, in order of preference
 
 The orbit devices (an 11-inch iPad Pro with M4 on iPadOS 26.6.2 and an iPhone 17 Pro on iOS 26.6.1) are managed: every app needs approval from the agency's device management (gate G7). The owner is seeking that approval.
 
-1. The unlisted App Store listing (W-71). Once the app is in the App Store, the owner asks NASA to approve it and install it on the devices. Builds do not expire. Each build goes through App Review, which takes days, so orbit fixes are slower than with TestFlight.
-2. A custom app sent to the agency's Apple Business Manager, if the device managers prefer to install the app and its updates through their own device management. Also goes through App Review.
-3. TestFlight: the device managers will not approve it. Ground tester only.
-4. Ad hoc install over the air (W-74). Also needs the device managers' approval, so it is a last resort. The iPad's device identifier is registered in the developer account, the build is signed for the registered devices, and the iPad installs it by tapping a link in Safari. It needs neither TestFlight nor the App Store. The signing lasts up to a year, so it also avoids the 90-day lapse. It does not work if device management on that iPad forbids installing apps.
-5. If no app can be installed on that iPad: the plan's fallback, hardening the website.
+1. The unlisted App Store listing (W-71). Once the app is in the App Store, the owner asks NASA to approve it and install it on the devices. Builds do not expire. Each build goes through App Review, which takes days, so orbit fixes are slower than with TestFlight. Apple fixes the distribution method at first submission, so there is no later switch to another channel.
+2. TestFlight reaches the ground tester only; NASA will not approve it in orbit.
+3. If NASA does not approve the app: the plan's fallback, hardening the website.
 
 Download size is not a constraint: the owner downloads large apps overnight. Updates should still stay small, because each one is a download over the station link.
 
@@ -72,8 +70,9 @@ Wave 0   W-00 ─┬─ W-01 ── W-02 (G1)
 G0       W-03 (needs W-02, G0): signed host proof on a ground device, second half of G1
 Wave 1   W-11 (needs W-10, W-02)   W-12 (needs W-10)   W-32 (needs W-30, W-31, W-02)   W-41 (needs W-40, W-11)
          W-21 (needs W-20, owner)   W-60 (needs W-21, W-32)   W-63 (needs W-30, W-10)
-Wave 2   W-33   W-42   W-50   W-61   W-62          then W-72 (G2)
-Wave 3   W-70 (needs G0, G2)   G3   W-71 (needs G2, submits in parallel with G3)   G6   G7 (owner, after G6)   G4   W-74 (needs G0, W-01)   W-73 (G5)
+         W-32 also needs W-11
+Wave 2   W-42   W-50   W-33 (needs W-50)   W-61   W-62          then W-72 (G2)
+Wave 3   W-70 (needs G0, G2)   G3   W-71 (needs G2, submits in parallel with G3)   G6   G7 (owner, after G6)   G4   W-73 (G5)
 Later    W-80 and up, each with a measured reason
 ```
 
@@ -137,8 +136,8 @@ Sizes are agent effort: S is under a day, M is one to three days, L is more.
   2. A security review of that note before any code.
   3. `worker/src/device-auth.ts` and its routing: `/api/device/enroll` (behind Access), `/d/enroll`, `/d/*` for the plan, published data and the API, and an owner-only list and revoke route behind Access.
   3a. `/d/enroll/apple`: verify the Apple identity token (signature against Apple's published keys, issuer, audience equal to the bundle ID, expiry), key the account on the Apple user identifier, create a new account at once; per-account quotas on targets and log entries. `/d/account/delete` for the signed-in account. Revocation in the owner's device list.
-  4. Log dedupe that does not depend on the month the request arrives. Today the object key is `log/<arrival yyyymm>/<dedupe key>` (`worker/src/index.ts:285-291`), so a retry after a month change writes a second record. Keep the arrival-month keys, so every existing reader of `log/` still finds new entries, and check the previous month's key before writing. Existing records stay readable.
-- **Tests, in the style of `worker/test/access-gate.test.ts`:** a code is single use; a code expires at five minutes; a wrong verifier fails; an unknown or revoked token is 401 with no detail; a token cannot read or write a profile its account is not granted; `/d/session` returns the same shape as `/api/browser/session`; `/d/*` cannot reach a human-only route; the daily rate limit holds; an Apple token with the wrong audience, issuer or signature, or expired, is refused; a new Apple or Google account gets its own profile at once and reaches no other; an account over its quota is refused with a clear error; account deletion removes the profile's targets and tokens and the deleted token is refused afterwards; a log entry first stored on the last day of a month and retried on the first day of the next is stored once; the existing Worker suite stays green.
+  4. Log idempotency that does not depend on the month the request arrives. Today the object key is `log/<arrival yyyymm>/<dedupe key>` (`worker/src/index.ts:285-291`), so a write acknowledged on 30 November and retried on 1 January finds neither the January nor the December key and duplicates. Add an idempotency marker keyed only by namespace and dedupe key (for example `log/_keys/<namespace><key>`), checked and written atomically before the monthly record; the monthly record stays so every existing reader still finds new entries. Tests: a lost acknowledgment retried in the same month, the next month and a non-adjacent month each yield one record.
+- **Tests, in the style of `worker/test/access-gate.test.ts`:** a code is single use; a code expires at five minutes; a wrong verifier fails; an unknown or revoked token is 401 with no detail; a token cannot read or write a profile its account is not granted; `/d/session` returns the same shape as `/api/browser/session`; `/d/*` cannot reach a human-only route; the daily rate limit holds; an Apple token with the wrong audience, issuer or signature, or expired, is refused; a new Apple or Google account gets its own profile at once and reaches no other; an account over its quota is refused with a clear error; account deletion removes the profile's targets and tokens and the deleted token is refused afterwards; a log entry whose acknowledgment is lost and retried in the same, the next, or a non-adjacent month is stored once; the existing Worker suite stays green.
 - **Done when:** the review signs off and the tests are green. Nothing is deployed in this package.
 
 ### W-21 Deploy device access (S, owner approves)
@@ -155,12 +154,12 @@ Sizes are agent effort: S is under a day, M is one to three days, L is more.
 - **Done when:** an entry survives a process stop at any point after `enqueue` returns; a lost response plus a retry yields one server record in the fake transport; a rejected entry moves to a kept "rejected" folder and is counted in diagnostics; nothing is dropped for space.
 
 ### W-32 Native transport and bridge (M)
-- **Needs:** W-30, W-31, W-02. At risk until W-03 passes.
+- **Needs:** W-30, W-31, W-11, W-02. At risk until W-03 passes.
 - **Change:** `OPDHost` implements `request` by route class from `routes.json`, the events, the snapshot read and the outbox calls.
 - **Done when:** a simulator test loads the frontend on a fixture plan with the network off and Queue, Upcoming, Map and ISS view render; a path missing from `routes.json` returns 404 and writes a diagnostics entry.
 
 ### W-33 Background refresh (S)
-- **Needs:** W-32.
+- **Needs:** W-32, W-50 (the alert roll-forward it runs).
 - **Done when:** the handler runs sync, the outbox drain and the alert roll-forward inside 25 seconds against a fake clock and transport; the task is registered and resubmitted; diagnostics shows the last three runs. The system decides how often it runs; no test claims a frequency.
 
 ### W-40 Baseline map pack (M)
@@ -189,7 +188,7 @@ Sizes are agent effort: S is under a day, M is one to three days, L is more.
 - **Done when:** web process termination reloads to the same tab; a lost WebGL context rebuilds the map; a memory warning reaches the web side; links to other sites open in Safari; the layouts hold at iPhone 17 Pro and iPad Pro 11-inch sizes (the orbit devices) in both orientations and at iPad split-view widths; the keep-awake setting works.
 
 ### W-62 Diagnostics and build lifetime (S)
-- **Done when:** one page shows the build and its expiry date, the plan version and age, the orbit data age, storage in use, alert coverage, outbox and rejected counts, the last sync results and the token state; "Export" produces a text file with no token and no personal target coordinates; the expiry banner appears 30 days out.
+- **Done when:** one page shows the build and, for a TestFlight or ad hoc build only, its expiry date (an App Store build shows "App Store build, no expiry" and no expiry banner or alert); the plan version and age, the orbit data age, storage in use, alert coverage, outbox and rejected counts, the last sync results and the token state; "Export" produces a text file with no token and no personal target coordinates; the expiry banner appears 30 days out on TestFlight builds; a test covers each channel's receipt environment.
 
 ### W-63 Old builds keep working (S)
 - **Needs:** W-30, W-10.
@@ -198,7 +197,7 @@ Sizes are agent effort: S is under a day, M is one to three days, L is more.
 
 ### W-70 Signed build and TestFlight for the ground tester (M)
 - **Needs:** W-03 (the release job), G2.
-- **Change:** the release job from W-03, limited to `main` and to the `ios-release` environment with the owner as required reviewer; signing with the App Store Connect API key; upload; build numbers from the workflow run; while ground testing continues, a scheduled job that cuts a refresh build when the newest one is 45 days old.
+- **Change:** the release job from W-03, limited to `main` and to the `ios-release` environment with the owner as required reviewer; signing with the App Store Connect API key from the `ios-release` secrets `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID` and `APP_STORE_CONNECT_PRIVATE_KEY`; upload; build numbers from the workflow run; while ground testing continues, a scheduled job that cuts a refresh build when the newest one is 45 days old.
 - **Done when:** a build appears in TestFlight from a workflow run with no manual step other than the owner's approval; the secrets appear in no log.
 
 ### W-71 App Store submission, the route to orbit (M)
@@ -214,14 +213,15 @@ Sizes are agent effort: S is under a day, M is one to three days, L is more.
 - **Needs:** G5.
 - **Done when:** crewmates have the App Store link and NASA's approval for their devices; a one-page enrollment guide for crew exists; the device list and the revoke steps are in the runbook.
 
-### W-74 Delivery without TestFlight (M)
-- **Needs:** G0, W-01.
-- **Change:** a release job that signs an ad hoc build for the devices registered in the developer account; an install page with the over-the-air manifest, served over HTTPS behind the map's existing sign-in; and the simplest way for the owner to hand over the iPad's device identifier with no Mac and no cable, written as owner steps.
-- **Done when:** a ground device installs the build by tapping the link in Safari, and the page names the build and its signing expiry date. An ad hoc build shows that date in the app with the same banner and alert as a TestFlight build; the app detects it by its embedded provisioning profile.
+### Later, not scheduled
+
+#### W-74 Ground delivery without TestFlight (M, only if TestFlight fails for the ground tester)
+- **Needs:** G0, W-01. Never a route to the orbit devices, which NASA installs from the App Store.
+- **Change:** a release job that signs an ad hoc build for the ground tester's registered device; an install page with the over-the-air manifest, served over HTTPS behind the map's existing sign-in; and the simplest way for the tester to hand over the device identifier, written as a step for them.
+- **Done when:** the ground device installs the build by tapping the link in Safari; the app launches, is relaunched with the network off and still shows the baseline and the map; a replacement build installs over it, launches, and keeps state; the page and the app name the build and its signing expiry date, with the same banner and alert as a TestFlight build.
 - **Traps:** no certificate, profile or private key in the repository or in a log. A device identifier is personal data: it goes into the developer account, not into git.
 
-### Later, not scheduled
-W-80 Lock Screen countdown and a widget. W-81 Shoot and Skip buttons on the alert. W-82 Swift orbit math, if W-80 or long closed-app alert coverage needs it, with the same reference vectors as W-12. W-83 a native Queue screen. W-84 a native map once MapLibre Native ships a globe. W-85 device-to-device plan sharing. W-86 a longer plan from the generator, if the device extension proves too thin. W-87 batch photo labelling.
+W-80 Lock Screen countdown and a widget. W-81 Shoot and Skip buttons on the alert. W-82 Swift orbit math, if W-80 or long closed-app alert coverage needs it, with the same reference vectors as W-12. W-83 a native Queue screen. W-84 a native map, once MapLibre Native's globe view is released and proven on the ISS view's camera. W-85 device-to-device plan sharing. W-86 a longer plan from the generator, if the device extension proves too thin. W-87 batch photo labelling.
 
 ## Where each second-opinion finding went
 
@@ -251,9 +251,9 @@ W-80 Lock Screen countdown and a widget. W-81 Shoot and Skip buttons on the aler
 | The website moves under the seam | A new same-origin request or storage key | The boundary tests catch requests. The storage mirror covers keys. |
 | The installed build nears expiry | `STATUS.md` shows under 30 days | Cut a refresh build. Tell the owner to install it. |
 | Device memory on older iPads | Web process terminations at G3 | Lower the raster cache and the concurrent renderers; record the device floor. |
-| Device approval is slow or refused | G7 still open when G2 passes | Ask what the device managers need; offer the custom-app route through Apple Business Manager. The website stays the tool meanwhile. |
-| App Review rejects the app | W-71 rejected under guideline 4.2 or for sign-in | Fix the named reason; make demo mode show more offline value. Meanwhile prepare W-74. |
-| No app installs on the iPad in orbit | The App Store refused TestFlight on 2026-11-16; the App Store listing and W-74 also fail | Stop. Tell the owner. The fallback is website hardening. |
+| NASA approval is slow or refused | G7 still open when G6 passes | Ask what NASA needs; keep the packet current. The website stays the tool meanwhile. |
+| App Review rejects the app | W-71 rejected under guideline 4.2 or for sign-in | Fix the named reason; make demo mode show more offline value. |
+| No app reaches the orbit devices | NASA declines, or App Review never passes | Stop. Tell the owner. The fallback is website hardening. |
 | The download is too big for the link | The owner's timing from the assignment | Shrink the baseline to zoom 0 to 4 and fetch the rest on first online launch. |
 | The live service is disturbed | Any change under `generator/` or in the main checkout | Reject the pull request. |
 

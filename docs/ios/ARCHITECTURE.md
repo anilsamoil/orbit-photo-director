@@ -149,7 +149,7 @@ Prefetch matches the website exactly: the world view of the switchable layers on
 | --- | --- | --- |
 | PlanStore | Stores installed plans under Application Support. Keeps the current plan, the previous one and one more. | Stop the process between any two steps of an install: `current` still resolves to a complete plan whose every artifact matches its SHA-256. |
 | SyncEngine | Checks the manifest, downloads to a staging folder, verifies, checks the plan has every field this build requires, installs, backs off on failure. Runs on foreground, on connectivity, on a timer and in background refresh. | A failed or partial download never changes `current`. A newer readable version always wins; an older one never replaces a newer one; an unreadable one is not installed and the app says an update is needed. |
-| Outbox | One file per unsent write, named by its dedupe key. | An entry is deleted only after the server answers `{ok:true}`. A lost response followed by a retry produces one server record. Nothing is dropped to make room. |
+| Outbox | One file per unsent write, named by its dedupe key. | An entry is deleted only after the server answers `{ok:true}`. A lost response followed by a retry, in the same month or any later month, produces one server record. Nothing is dropped to make room. |
 | TileGateway | The lookup order and the size budget. | The baseline is never evicted. Local bytes are returned without touching the network. |
 | AlertPlanner | Chooses which alerts to schedule from the alert plan. | Never more than the system limit. The coverage end it reports equals the last scheduled alert. |
 | CredentialStore | Protocol here; Keychain behind it in `OPDHost`. | The token never appears in a log, a diagnostics export or JavaScript. |

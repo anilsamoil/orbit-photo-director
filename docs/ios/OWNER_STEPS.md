@@ -4,18 +4,9 @@ The things only the owner can do. Everything else is the agents' work. The steps
 
 Agents never create, read or move Apple credentials. Where a step produces a key, the owner places it and no one else sees it.
 
-## 1. Test the install path (ten minutes, no account needed)
+## 1. The orbit devices (answered 2026-11-16)
 
-On the iPad in orbit, install the TestFlight app from the App Store. Then download any one app from the App Store and note its size and how long it took.
-
-**Why:** it proves apps can be installed over the station link, and the timing sets how big SNAP may be.
-**Send back:** the app's size and the minutes it took.
-
-**Answered 2026-11-16:**
-
-- The devices are an iPad Pro with M4 and an iPhone 17 Pro. Both are managed: every app needs approval from the agency's device management before it can be installed. TestFlight will not be approved, so it is only for the ground tester.
-- Storage and download size are not constraints. Large downloads run overnight.
-- The iPad is the 11-inch model on iPadOS 26.6.2. The iPhone runs iOS 26.6.1.
+The iPad is an 11-inch iPad Pro with M4 on iPadOS 26.6.2. The iPhone is an iPhone 17 Pro on iOS 26.6.1. Both are managed by NASA: every app needs NASA's approval, NASA installs it, and TestFlight will not be approved. Storage and download size are not constraints; large downloads run overnight. Nothing is installed on these devices by the owner directly.
 
 ## 2. Apple Developer Program
 
@@ -51,10 +42,10 @@ Name one person on Earth with an iPhone or iPad who can spend ten minutes on a c
 
 Once the app is in the App Store, ask NASA to approve SNAP and install it on the iPad and the iPhone in orbit. The agents prepare an approval packet with W-71: what the app does, every server it contacts, what it stores, the one permission it asks for (notifications), and that it has no tracking and no third-party analytics.
 
-Ask them one question early: do they want SNAP as an unlisted App Store app that they approve, or as a custom app sent to the agency's Apple Business Manager, which their device management then installs? Both go through App Review. The second lets them push the app and its updates themselves.
+Apple fixes an app's distribution method at the first submission, so the plan commits to the unlisted App Store listing and does not switch later. Ask NASA early what the approval packet must contain and how long their approval takes.
 
 **Why:** no build reaches orbit without this approval. It may take longer than any code.
-**Send back:** which of the two they prefer, and anything they need in the packet.
+**Send back:** anything NASA needs in the packet, and their expected approval time.
 
 ## 5. Xcode on the Mac (optional)
 
@@ -81,6 +72,6 @@ When the organizer reports that the device-access design passed its review:
 
 ## 8. Each release
 
-Approve the release job when the organizer asks. Submit the App Store build for review when the organizer has the folder ready (W-71); after approval, install or update SNAP from its unlisted App Store link. The ground tester installs from TestFlight.
+Approve the release job when the organizer asks. Submit the App Store build for review when the organizer has the folder ready (W-71). After Apple approves it, ask NASA to install or update SNAP on the orbit devices (step 4a). The ground tester installs from TestFlight.
 
-**Why:** the App Store is the one install channel that works on the iPad in orbit. App Store builds do not expire. The website stays as the fallback either way.
+**Why:** NASA installs from the App Store; that is the one route to the orbit devices. App Store builds do not expire. The website stays as the fallback either way.
