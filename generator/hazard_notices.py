@@ -128,6 +128,10 @@ class Area:
     restriction_class: str
     instructions: tuple[str, ...] = ()
 
+    @property
+    def drawable(self) -> bool:
+        return _ring_drawable(self.ring)
+
 
 @dataclass(frozen=True)
 class Notice:
@@ -229,16 +233,28 @@ def _position(lat: float, lon: float) -> Position:
     return (lon, lat)
 
 
-def _ring(points: list[Position]) -> tuple[Position, ...]:
-    """Drop a repeated closing vertex. Refuse a ring the map cannot draw as published."""
+def _validated_ring(points: list[Position]) -> tuple[Position, ...]:
+    """Keep one open ring with distinct vertices and a bounded size."""
     if len(points) >= 2 and points[0] == points[-1]:
         points = points[:-1]
     if not 3 <= len(points) <= MAX_VERTICES or len(set(points)) != len(points):
         raise ValueError("ring size")
-    closed = [*points, points[0]]
-    if any(abs(b[0] - a[0]) > 180 for a, b in zip(closed, closed[1:], strict=False)):
-        raise _UndrawnRingError("ring crosses the antimeridian")
     return tuple(points)
+
+
+def _ring_drawable(ring: tuple[Position, ...]) -> bool:
+    return all(
+        abs(b[0] - a[0]) <= 180
+        for a, b in zip(ring, ring[1:] + ring[:1], strict=True)
+    )
+
+
+def _ring(points: list[Position]) -> tuple[Position, ...]:
+    """Refuse a ring the map cannot draw as published."""
+    ring = _validated_ring(points)
+    if not _ring_drawable(ring):
+        raise _UndrawnRingError("ring crosses the antimeridian")
+    return ring
 
 
 def _moment(year: int, month: int, day: int, hhmm: str) -> datetime:
@@ -406,7 +422,7 @@ def _broadcast_ring(text: str) -> tuple[Position, ...]:
         _position(_sexagesimal(ns, lat_d, lat_m), _sexagesimal(ew, lon_d, lon_m))
         for lat_d, lat_m, ns, lon_d, lon_m, ew in _DM_PAIR.findall(text)
     ]
-    return _ring(points)
+    return _validated_ring(points)
 
 
 @dataclass(frozen=True)
@@ -479,14 +495,16 @@ class _Relevance(Enum):
 
 
 _MARINE_ACTIVITY = re.compile(
-    r"(?:HAZARDOUS OPERATIONS\b|(?:INTERMITTENT )?MISSILE (?:FIRING )?OPERATIONS\b|"
+    r"(?:(?:INTERMITTENT )?MISSILE (?:FIRING )?OPERATIONS\b|"
     r"FIRING OPERATIONS\b|"
-    r"(?:NAVIGATION|ANCHORING) PROHIBITED\b|"
     r"(?:SURVEY|UNDERWATER|CABLE|PIPELINE) (?:LAYING )?OPERATIONS\b|"
     r"(?:SCIENTIFIC )?MOORINGS?\b|DEPTHS LESS THAN CHARTED\b|"
     r"(?:\d+(?:\.\d+)? METER )?SHOAL\b|UNCHARTED REEF\b|DANGEROUS WRECK\b|"
     r"VESSEL\b|NAVAREA (?:IV|XII) (?:WARNINGS IN FORCE|MOBILE OFFSHORE DRILLING UNITS)\b|"
     + "|".join(re.escape(subject) + r"\b" for subject in _NAVIGATION_SUBJECTS) + r")"
+)
+_GENERIC_MARINE = re.compile(
+    r"^(?:HAZARDOUS OPERATIONS|(?:NAVIGATION|ANCHORING) PROHIBITED)\b[ ,:;]*(?:DUE TO )?"
 )
 _MARINE_ADVICE = re.compile(
     r"(?:CANCEL\b|VESSELS\b|MARINERS\b|THE COMPLETE TEXT OF ALL IN-FORCE\b|"
@@ -495,15 +513,139 @@ _MARINE_ADVICE = re.compile(
 _ACTIVITY_SUBJECT = re.compile(r"\b(OPERATIONS?|ACTIVIT(?:Y|IES))\b")
 _SUBJECT_BREAK = re.compile(r"[^A-Z -]+")
 _MARINE_SUBJECT = re.compile(rf"{_MARINE_ACTIVITY.pattern}$")
+_GENERIC_SUBJECT = re.compile(
+    r"^(HAZARDOUS OPERATIONS|NAVIGATION PROHIBITED|ANCHORING PROHIBITED)"
+    r"(?: IN PROGRESS)?(?= |$)"
+)
+_GENERIC_RADIUS = re.compile(r"\bIN AREA WITHIN (ONE|\d+(?:\.\d+)?) MILES? OF ")
+_SPACE_AUTHORITY = re.compile(r"\b(?:LAUNCH RANGE|EASTERN RANGE|WESTERN RANGE)\b", re.IGNORECASE)
+_GENERIC_ADVICE = "WIDE BERTH REQUESTED."
 
 
-def _launch_relevance(text: object) -> _Relevance:
+@dataclass(frozen=True)
+class _GenericBroadcast:
+    subject: str
+    areas: tuple[Area, ...]
+    cancels: tuple[str, ...]
+    valid_until: datetime | None
+    indefinite: bool
+
+
+def _space_authority(authority: object) -> bool:
+    return isinstance(authority, str) and bool(
+        _SPACE_OPERATIONS.search(authority) or _SPACE_AUTHORITY.search(authority)
+    )
+
+
+def _generic_broadcast(text: str, issued: datetime | None) -> _GenericBroadcast | None:
+    if issued is None:
+        return None
+    body = _broadcast_body(text)
+    if body.paragraphs:
+        if (
+            not _sequential_numbers(tuple(number for number, _ in body.paragraphs))
+            or _after_broadcast_geography(body.preamble)
+        ):
+            return None
+        first = body.paragraphs[0][1]
+        rest = " ".join(content for _, content in body.paragraphs[1:])
+    else:
+        first, rest = _after_broadcast_geography(body.preamble), ""
+    first, rest = " ".join(first.upper().split()), " ".join(rest.upper().split())
+    subject = _GENERIC_SUBJECT.match(first)
+    if subject is None:
+        return None
+    first = first[subject.end():].strip()
+    if first.endswith(_GENERIC_ADVICE):
+        first = first[:-len(_GENERIC_ADVICE)].rstrip()
+        rest = f"{_GENERIC_ADVICE} {rest}".strip()
+    bound, label, radius = _BOUND.search(first), _LABEL.search(first), _GENERIC_RADIUS.search(first)
+    schedules: list[tuple[str, str, str]] = []
+    if bound and label and label.start() < bound.start():
+        labelled = _labelled(first)
+        if labelled.prefix.strip():
+            return None
+        for letter, chunk in labelled.chunks:
+            inner = _BOUND.search(chunk)
+            if inner is None:
+                return None
+            schedules.append((letter, chunk[:inner.start()].strip(), chunk[inner.end():].strip()))
+    elif bound:
+        labelled = _labelled(first[bound.end():].strip())
+        if labelled.chunks and labelled.prefix.strip():
+            return None
+        for letter, coordinates in labelled.chunks or (("1", labelled.prefix),):
+            schedules.append((letter, first[:bound.start()].strip(), coordinates.strip()))
+    elif radius:
+        schedules.append(("1", first[:radius.start()].strip(), first[radius.end():].strip()))
+    else:
+        return None
+    labels = [letter for letter, _, _ in schedules]
+    if labels != ["1"] and labels != [chr(ord("A") + index) for index in range(len(labels))]:
+        return None
+    indefinite = all(schedule == "UNTIL FURTHER NOTICE" for _, schedule, _ in schedules)
+    areas: list[Area] = []
+    try:
+        for letter, schedule, coordinates in schedules:
+            if indefinite:
+                windows: tuple[Window, ...] = ()
+            else:
+                decoded = _broadcast_windows(schedule, issued)
+                if not decoded.readable:
+                    return None
+                windows = tuple(decoded.windows)
+            if not coordinates.endswith("."):
+                return None
+            if radius:
+                point = _DM_PAIR.fullmatch(coordinates[:-1])
+                if point is None or (radius[1] != "ONE" and Decimal(radius[1]) <= 0):
+                    return None
+                lat_d, lat_m, ns, lon_d, lon_m, ew = point.groups()
+                _position(_sexagesimal(ns, lat_d, lat_m), _sexagesimal(ew, lon_d, lon_m))
+            else:
+                areas.append(Area(letter, _broadcast_ring(coordinates), windows, "prohibition"))
+        valid_until = None
+        cancels: list[str] = []
+        while rest:
+            if rest.startswith(_GENERIC_ADVICE):
+                rest = rest[len(_GENERIC_ADVICE):].lstrip()
+                continue
+            own = _CANCEL_SELF.match(rest)
+            other = _CANCEL_OTHER.match(rest)
+            if own:
+                if indefinite or valid_until is not None:
+                    return None
+                day, hhmm, month, year = own.groups()
+                valid_until = _moment(2000 + int(year), _MONTHS.index(month) + 1, int(day), hhmm)
+                if valid_until <= issued:
+                    return None
+                end = own.end()
+            elif other:
+                cancels.append(f"{other[1]} {other[2]}")
+                end = other.end()
+            else:
+                return None
+            if rest[end:end + 1] != ".":
+                return None
+            rest = rest[end + 1:].lstrip()
+    except (ValueError, InvalidOperation):
+        return None
+    if not indefinite and valid_until is None:
+        return None
+    return _GenericBroadcast(subject[1], tuple(areas), tuple(cancels), valid_until, indefinite)
+
+
+def _launch_relevance(
+    text: object, *, issued: datetime | None = None, authority: object = None,
+) -> _Relevance:
     if not isinstance(text, str) or not text.strip():
         return _Relevance.UNCERTAIN
-    if _SPACE_OPERATIONS.search(text):
+    if _SPACE_OPERATIONS.search(text) or _space_authority(authority):
         return _Relevance.RELEVANT
     if _UNCERTAIN_FLIGHT.search(text):
         return _Relevance.UNCERTAIN
+    if _generic_broadcast(text, issued) is not None:
+        return _Relevance.OTHER
     body = _broadcast_body(text)
     preamble = _after_broadcast_geography(body.preamble)
     components = ([preamble] if preamble else []) + [content for _, content in body.paragraphs]
@@ -511,8 +653,9 @@ def _launch_relevance(text: object) -> _Relevance:
         return _Relevance.UNCERTAIN
     for index, component in enumerate(components):
         operative = " ".join(_after_broadcast_geography(component).upper().split()).lstrip(" .:;?,")
+        operative, generic_prefix_count = _GENERIC_MARINE.subn("", operative, count=1)
         if not _MARINE_ACTIVITY.match(operative) and not (
-            index and _MARINE_ADVICE.match(operative)
+            index and not generic_prefix_count and _MARINE_ADVICE.match(operative)
         ):
             return _Relevance.UNCERTAIN
         subject_start = 0
@@ -549,11 +692,28 @@ def parse_broadcast_warning(
     source_sha256: str,
     *,
     strict: bool = False,
+    authority: object = None,
 ) -> Notice:
     """Decode a warning body. Strict source confirmation requires every relevant structure."""
-    relevance = _launch_relevance(text)
+    relevance = _launch_relevance(text, issued=issued, authority=authority)
     if strict and relevance is _Relevance.OTHER:
         return _other_broadcast_notice(text, notice_id, source_url, source_sha256, issued)
+    generic = _generic_broadcast(text, issued)
+    if (
+        generic is not None
+        and _space_authority(authority)
+        and generic.indefinite
+        and generic.subject in {"NAVIGATION PROHIBITED", "ANCHORING PROHIBITED"}
+        and generic.areas
+    ):
+        return Notice(
+            authority="NGA", notice_id=notice_id, kind="standing_closure", domain="maritime",
+            subject=generic.subject, areas=generic.areas, cancels=generic.cancels,
+            valid_until=None, problems=tuple(
+                f"GEOMETRY_UNDRAWN:ANTIMERIDIAN:{area.area_id}"
+                for area in generic.areas if not area.drawable
+            ), source_url=source_url, source_sha256=source_sha256, valid_from=issued,
+        )
     body = _broadcast_body(text)
     if strict and not _sequential_numbers(tuple(number for number, _ in body.paragraphs)):
         raise NoticeError("NGA_ROW")
@@ -601,7 +761,6 @@ def parse_broadcast_warning(
     if strict and kind == "other":
         raise NoticeError("NGA_ROW")
     areas: list[Area] = []
-    undrawn = False
     for letter, schedule, coordinates in schedules:
         decoded = _broadcast_windows(schedule, issued)
         problems.extend(decoded.problems)
@@ -609,20 +768,19 @@ def parse_broadcast_warning(
             raise NoticeError("NGA_ROW")
         try:
             ring = _broadcast_ring(coordinates)
-        except _UndrawnRingError:
-            problems.append(f"GEOMETRY_UNDRAWN:ANTIMERIDIAN:{letter}")
-            undrawn = True
-            continue
         except (ValueError, InvalidOperation):
             problems.append(f"GEOMETRY_UNPARSED:{letter}")
             continue
-        areas.append(Area(letter, ring, tuple(decoded.windows), "hazard"))
+        area = Area(letter, ring, tuple(decoded.windows), "hazard")
+        if not area.drawable:
+            problems.append(f"GEOMETRY_UNDRAWN:ANTIMERIDIAN:{letter}")
+        areas.append(area)
     if kind != "other":
         remaining = _CANCEL_OTHER.sub("", _CANCEL_SELF.sub("", rest)).strip(" ./")
         if len(_CANCEL_SELF.findall(rest)) != 1 or remaining:
             problems.append("CANCEL_UNPARSED")
         if strict and (
-            not areas and not undrawn
+            not areas
             or any(not problem.startswith(("WINDOW_UNPARSED:", "GEOMETRY_UNDRAWN:"))
                    for problem in problems)
             or valid_until is None
@@ -630,7 +788,7 @@ def parse_broadcast_warning(
             or len({letter for letter, _, _ in schedules}) != len(schedules)
         ):
             raise NoticeError("NGA_ROW")
-    if undrawn or any(problem.startswith("GEOMETRY_UNPARSED") for problem in problems):
+    if any(problem.startswith("GEOMETRY_UNPARSED") for problem in problems):
         areas = []
     return Notice(
         authority="NGA",
@@ -688,7 +846,7 @@ def parse_nga_payload(body: bytes, source_url: str) -> list[Notice]:
         if not _readable_relevance(supported, error="NGA_ROW"):
             continue
         number, year, text = row.get("msgNumber"), row.get("msgYear"), row.get("text")
-        if _launch_relevance(text) is _Relevance.OTHER:
+        if _launch_relevance(text, authority=row.get("authority")) is _Relevance.OTHER:
             readable_number = str(number) if type(number) is int and number > 0 else "?"
             readable_year = f"{year % 100:02d}" if type(year) is int else "?"
             notices.append(_other_broadcast_notice(
@@ -715,19 +873,19 @@ def parse_nga_payload(body: bytes, source_url: str) -> list[Notice]:
             issued = _moment(int(issue_year), _MONTHS.index(month) + 1, int(day), hour + minute)
             notice = parse_broadcast_warning(
                 text, f"{series} {number}/{year % 100:02d}", issued, source_url, digest,
-                strict=True,
+                strict=True, authority=row.get("authority"),
             )
         except ValueError as exc:
             raise NoticeError("NGA_ROW") from exc
-        if notice.notice_id in relevant_ids:
-            raise NoticeError("NGA_ROW")
-        relevant_ids.add(notice.notice_id)
+        if notice.kind != "other":
+            if notice.notice_id in relevant_ids:
+                raise NoticeError("NGA_ROW")
+            relevant_ids.add(notice.notice_id)
         notices.append(notice)
     return notices
 
 
 _USCG_HAZARD_LABEL = re.compile(r"^(HIGH RISK )?HAZARD AREA(?: ([A-Z]))?\s*:$")
-_USCG_HAZARD_HEADING = re.compile(r"(?im)^[ \t]*(?:HIGH RISK )?HAZARD AREAS?\b")
 _USCG_FROM = re.compile(r"^([A-Z])\. FROM (.+)$")
 _USCG_NUMBERED = re.compile(r"(?m)^\d{1,2}\. ")
 _USCG_GLOBAL_TIMES = re.compile(
@@ -1380,7 +1538,6 @@ def parse_uscg_space_operations(
         geometry = feature.get("geometry")
         if isinstance(geometry, dict):
             _known_fields(geometry, _USCG_GEOMETRY_FIELDS, "USCG_ROW")
-        relevance = _launch_relevance(props.get("DESCRIPTION"))
         if not _readable_relevance(
             _equals_if_readable(props.get("STATUS"), "Approved", frozenset({"Draft", "Pending"})),
             _equals_if_readable(
@@ -1391,10 +1548,6 @@ def parse_uscg_space_operations(
             _drop_other(f"USCG LNM {props.get('MSI_UID', '?')}", "INACTIVE_OR_NONSPACE_GROUP")
             continue
         uid, description = props.get("MSI_UID"), props.get("DESCRIPTION")
-        if relevance is _Relevance.OTHER and not _USCG_HAZARD_HEADING.search(str(description)):
-            readable_uid = str(uid) if type(uid) is int and uid > 0 else "?"
-            _drop_other(f"USCG LNM {readable_uid}", "NON_LAUNCH_MARINE_ACTIVITY")
-            continue
         if (
             type(uid) is not int
             or uid <= 0

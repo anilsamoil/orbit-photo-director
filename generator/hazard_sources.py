@@ -27,6 +27,7 @@ from .hazard_notices import (
     _position,
     _readable_relevance,
     _ring,
+    _validated_ring,
     _window,
     notice_from_record,
     notice_record,
@@ -69,6 +70,7 @@ _SOURCE_NOTICE_TYPES = frozenset({
     ("USCG", "launch", "maritime"), ("USCG", "recovery", "maritime"),
     ("USCG", "regulated_area", "maritime"),
     ("NGA", "launch", "maritime"), ("NGA", "space_debris", "maritime"),
+    ("NGA", "standing_closure", "maritime"),
 })
 
 Fetch = Callable[[str], bytes]
@@ -219,7 +221,9 @@ def _cached_notice(record: object) -> Notice:
             notice.source_url, notice.source_sha256,
         ))
         or not notice.notice_id
-        or notice.kind not in {"launch", "space_debris", "recovery", "regulated_area", "other"}
+        or notice.kind not in {
+            "launch", "space_debris", "recovery", "regulated_area", "standing_closure", "other",
+        }
         or notice.domain not in {"maritime", "airspace"}
         or not re.fullmatch(r"[a-f0-9]{64}", notice.source_sha256)
         or any(not isinstance(value, str) for value in (*notice.cancels, *notice.problems))
@@ -235,6 +239,14 @@ def _cached_notice(record: object) -> Notice:
             raise ValueError("area fields")
         for window in area.windows:
             _window(window.start, window.end)
+    undrawn = {
+        f"GEOMETRY_UNDRAWN:ANTIMERIDIAN:{area.area_id}"
+        for area in notice.areas if not area.drawable
+    }
+    if undrawn != {
+        problem for problem in notice.problems if problem.startswith("GEOMETRY_UNDRAWN:")
+    }:
+        raise ValueError("undrawn areas")
     rings = [area["ring"] for area in record["areas"]]
     if record["outline"]:
         rings.append(record["outline"])
@@ -242,7 +254,8 @@ def _cached_notice(record: object) -> Notice:
         if any(type(value) not in (int, float) for point in ring for value in point):
             raise ValueError("coordinates")
         points = [_position(lat, lon) for lon, lat in ring]
-        if tuple(points) != _ring(points):
+        validate_ring = _validated_ring if notice.authority == "NGA" else _ring
+        if tuple(points) != validate_ring(points):
             raise ValueError("open ring")
     return notice
 

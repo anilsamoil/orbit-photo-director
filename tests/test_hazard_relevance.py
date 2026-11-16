@@ -20,8 +20,8 @@ from tests.test_hazard_faa_r3 import _web
 from tests.test_hazard_refresh import NOW, Web, _output
 
 BULLETIN = "navarea-xii-in-force-2026-11-13.txt"
-XII_OTHER = (802, 795, 789, 752, 751, 750, 745)
-IV_OTHER = (1100, 222, 329)
+XII_OTHER = (802, 795, 789, 752, 751, 750, 745, 639)
+IV_OTHER = (1100, 222, 274)
 
 
 def _xii_rows() -> list[dict[str, object]]:
@@ -69,7 +69,7 @@ def _retains_source(tmp_path: Path, source: str, url: str, body: bytes) -> None:
 
 @pytest.mark.parametrize(("area", "dropped"), (("12", XII_OTHER), ("4", IV_OTHER)))
 @pytest.mark.parametrize("warm", (False, True))
-def test_complete_nga_capture_publishes_and_records_nonlaunch_drops(
+def test_complete_captures_publish_and_record_nonlaunch_drops(
     tmp_path: Path, caplog: pytest.LogCaptureFixture, area: str,
     dropped: tuple[int, ...], warm: bool,
 ) -> None:
@@ -84,7 +84,8 @@ def test_complete_nga_capture_publishes_and_records_nonlaunch_drops(
         )["ok"]
         now += timedelta(minutes=31)
     raw = _payload(_xii_rows()) if area == "12" else (fx.NOTICES / fx.NGA_2023).read_bytes()
-    assert len(json.loads(raw)["broadcast-warn"]) == (27 if area == "12" else 85)
+    rows = json.loads(raw)["broadcast-warn"]
+    assert len(rows) == (27 if area == "12" else 85)
     web.pages[NGA_URL.format(area=area)] = raw
     report = refresh_hazards(
         cache, output, now, fetch=web, pause=lambda _: None, publication=publication,
@@ -103,7 +104,8 @@ def test_complete_nga_capture_publishes_and_records_nonlaunch_drops(
             )
             assert not any("UNPARSED" in problem for problem in notice["problems"])
     else:
-        assert set(notices) == {"NAVAREA IV 1231/23", "NAVAREA IV 1130/23"}
+        assert set(notices) == {"NAVAREA IV 1231/23", "NAVAREA IV 1130/23", "NAVAREA IV 329/23"}
+        assert notices["NAVAREA IV 329/23"]["kind"] == "standing_closure"
     series, year = ("NAVAREA XII", "26") if area == "12" else ("NAVAREA IV", "23")
     for number in dropped:
         notice_id = f"{series} {number}/{year}"
@@ -174,7 +176,7 @@ def test_uncertain_activity_inside_a_captured_nonlaunch_row_keeps_last_good(
 def test_captured_nonlaunch_row_does_not_require_launch_metadata(
     caplog: pytest.LogCaptureFixture, field: str, value: object,
 ) -> None:
-    row = next(row for row in _xii_rows() if row["msgNumber"] == 802)
+    row = next(row for row in _xii_rows() if row["msgNumber"] == 639)
     row[field] = value
     notices = parse_nga_payload(_payload([row]), NGA_URL.format(area="12"))
     assert all(notice.kind == "other" for notice in notices)
@@ -184,7 +186,7 @@ def test_captured_nonlaunch_row_does_not_require_launch_metadata(
 @pytest.mark.parametrize("other_first", (False, True))
 def test_other_notice_identity_cannot_collide_with_a_launch(other_first: bool) -> None:
     launch = next(row for row in _xii_rows() if row["msgNumber"] == 801)
-    other = next(row for row in _xii_rows() if row["msgNumber"] == 802)
+    other = next(row for row in _xii_rows() if row["msgNumber"] == 639)
     other["msgNumber"] = 801
     rows = [other, launch] if other_first else [launch, other]
     notices = parse_nga_payload(_payload(rows), NGA_URL.format(area="12"))

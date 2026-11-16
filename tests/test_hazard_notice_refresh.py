@@ -274,6 +274,7 @@ def test_readable_non_space_nga_warning_is_a_successful_empty_source(
         navArea=area, area=area,
         text="WESTERN NORTH ATLANTIC.\n1. CABLE LAYING OPERATIONS IN PROGRESS.\n",
     )
+    row.pop("authority")
     payload["broadcast-warn"] = [row]
     web = Web(complete=True)
     web.pages[NGA_URL.format(area=area)] = json.dumps(payload).encode()
@@ -290,11 +291,6 @@ def test_malformed_nga_launch_row_retains_last_good_geometry_and_confirmation(tm
     raw = (fx.NOTICES / fx.NGA_2023).read_bytes()
     payload = json.loads(raw)
     assert len(payload["broadcast-warn"]) == 85
-    payload["broadcast-warn"] = [
-        row for row in payload["broadcast-warn"] if (row["msgNumber"], row["msgYear"])
-        not in {(1100, 2023), (329, 2023), (222, 2023)}
-    ]
-    assert len(payload["broadcast-warn"]) == 82
     raw = json.dumps(payload).encode()
     launch = next(row for row in payload["broadcast-warn"] if row["msgNumber"] == 1231)
     launch["issueDate"] = "yesterday"

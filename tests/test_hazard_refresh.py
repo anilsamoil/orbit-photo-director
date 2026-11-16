@@ -146,14 +146,12 @@ def test_no_source_is_asked_again_before_its_interval(tmp_path: Path):
 def test_nga_answer_is_kept_without_the_warnings_that_are_not_space_operations(tmp_path: Path):
     web = Web()
     payload = json.loads((fx.NOTICES / fx.NGA_2023).read_bytes())
-    payload["broadcast-warn"] = [
-        row for row in payload["broadcast-warn"] if (row["msgNumber"], row["msgYear"])
-        not in {(1100, 2023), (329, 2023), (222, 2023)}
-    ]
-    assert len(payload["broadcast-warn"]) == 82
+    assert len(payload["broadcast-warn"]) == 85
     web.pages[NGA_URL.format(area="4")] = json.dumps(payload).encode()
     sources = _refresh(tmp_path, web)
-    assert _ids(sources, "nga:4") == ["NAVAREA IV 1130/23", "NAVAREA IV 1231/23"]
+    assert _ids(sources, "nga:4") == [
+        "NAVAREA IV 1130/23", "NAVAREA IV 1231/23", "NAVAREA IV 329/23",
+    ]
     assert sources["nga:4"]["error"] is None and sources["nga:12"]["error"] == "HTTP_503"
     assert sources["nga:4"]["notices"][0]["source_url"].endswith("navArea=4&status=active&output=json")
 

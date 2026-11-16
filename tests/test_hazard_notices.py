@@ -153,9 +153,13 @@ def test_in_force_bulletin_holds_the_vandenberg_amendment_and_unrelated_operatio
 def test_dateline_and_bounded_through_abbreviation_are_valid_but_undrawn():
     by_id = {notice.notice_id: notice for notice in fx.broadcast_notices("navarea-xii-in-force-2026-11-13.txt")}
     crossing = by_id["NAVAREA XII 788/26"]
-    assert crossing.areas == () and crossing.problems == ("GEOMETRY_UNDRAWN:ANTIMERIDIAN:1",)
+    assert len(crossing.areas) == 1 and not crossing.areas[0].drawable
+    assert len(crossing.areas[0].windows) == 7
+    assert crossing.problems == ("GEOMETRY_UNDRAWN:ANTIMERIDIAN:1",)
     typo = by_id["NAVAREA XII 787/26"]
-    assert typo.areas == () and typo.problems == ("GEOMETRY_UNDRAWN:ANTIMERIDIAN:1",)
+    assert len(typo.areas) == 1 and not typo.areas[0].drawable
+    assert len(typo.areas[0].windows) == 7
+    assert typo.problems == ("GEOMETRY_UNDRAWN:ANTIMERIDIAN:1",)
     month_long = by_id["NAVAREA XII 752/26"]
     assert month_long.problems == ("WINDOW_UNPARSED:010800Z NOV TO 010800Z DEC",)
     assert month_long.areas[0].windows == ()
@@ -225,7 +229,7 @@ def test_archived_nga_answer_holds_the_falcon_9_cape_canaveral_warning():
     url = "https://msi.nga.mil/api/publications/broadcast-warn"
     confirmed = parse_nga_payload(raw, url)
     assert {notice.notice_id for notice in confirmed if notice.kind != "other"} == {
-        "NAVAREA IV 1231/23", "NAVAREA IV 1130/23",
+        "NAVAREA IV 1231/23", "NAVAREA IV 1130/23", "NAVAREA IV 329/23",
     }
     notices = [
         parse_broadcast_warning(

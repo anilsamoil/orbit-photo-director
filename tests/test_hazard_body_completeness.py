@@ -834,10 +834,6 @@ def test_supported_archived_nga_geographic_preambles_still_confirm(tmp_path):
         for row in rows if not re.search(r"(?m)^\s*\d{1,2}\. ", row["text"])
     }
     assert len(rows) == 85 and len(unnumbered) == 56
-    rows = [row for row in rows if (row["msgNumber"], row["msgYear"])
-            not in {(1100, 2023), (329, 2023), (222, 2023)}]
-    unnumbered -= {"NAVAREA IV 1100/23", "NAVAREA IV 222/23"}
-    raw = json.dumps({"broadcast-warn": rows}).encode()
     web.pages[NGA_URL.format(area="4")] = raw
     report = refresh_hazards(
         cache, output, NOW + timedelta(minutes=31), fetch=web, pause=lambda _: None,
@@ -847,9 +843,11 @@ def test_supported_archived_nga_geographic_preambles_still_confirm(tmp_path):
     assert report["ok"] and report["published"] and not report["degraded"]
     assert after["error"] is None and after["checked_at"] == "2026-11-14T00:11:00Z"
     parsed = parse_nga_payload(raw, NGA_URL.format(area="4"))
-    assert len(parsed) == 82 and len(unnumbered) == 54
+    assert len(parsed) == 85 and len(unnumbered) == 56
     assert {item.notice_id for item in parsed if item.notice_id in unnumbered and item.kind == "other"} == unnumbered
-    assert {item["notice_id"] for item in after["notices"]} == {"NAVAREA IV 1231/23", "NAVAREA IV 1130/23"}
+    assert {item["notice_id"] for item in after["notices"]} == {
+        "NAVAREA IV 1231/23", "NAVAREA IV 1130/23", "NAVAREA IV 329/23",
+    }
     assert len(uploads) == 2 and uploads[-1] == (output / ARTIFACT).read_bytes()
 
 
@@ -1269,18 +1267,37 @@ def test_component_uscg_known_regulated_boundary_values_do_not_become_launch_geo
 
 @pytest.mark.parametrize("area", ("4", "12", "A", "P"))
 @pytest.mark.parametrize("subject", (
-    "HAZARDOUS OPERATIONS IN PROGRESS",
     "MISSILE OPERATIONS IN PROGRESS",
-    "NAVIGATION PROHIBITED IN THESE AREAS",
-    "ANCHORING PROHIBITED UNTIL FURTHER NOTICE",
-    "SURVEY OPERATIONS IN PROGRESS. HAZARDOUS OPERATIONS IN PROGRESS",
-    "CABLE LAYING OPERATIONS IN PROGRESS. HAZARDOUS OPERATIONS IN PROGRESS",
+    "HAZARDOUS OPERATIONS, SCIENTIFIC MOORINGS IN PROGRESS",
+    "NAVIGATION PROHIBITED DUE TO MISSILE FIRING OPERATIONS",
+    "ANCHORING PROHIBITED DUE TO SCIENTIFIC MOORINGS",
+    "SURVEY OPERATIONS IN PROGRESS",
+    "CABLE LAYING OPERATIONS IN PROGRESS",
 ))
 def test_nga_nonlaunch_subject_does_not_require_strict_body_parsing(tmp_path, area, subject):
     published, row = _preamble_published(tmp_path, area, "navarea-xii-785-26.txt")
     row["text"] = row["text"].replace("HAZARDOUS OPERATIONS, ROCKET LAUNCHING", subject)
     published[0].pages[NGA_URL.format(area=area)] = json.dumps({"broadcast-warn": [row]}).encode()
     _publishes_source(published, f"nga:{area}", set())
+
+
+@pytest.mark.parametrize("area", ("4", "12", "A", "P"))
+@pytest.mark.parametrize("subject", (
+    "HAZARDOUS OPERATIONS IN PROGRESS",
+    "NAVIGATION PROHIBITED IN THESE AREAS",
+    "ANCHORING PROHIBITED UNTIL FURTHER NOTICE",
+    "SURVEY OPERATIONS IN PROGRESS. HAZARDOUS OPERATIONS IN PROGRESS",
+    "CABLE LAYING OPERATIONS IN PROGRESS. HAZARDOUS OPERATIONS IN PROGRESS",
+))
+def test_nga_generic_or_additional_unclassified_activity_retains_publication(
+    tmp_path, area, subject,
+):
+    published, row = _preamble_published(tmp_path, area, "navarea-xii-785-26.txt")
+    row["text"] = row["text"].replace("HAZARDOUS OPERATIONS, ROCKET LAUNCHING", subject)
+    published[0].pages[NGA_URL.format(area=area)] = json.dumps({"broadcast-warn": [row]}).encode()
+    _retains_publication(published, f"nga:{area}")
+    after = json.loads((published[1] / STATE_NAME).read_bytes())["sources"][f"nga:{area}"]
+    assert after["error"] == "NGA_ROW"
 
 
 @pytest.mark.parametrize("area", ("4", "12", "A", "P"))
@@ -1317,18 +1334,26 @@ def test_nga_nonspace_clause_does_not_own_an_unknown_tail(tmp_path, area, paragr
 
 
 @pytest.mark.parametrize("number", (1100, 329, 222))
-def test_nga_archived_nonlaunch_activity_allows_publication(tmp_path, number):
+def test_nga_damaged_archived_generic_hazard_or_prohibition_retains_publication(tmp_path, number):
     published, _ = _preamble_published(tmp_path, "4", "navarea-xii-785-26.txt")
     rows = json.loads((fx.NOTICES / fx.NGA_2023).read_bytes())["broadcast-warn"]
     row = next(row for row in rows if row["msgNumber"] == number and row["msgYear"] == 2023)
+    row["text"] = row["text"][:row["text"].index("BOUND BY") + 4]
     published[0].pages[NGA_URL.format(area="4")] = json.dumps({"broadcast-warn": [row]}).encode()
-    _publishes_source(published, "nga:4", set())
+    _retains_publication(published, "nga:4")
+    after = json.loads((published[1] / STATE_NAME).read_bytes())["sources"]["nga:4"]
+    assert after["error"] == "NGA_ROW"
 
 
-def test_nga_unfiltered_archived_source_allows_publication(tmp_path):
+def test_nga_archived_source_with_damaged_generic_activity_retains_publication(tmp_path):
     published, _ = _preamble_published(tmp_path, "4", "navarea-xii-785-26.txt")
-    published[0].pages[NGA_URL.format(area="4")] = (fx.NOTICES / fx.NGA_2023).read_bytes()
-    _publishes_source(published, "nga:4", {"NAVAREA IV 1231/23", "NAVAREA IV 1130/23"})
+    payload = json.loads((fx.NOTICES / fx.NGA_2023).read_bytes())
+    row = next(row for row in payload["broadcast-warn"] if row["msgNumber"] == 1100)
+    row["text"] = row["text"][:row["text"].index("BOUND BY") + 4]
+    published[0].pages[NGA_URL.format(area="4")] = json.dumps(payload).encode()
+    _retains_publication(published, "nga:4")
+    after = json.loads((published[1] / STATE_NAME).read_bytes())["sources"]["nga:4"]
+    assert after["error"] == "NGA_ROW"
 
 
 @pytest.mark.parametrize("number", (1215, 1212, 1178, 1118, 1198, 1142, 274, 1244, 1204))

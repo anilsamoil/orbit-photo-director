@@ -235,7 +235,8 @@ def test_a_rocket_launching_notice_with_no_area_at_the_pad_is_not_drawn():
     bundle, log = build_bundle([slipped], _seen(disposal), NOW)
     assert bundle["launches"] == []
     (reason,) = _decisions(log)["HYDROPAC 3246/26"]["reasons"]
-    assert reason.startswith(f"NOT_AT_PAD:{fx.VULCAN}:") and int(reason.rsplit(":", 1)[1][:-2]) > 5_000
+    assert reason.startswith(f"NOT_AT_PAD:{fx.VULCAN}:")
+    assert float(reason.rsplit(":", 1)[1][:-2]) > 5_000
 
 
 def test_slip_to_the_backup_day_keeps_launch_notices_and_refuses_the_return_notices():

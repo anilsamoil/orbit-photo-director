@@ -11,6 +11,7 @@ import math
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Final
 
 from .hazard_notices import Area, Notice, Position, Window
 from .launch_data import SCHEDULE_STATUS_ABBREVS, _parse_iso8601_z
@@ -33,6 +34,7 @@ MAX_LISTED_TEXT = 400
 LISTING_SPAN_MAX = timedelta(days=21)
 UNREAD_LEAD = timedelta(hours=24)
 MAX_BYTES = 256 * 1024
+STANDING_CLOSURE_NO_LAUNCH_WINDOW: Final = "STANDING_CLOSURE_NO_LAUNCH_WINDOW"
 _CLASSES = ("hazard", "high_risk", "restricted_airspace")
 _INSTANT = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 
@@ -93,9 +95,15 @@ def launches_from_catalog(items: list[dict], now: datetime) -> list[Launch]:
 def pad_distance_km(launch: Launch, ring: tuple[Position, ...]) -> float:
     """Distance from the pad to a polygon, zero inside it. Flat-earth around the pad."""
     east = 111.32 * math.cos(math.radians(launch.lat))
+    offsets = tuple((((lon - launch.lon + 540.0) % 360.0) - 180.0, lat) for lon, lat in ring)
+    if any(
+        abs(b[0] - a[0]) > 180
+        for a, b in zip(offsets, offsets[1:] + offsets[:1], strict=True)
+    ):
+        return math.inf
     points = [
-        ((((lon - launch.lon + 540.0) % 360.0) - 180.0) * east, (lat - launch.lat) * 110.57)
-        for lon, lat in ring
+        (lon * east, (lat - launch.lat) * 110.57)
+        for lon, lat in offsets
     ]
     inside = False
     nearest = math.inf
@@ -228,6 +236,8 @@ def match_notices(
             decision = "stale"
         elif "NUMBER_CONFLICT" in notice.problems:
             decision, reasons = "rejected", ["NUMBER_CONFLICT"]
+        elif notice.kind == "standing_closure":
+            decision, reasons = "unmatched", [STANDING_CLOSURE_NO_LAUNCH_WINDOW]
         elif notice.notice_id in pins:
             event_id = pins[notice.notice_id]
             decision = "matched" if event_id in known and notice.areas else "unmatched"
@@ -273,6 +283,17 @@ def match_notices(
                 if notice.kind == "regulated_area"
                 else _listings(sighting, "unread_time", unread)
             )
+            if notice.kind == "launch":
+                undrawn = [area.area_id for area in notice.areas if not area.drawable]
+                if undrawn:
+                    label, action = (
+                        ("Area", "is not drawn because its ring crosses")
+                        if len(undrawn) == 1
+                        else ("Areas", "are not drawn because their rings cross")
+                    )
+                    found.extend(_listings(sighting, "not_drawn", [
+                        f"{label} {', '.join(undrawn)} {action} the antimeridian.",
+                    ]))
             if found:
                 listed.setdefault(event_id, []).extend(found)
         else:
@@ -312,6 +333,8 @@ def _launch_entry(
     rows: list[_Row] = []
     for sighting in sightings:
         for area in sighting.notice.areas:
+            if not area.drawable:
+                continue
             windows = [window for window in area.windows if window.end > now][:MAX_WINDOWS]
             if windows:
                 rows.append(
@@ -408,7 +431,7 @@ def _launch_entry(
         "event_id": event_id,
         "notices": notices,
         "geojson": {"type": "FeatureCollection", "features": features},
-        "listed": listings[:MAX_LISTED],
+        "listed": listings,
     }
 
 
