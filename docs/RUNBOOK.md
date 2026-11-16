@@ -140,7 +140,17 @@ Source confirmation also requires complete area, schedule, and cancellation pars
 
 USCG advice parsing consumes each accepted clause separately, so contact text without a final period cannot hide a later avoidance instruction. An applicable instruction longer than 400 characters raises `USCG_ROW` during strict confirmation. Non-strict parsing keeps the complete instruction with an `INSTRUCTION_TOO_LONG:<area_id>` diagnostic.
 
+USCG recovery classification requires recognized recovery labels, ordered coordinate, initial-launch-reference, reentry-period and advice sections, and operation-subject checks on free-text fields. Mixed launch content raises `USCG_ROW`, including in diagnostic parsing. Recovery-only safety zones require compatible headings, activities, advice, and checked location and subject fields. Unknown zone bodies fail strict confirmation and retain `BODY_UNPARSED` in non-strict parsing.
+
+Vehicle noun and numbered flight or stage exceptions require a complete supported vehicle identifier. Imperative text around an identifier is never removed to establish recovery.
+
 FAA parsing examines every instruction paragraph and preserves operative paragraphs in source order. The typed `_FAA_INSTRUCTION_BOILERPLATE` allowlist excludes only complete unmanned-aircraft warning and airspace-status boilerplate paragraphs. Unsupported instruction content, an instruction longer than 400 characters, or more than four instructions including altitude raises `FAA_ROW` and retains last-good without upload.
+
+Every recognized operative FAA narrative clause must also appear in the structured instructions. Missing, boilerplate-only, or partial instruction data that omits a narrative restriction raises `FAA_ROW` and retains last-good without upload. Known spelling and distance-unit equivalents affect comparison only, while published instruction strings remain unchanged.
+
+FAA narrative location and coordination fields cannot contain launch operations, hazard or advice clauses, or coordinate blocks. Conflicting metadata raises `FAA_ROW` before recovery classification and retains last-good without upload.
+
+An NGA marine activity prefix cannot establish nonspace relevance when the body also contains a hazard-area label. Unsupported mixed content raises `NGA_ROW` and retains last-good without upload.
 
 Listing text is never clipped to fit the artifact. Text longer than 400 characters raises `HAZARD_LISTED` and retains the previous artifact and receipt without upload.
 

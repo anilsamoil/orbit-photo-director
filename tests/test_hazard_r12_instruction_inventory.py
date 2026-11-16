@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import timedelta
@@ -12,7 +13,7 @@ from xml.sax.saxutils import escape
 
 import pytest
 
-from generator.hazard_match import Sighting, build_bundle
+from generator.hazard_match import Sighting, build_bundle, validate_bundle
 from generator.hazard_notices import (
     Notice,
     NoticeError,
@@ -111,6 +112,18 @@ def _uscg_unknown(_: Path) -> None:
     payload = _uscg_payload(_with_advice("Mariners must leave this area at a different time."))
     with pytest.raises(NoticeError, match="^USCG_ROW$"):
         parse_uscg_space_operations(payload, USCG_URL)
+
+
+def _uscg_unknown_nonstrict(_: Path) -> None:
+    advice = "Mariners must leave this area at a different time."
+    payload = _uscg_payload(fx.uscg_description(58067) + "\n" + advice)
+    notice = next(
+        notice for notice in parse_uscg_space_operations(payload, USCG_URL, strict=False)
+        if notice.notice_id == "USCG LNM 58067"
+    )
+    assert notice.problems == ("ADVICE_UNPARSED",)
+    _assert_high(notice, (AVOID_LAUNCH_WINDOW, AVOID_THREE_HOURS, advice))
+    assert notice_from_record(notice_record(notice)) == notice
 
 
 def _uscg_length(_: Path) -> None:
@@ -291,8 +304,32 @@ def _faa_reject(_: Path, overflow: bool) -> None:
 def _faa_baseline(_: Path) -> None:
     notice = fx.faa_notice("faa-tfr-6-7129.xml")
     assert notice.areas[0].restriction_class == "restricted_airspace"
-    assert notice.areas[0].instructions[-1] == FAA_ORIGINAL
-    assert len(notice.areas[0].instructions) == 2
+    assert notice.areas[0].instructions == ("SFC-UNL.", FAA_ORIGINAL)
+
+
+def _faa_instruction_nodes(_: Path, case: str) -> None:
+    name = "faa-tfr-6-7129.xml"
+    body = (fx.NOTICES / name).read_text()
+    if case == "missing":
+        body = re.sub(r"<InstructionsGroup>.*?</InstructionsGroup>", "", body, flags=re.S)
+    elif case == "missing-node":
+        body = re.sub(r"<txtInstr>.*?</txtInstr>", "", body, flags=re.S)
+    elif case == "duplicate":
+        body = body.replace("</txtInstr>", "</txtInstr><txtInstr>" + FAA_ADDED + "</txtInstr>")
+    else:
+        body = re.sub(r"<txtInstr>.*?</txtInstr>", "<txtInstr/>", body, flags=re.S)
+    with pytest.raises(NoticeError, match="^FAA_ROW$"):
+        parse_faa_tfr(body.encode(), fx.manifest(name)["source_url"])
+
+
+def _faa_instruction_length(_: Path) -> None:
+    name = "faa-tfr-6-7129.xml"
+    body = (fx.NOTICES / name).read_text()
+    instruction = " ".join([FAA_ADDED] * 6)
+    assert len(instruction) > 400
+    body = body.replace("</txtInstr>", escape("\n\n" + instruction) + "</txtInstr>")
+    with pytest.raises(NoticeError, match="^FAA_ROW$"):
+        parse_faa_tfr(body.encode(), fx.manifest(name)["source_url"])
 
 
 def _cache_roundtrip(_: Path) -> None:
@@ -378,6 +415,18 @@ def _bundle_bound(_: Path, field: str) -> None:
         _entry(notice)
 
 
+def _bundle_alignment(_: Path, duplicate: bool) -> None:
+    bundle, _ = build_bundle([fx.item(fx.STARSHIP)], [Sighting(fx.uscg_notice(58067), NOW)], NOW)
+    entry = fx.launch(bundle, fx.STARSHIP)
+    if duplicate:
+        entry["notices"].append(entry["notices"][0].copy())
+        entry["geojson"]["features"].append(entry["geojson"]["features"][0].copy())
+    else:
+        entry["geojson"]["features"][0]["properties"]["restriction_class"] = "restricted_airspace"
+    with pytest.raises(ValueError, match="^HAZARD_DUPLICATE$" if duplicate else "^HAZARD_FEATURE$"):
+        validate_bundle(bundle)
+
+
 def _undrawn(_: Path) -> None:
     (notice,) = parse_nga_payload(_dateline_801(), NGA_URL.format(area="12"))
     restored = notice_from_record(notice_record(notice))
@@ -391,10 +440,19 @@ def _undrawn(_: Path) -> None:
 
 def _listing(_: Path, too_long: bool) -> None:
     notice = fx.uscg_notice(58225)
-    expected = notice.areas[0].instructions
-    assert expected
+    expected = (
+        "MARINERS ARE URGED TO AVOID WATERS WITHIN ROCKET FLIGHT TRAJECTORIES/HAZARD "
+        "AREAS DURING LAUNCH WINDOWS AS DETAILED ABOVE.",
+    )
+    subject = (
+        "Active RNA. Space Operations/Active RNA/Government Supported (RNA) 1. SPACE "
+        "LAUNCH OPERATIONS, WHICH MAY BE HAZARDOUS TO SURFACE VESSELS, WILL BE "
+        "CONDUCTED WITHIN PORTIONS OF THE FOLLOWING HAZARD AREAS FOR VULCAN KV-01:"
+    )
+    assert notice.areas[0].instructions == expected
+    assert notice.subject == subject
     assert notice_from_record(notice_record(notice)).areas[0].instructions == expected
-    subject = "A" * 401 + " VESSELS MUST AVOID THE AREA." if too_long else notice.subject
+    subject = "A" * 401 + " VESSELS MUST AVOID THE AREA." if too_long else subject
     notice = replace(notice, subject=subject)
     if too_long:
         with pytest.raises(ValueError, match="^HAZARD_LISTED$"):
@@ -406,6 +464,23 @@ def _listing(_: Path, too_long: bool) -> None:
         assert entry["listed"][0]["text"] == subject
         assert entry["listed"][0]["reason"] == "not_drawn"
         assert log[0]["decision"] == "listed"
+
+
+def _listing_validation(_: Path, case: str) -> None:
+    bundle, _ = build_bundle([fx.item(fx.VULCAN)], [Sighting(fx.uscg_notice(58225), NOW)], NOW)
+    entry = fx.launch(bundle, fx.VULCAN)
+    if case == "count":
+        entry["listed"] *= 9
+    elif case == "reason":
+        entry["listed"][0]["reason"] = "hazard"
+    elif case == "url":
+        entry["listed"][0]["source_url"] = "http://example.invalid/"
+    elif case == "sha":
+        entry["listed"][0]["source_sha256"] = "unverified"
+    else:
+        entry["listed"][0][case] = ""
+    with pytest.raises(ValueError, match="^HAZARD_LISTED$"):
+        validate_bundle(bundle)
 
 
 def _eligibility(_: Path) -> None:
@@ -450,6 +525,7 @@ CASES: tuple[tuple[str, Probe], ...] = (
     ("U5-uscg-strict-capacity", partial(_uscg_overflow, strict=True)),
     ("U6-uscg-nonstrict-capacity", partial(_uscg_overflow, strict=False)),
     ("U7-uscg-unknown-advice", _uscg_unknown),
+    ("U7-uscg-nonstrict-advice-retention", _uscg_unknown_nonstrict),
     ("U8-uscg-mixed-line-fails-closed", _uscg_length),
     ("U8-uscg-instruction-length", _uscg_supported_length),
     ("U9-uscg-unread-schedule-preview", _uscg_unread_schedule),
@@ -458,7 +534,12 @@ CASES: tuple[tuple[str, Probe], ...] = (
     ("F3-faa-trailing-paragraph", partial(_faa_paragraphs, before=False)),
     ("F4-faa-leading-paragraph", partial(_faa_paragraphs, before=True)),
     ("F5-faa-unsupported-instructions", partial(_faa_reject, overflow=False)),
+    ("F5-faa-missing-instruction-group", partial(_faa_instruction_nodes, case="missing")),
+    ("F5-faa-missing-instruction-node", partial(_faa_instruction_nodes, case="missing-node")),
+    ("F5-faa-duplicate-instruction-node", partial(_faa_instruction_nodes, case="duplicate")),
+    ("F5-faa-empty-instruction-node", partial(_faa_instruction_nodes, case="empty")),
     ("F6-faa-instruction-capacity", partial(_faa_reject, overflow=True)),
+    ("F6-faa-instruction-length", _faa_instruction_length),
     ("C1-C2-cache-roundtrip", _cache_roundtrip),
     ("C3-cache-confirmation", partial(_confirmed_cache, invalid=False)),
     ("C4-cache-invalid-warning-type", partial(_confirmed_cache, invalid=True)),
@@ -470,9 +551,18 @@ CASES: tuple[tuple[str, Probe], ...] = (
     ("B1-B2-bundle-capacity", partial(_bundle_bound, field="count")),
     ("B3-bundle-instruction-length", partial(_bundle_bound, field="length")),
     ("B4-bundle-class", partial(_bundle_bound, field="class")),
+    ("B4-bundle-duplicate", partial(_bundle_alignment, duplicate=True)),
+    ("B4-bundle-feature-class-alignment", partial(_bundle_alignment, duplicate=False)),
     ("L1-L2-undrawn-cache-and-diagnostic", _undrawn),
     ("L3-regulated-cache-and-disclosed-listing", partial(_listing, too_long=False)),
     ("L4-L5-listing-length", partial(_listing, too_long=True)),
+    ("L5-listing-count", partial(_listing_validation, case="count")),
+    ("L5-listing-reason", partial(_listing_validation, case="reason")),
+    ("L5-listing-source-url", partial(_listing_validation, case="url")),
+    ("L5-listing-source-sha", partial(_listing_validation, case="sha")),
+    ("L5-listing-authority", partial(_listing_validation, case="authority")),
+    ("L5-listing-notice-id", partial(_listing_validation, case="notice_id")),
+    ("L5-listing-empty-text", partial(_listing_validation, case="text")),
     ("L6-eligibility-decisions-keep-cached-warnings", _eligibility),
 )
 
