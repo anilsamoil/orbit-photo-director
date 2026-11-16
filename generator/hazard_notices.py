@@ -22,6 +22,7 @@ from xml.etree import ElementTree
 MAX_WINDOW = timedelta(hours=24)
 MAX_VERTICES = 512
 MAX_SOURCE_BYTES = 4_000_000
+MAX_INSTRUCTIONS = 4
 
 _MONTHS = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
 _MON = "(?:" + "|".join(_MONTHS) + ")"
@@ -1536,7 +1537,7 @@ def _uscg_areas(description: str, *, strict: bool) -> tuple[list[Area], list[str
         for unit in re.split(r"(?<=:)\n", "\n".join(advice))
         for sentence in re.split(r"(?<=\w\w\.)\s+", " ".join(unit.split()))
     ]
-    kept = [s for s in sentences if _USCG_ADVICE.search(s.upper()) and len(s) <= 400][:3]
+    kept = [s for s in sentences if _USCG_ADVICE.search(s.upper()) and len(s) <= 400]
     areas: list[Area] = []
     for draft in drafts:
         try:
@@ -1556,6 +1557,10 @@ def _uscg_areas(description: str, *, strict: bool) -> tuple[list[Area], list[str
         notes = tuple(
             s for s in kept if draft.high or "HIGH RISK" not in s.upper().replace("-", " ")
         )
+        if len(notes) > MAX_INSTRUCTIONS:
+            if strict:
+                raise NoticeError("USCG_ROW")
+            problems.append(f"INSTRUCTIONS_OVERFLOW:{draft.area_id}")
         areas.append(
             Area(
                 draft.area_id,

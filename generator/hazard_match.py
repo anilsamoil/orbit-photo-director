@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Final
 
-from .hazard_notices import Area, Notice, Position, Window
+from .hazard_notices import MAX_INSTRUCTIONS, Area, Notice, Position, Window
 from .launch_data import SCHEDULE_STATUS_ABBREVS, _parse_iso8601_z
 from .launch_evidence import canonical_bytes, utc
 
@@ -28,7 +28,6 @@ RING_TOLERANCE_DEG = 0.001
 MAX_LAUNCHES = 32
 MAX_NOTICES = 16
 MAX_WINDOWS = 16
-MAX_INSTRUCTIONS = 4
 MAX_LISTED = 8
 MAX_LISTED_TEXT = 400
 LISTING_SPAN_MAX = timedelta(days=21)
@@ -379,12 +378,16 @@ def _launch_entry(
             twin = next(
                 (other for other in primary if same_ring(other.area.ring, row.area.ring)), None
             )
-        if twin is None:
+        if twin is None or twin.cross_check is not None and (
+            twin.restriction_class != row.restriction_class
+            or twin.instructions != row.instructions
+        ):
             final.append(row)
             continue
-        twin.cross_check = row.sighting
-        twin.instructions = row.instructions
-        twin.restriction_class = row.restriction_class
+        if twin.cross_check is None:
+            twin.cross_check = row.sighting
+            twin.instructions = row.instructions
+            twin.restriction_class = row.restriction_class
         agree = "" if twin.windows == row.windows else ":WINDOWS_DIFFER"
         _note(log, notice.notice_id, f"CROSS_CHECK_OF:{twin.sighting.notice.notice_id}{agree}")
     if not final and not listings:
@@ -405,7 +408,7 @@ def _launch_entry(
             "windows": [{"start": utc(w.start), "end": utc(w.end)} for w in row.windows],
             "checked_at": utc(row.sighting.checked_at),
             "valid_until": utc(notice.valid_until or row.windows[-1].end),
-            "instructions": list(row.instructions[:MAX_INSTRUCTIONS]),
+            "instructions": list(row.instructions),
             "also": sorted(row.also),
             "source_url": notice.source_url,
             "source_sha256": notice.source_sha256,
