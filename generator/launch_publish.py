@@ -485,9 +485,16 @@ def _write_bytes_atomic(path: Path, data: bytes) -> None:
 
 
 def _rclone_stderr(raw: bytes | str | None) -> str:
-    if isinstance(raw, str):
-        return raw.strip()
-    return (raw or b"").decode("utf-8", "replace").strip()
+    detail = (
+        raw.strip() if isinstance(raw, str) else (raw or b"").decode("utf-8", "replace").strip()
+    )
+    safe = {
+        "": "",
+        "auth failed": "auth failed",
+        "disk full": "disk full",
+        "i/o timeout": "i/o timeout",
+    }
+    return safe.get(detail, "diagnostic withheld")
 
 
 def _rclone(command: list[str], timeout: int) -> subprocess.CompletedProcess[bytes]:
@@ -499,7 +506,9 @@ def _rclone(command: list[str], timeout: int) -> subprocess.CompletedProcess[byt
             timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
-        raise ValueError(f"RCLONE_TIMEOUT: {_rclone_stderr(exc.stderr)}") from exc
+        raise ValueError(f"RCLONE_TIMEOUT: {_rclone_stderr(exc.stderr)}") from None
+    except (OSError, subprocess.SubprocessError):
+        raise ValueError("RCLONE_EXECUTION_FAILED") from None
     code = getattr(result, "returncode", 0)
     if not isinstance(code, int):
         code = 0

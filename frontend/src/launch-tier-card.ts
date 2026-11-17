@@ -1,5 +1,14 @@
 import { launchCatalog } from './launch-catalog';
-import { hazardNotesFor, subscribeHazardNotes, type HazardNote } from './launch-hazards';
+import {
+  HAZARD_LABEL,
+  hazardFactText,
+  hazardListingsFor,
+  hazardListingText,
+  hazardNotesFor,
+  subscribeHazardNotes,
+  type HazardListing,
+  type HazardNote,
+} from './launch-hazards';
 import { shotPlan, type EnvelopeFacts, type ShotPlan } from './launch-shot-plan';
 import { tierScheduleFacts, tierWindowText, tierWord, type TierLaunch } from './launch-tiers';
 
@@ -109,14 +118,36 @@ export function renderTierCard(launch: TierLaunch, onShowMap?: (eventId: string)
 
 function hazardNoteBlock(eventId: string): HTMLElement | null {
   const notes = hazardNotesFor(eventId);
-  if (!notes.length) return null;
+  const listings = hazardListingsFor(eventId);
+  if (!notes.length && !listings.length) return null;
   const block = document.createElement('div');
   block.dataset.hazardNote = '1';
-  const summary = document.createElement('p');
-  summary.textContent = 'Published hazard areas \u2014 not a flight path or navigation guidance.';
-  block.append(summary);
-  for (const note of notes) block.append(hazardFact(note));
+  if (notes.length) {
+    const summary = document.createElement('p');
+    summary.textContent = `${HAZARD_LABEL}.`;
+    block.append(summary);
+    for (const note of notes) block.append(hazardFact(note));
+  }
+  if (listings.length) {
+    const lead = document.createElement('p');
+    lead.textContent = 'Published for this launch and not drawn on the map:';
+    block.append(lead);
+    for (const listing of listings) block.append(hazardListingLine(listing));
+  }
   return block;
+}
+
+function hazardListingLine(listing: HazardListing): HTMLParagraphElement {
+  const line = document.createElement('p');
+  line.dataset.hazardListed = listing.reason;
+  line.textContent = `${hazardListingText(listing)} `;
+  const link = document.createElement('a');
+  link.href = listing.sourceUrl;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.textContent = listing.sourceUrl;
+  line.append(link);
+  return line;
 }
 
 function hazardFact(note: HazardNote): HTMLParagraphElement {
@@ -126,7 +157,7 @@ function hazardFact(note: HazardNote): HTMLParagraphElement {
   const when = Number.isFinite(start) && Number.isFinite(end)
     ? tierWindowText(start, end)
     : `${note.windowStart} to ${note.windowEnd}`;
-  line.textContent = `${note.noticeId} area ${note.areaId}, ${note.domain} ${note.restriction}. ${when} Checked ${note.checkedAt}. ${note.qualification} `;
+  line.textContent = `${hazardFactText(note, when)} `;
   const link = document.createElement('a');
   link.href = note.sourceUrl;
   link.target = '_blank';
@@ -180,11 +211,11 @@ export function openTierDetails(launch: TierLaunch): void {
     why.textContent = current.why;
     const track = document.createElement('p');
     track.dataset.tierTrack = '1';
-    const note = current.corridor ? null : hazardNoteBlock(current.eventId);
+    const note = hazardNoteBlock(current.eventId);
     track.textContent = current.corridor
       ? current.corridor.points.map((point) => `${point.lat.toFixed(2)}, ${point.lon.toFixed(2)}`).join(' → ')
-      : note
-        ? 'Published hazard areas \u2014 not a flight path or navigation guidance.'
+      : hazardNotesFor(current.eventId).length
+        ? `${HAZARD_LABEL}.`
         : current.ascent?.grade === 'D' ? 'UNVERIFIED assumed site sector. See the launch direction above.' : current.ascent ? 'Modeled ascent estimate. See the launch direction above.' : 'Pad only';
     content.append(why, planBlock(shotPlan(current), true), track);
     if (note) content.append(note);

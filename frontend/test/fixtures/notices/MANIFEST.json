@@ -1,0 +1,202 @@
+{
+  "schema_version": 1,
+  "files": [
+    {
+      "file": "faa-tfr-6-7111.xml",
+      "sha256": "6e3498c8d47982607fedcdacdd9d488164304548aa3fbb4731b109cbbb8f4ba0",
+      "bytes": 63938,
+      "authority": "FAA",
+      "source_url": "https://tfr.faa.gov/download/detail_6_7111.xml",
+      "retrieved_from": "https://tfr.faa.gov/download/detail_6_7111.xml",
+      "retrieved_at": "2026-11-13T23:23:35Z",
+      "extraction": "Response body, byte for byte.",
+      "note": "ULA Vulcan KV-01, Miami Center"
+    },
+    {
+      "file": "faa-tfr-6-7112.xml",
+      "sha256": "fc5be7f92a267f4f2a3bf8a10ae01b0b9442b4ad50bf8ab97bc36988f36cc232",
+      "bytes": 63945,
+      "authority": "FAA",
+      "source_url": "https://tfr.faa.gov/download/detail_6_7112.xml",
+      "retrieved_from": "https://tfr.faa.gov/download/detail_6_7112.xml",
+      "retrieved_at": "2026-11-13T23:23:36Z",
+      "extraction": "Response body, byte for byte.",
+      "note": "ULA Vulcan KV-01, Jacksonville Center, same area and times as 6/7111"
+    },
+    {
+      "file": "faa-tfr-6-7129.xml",
+      "sha256": "4e6afeafe02df5dbe396b5d37fe7a814e6658c167cc3d511190be82a2dc495d0",
+      "bytes": 34964,
+      "authority": "FAA",
+      "source_url": "https://tfr.faa.gov/download/detail_6_7129.xml",
+      "retrieved_from": "https://tfr.faa.gov/download/detail_6_7129.xml",
+      "retrieved_at": "2026-11-13T10:02:00Z",
+      "extraction": "Response body, byte for byte. Downloaded again on 2026-11-13T23:23Z with the same sha256.",
+      "note": "SpaceX Launch Starship 15, 13 Nov."
+    },
+    {
+      "file": "faa-tfr-6-7130.xml",
+      "sha256": "50063d8cca0d75a7021a75eb9125e72698653986eeca3321243438132ee62c29",
+      "bytes": 34964,
+      "authority": "FAA",
+      "source_url": "https://tfr.faa.gov/download/detail_6_7130.xml",
+      "retrieved_from": "https://tfr.faa.gov/download/detail_6_7130.xml",
+      "retrieved_at": "2026-11-13T23:23:32Z",
+      "extraction": "Response body, byte for byte.",
+      "note": "SpaceX Launch Starship 15, 14 Nov backup day"
+    },
+    {
+      "file": "faa-tfr-6-7131.xml",
+      "sha256": "76348303d76c5a9fb721314ec716c6598ff5a8a3baefe8094da220ffc8da9a38",
+      "bytes": 34966,
+      "authority": "FAA",
+      "source_url": "https://tfr.faa.gov/download/detail_6_7131.xml",
+      "retrieved_from": "https://tfr.faa.gov/download/detail_6_7131.xml",
+      "retrieved_at": "2026-11-13T23:23:33Z",
+      "extraction": "Response body, byte for byte.",
+      "note": "SpaceX Recovery Starship 15, not a launch notice"
+    },
+    {
+      "file": "faa-tfr-list-2026-11-13.json",
+      "sha256": "520622b36c4f722d4bedce3400f39b97629bb6bcf860c026f3d526f76c6b964e",
+      "bytes": 13408,
+      "authority": "FAA",
+      "source_url": "https://tfr.faa.gov/tfrapi/exportTfrList",
+      "retrieved_from": "https://tfr.faa.gov/tfrapi/exportTfrList",
+      "retrieved_at": "2026-11-13T23:23:23Z",
+      "extraction": "Response body, byte for byte."
+    },
+    {
+      "file": "hydropac-3245-26.txt",
+      "sha256": "b98a1f9f9b5c011b5b083d22599d7a951d42ab9bc91548b4562ca2ab26477fed",
+      "bytes": 347,
+      "authority": "NGA",
+      "source_url": "https://space-notices.com/notice/nav-warning-HYDROPAC%203245%2F26",
+      "retrieved_from": "https://space-notices.com/notice/nav-warning-HYDROPAC%203245%2F26",
+      "retrieved_at": "2026-11-13T23:28:36Z",
+      "extraction": "Text of each <span> inside the notice <pre> on the page, joined with a line feed, plus one final line feed.",
+      "note": "SPACE DEBRIS, South Pacific. Aggregator copy; NGA's own service was down."
+    },
+    {
+      "file": "hydropac-3246-26.txt",
+      "sha256": "e7cef47308b0123549ddfd7d7ae30dff3a065852c7fa9b50bd89d9961c0ee7ed",
+      "bytes": 421,
+      "authority": "NGA",
+      "source_url": "https://space-notices.com/notice/nav-warning-HYDROPAC%203246%2F26",
+      "retrieved_from": "https://space-notices.com/notice/nav-warning-HYDROPAC%203246%2F26",
+      "retrieved_at": "2026-11-13T23:27:34Z",
+      "extraction": "Text of each <span> inside the notice <pre> on the page, joined with a line feed, plus one final line feed.",
+      "note": "ROCKET LAUNCHING in the eastern Indian Ocean, no area near any pad. Aggregator copy; NGA's own service was down."
+    },
+    {
+      "file": "hydropac-3308-26.txt",
+      "sha256": "9dae704aadb694524822e4fe041360ff6c365b6731becdeb4b4dc93c068d5ec1",
+      "bytes": 516,
+      "authority": "NGA",
+      "source_url": "https://space-notices.com/notice/nav-warning-HYDROPAC%203308%2F26",
+      "retrieved_from": "https://space-notices.com/notice/nav-warning-HYDROPAC%203308%2F26",
+      "retrieved_at": "2026-11-13T23:28:38Z",
+      "extraction": "Text of each <span> inside the notice <pre> on the page, joined with a line feed, plus one final line feed.",
+      "note": "SPACE DEBRIS amendment that cancels HYDROPAC 3245/26. Aggregator copy; NGA's own service was down."
+    },
+    {
+      "file": "navarea-iv-1078-26.txt",
+      "sha256": "66b1b405633b8a36facc18717d86ce3662f59f53e2edf0152af0eeed2ce27687",
+      "bytes": 891,
+      "authority": "NGA",
+      "source_url": "https://space-notices.com/notice/nav-warning-NAVAREA%20IV%201078%2F26",
+      "retrieved_from": "https://space-notices.com/notice/nav-warning-NAVAREA%20IV%201078%2F26",
+      "retrieved_at": "2026-11-13T23:27:30Z",
+      "extraction": "Text of each <span> inside the notice <pre> on the page, joined with a line feed, plus one final line feed.",
+      "note": "ULA Vulcan, Cape Canaveral, first issue. Aggregator copy; NGA's own service was down."
+    },
+    {
+      "file": "navarea-iv-1080-26.txt",
+      "sha256": "6d1e3acdd8be8ac684a2bf8cad886e389b382faf1d3ddfab2acc54369ed4772b",
+      "bytes": 1277,
+      "authority": "NGA",
+      "source_url": "https://space-notices.com/notice/nav-warning-NAVAREA%20IV%201080%2F26",
+      "retrieved_from": "https://www.sealagom.com/navarea/4/message/25625/1080-26-caribbean-sea/",
+      "retrieved_at": "2026-11-13T10:02:00Z",
+      "extraction": "From PR #363. Line-leading and line-trailing spaces were removed there, so this file matches neither page byte for byte. Tokens and line order are unchanged.",
+      "note": "Starship Flight 15 launch."
+    },
+    {
+      "file": "navarea-iv-1081-26.txt",
+      "sha256": "65f7e2f0e69aa4dc2de18adb08b47ea2b7997617c3df9fbad60f4598b7e73cf7",
+      "bytes": 584,
+      "authority": "NGA",
+      "source_url": "https://space-notices.com/notice/nav-warning-NAVAREA%20IV%201081%2F26",
+      "retrieved_from": "https://space-notices.com/notice/nav-warning-NAVAREA%20IV%201081%2F26",
+      "retrieved_at": "2026-11-13T23:27:36Z",
+      "extraction": "Text of each <span> inside the notice <pre> on the page, joined with a line feed, plus one final line feed.",
+      "note": "Starship Flight 15 return, SPACE DEBRIS, next to the Starbase pad. Aggregator copy; NGA's own service was down."
+    },
+    {
+      "file": "navarea-iv-1099-26.txt",
+      "sha256": "7bfa936bab5af0d4d0e37435e7c8104e83fef7d11d2a7f5d260b7db838a3b635",
+      "bytes": 860,
+      "authority": "NGA",
+      "source_url": "https://space-notices.com/notice/nav-warning-NAVAREA%20IV%201099%2F26",
+      "retrieved_from": "https://space-notices.com/notice/nav-warning-NAVAREA%20IV%201099%2F26",
+      "retrieved_at": "2026-11-13T23:27:32Z",
+      "extraction": "Text of each <span> inside the notice <pre> on the page, joined with a line feed, plus one final line feed.",
+      "note": "ULA Vulcan, Cape Canaveral, amendment that cancels 1078/26; two malformed time groups are in the published text. Aggregator copy; NGA's own service was down."
+    },
+    {
+      "file": "navarea-xii-785-26.txt",
+      "sha256": "f3fa0bce7a526ac2c14bd18074ee92463f1125d0400bada28ae9d73b60815f0c",
+      "bytes": 1441,
+      "authority": "NGA",
+      "source_url": "https://space-notices.com/notice/nav-warning-NAVAREA%20XII%20785%2F26",
+      "retrieved_from": "https://space-notices.com/notice/nav-warning-NAVAREA%20XII%20785%2F26",
+      "retrieved_at": "2026-11-13T23:28:35Z",
+      "extraction": "Text of each <span> inside the notice <pre> on the page, joined with a line feed, plus one final line feed.",
+      "note": "Falcon 9 USSF-317, Vandenberg, first issue, one schedule per area. Aggregator copy; NGA's own service was down."
+    },
+    {
+      "file": "navarea-xii-in-force-2026-11-13.txt",
+      "sha256": "321c22624b9105c1ed9bafbeb5d9e7ef27d255744928dd01de9e35be256006c2",
+      "bytes": 14183,
+      "authority": "NGA",
+      "source_url": "https://www.sealagom.com/navarea/12/",
+      "retrieved_from": "https://www.sealagom.com/navarea/12/",
+      "retrieved_at": "2026-11-13T23:33:41Z",
+      "extraction": "Text of the page's one message-content block with tags removed and HTML entities decoded.",
+      "note": "Mirror copy of every NAVAREA XII warning in force. Two e-mail addresses were replaced by the mirror's own '[email protected]' text. Holds 801/26 (cancels 785/26), 794/26, 789/26 MISSILE OPERATIONS, 795/26, 802/26 and 761/26 (NGA web services unreliable)."
+    },
+    {
+      "file": "nga-navarea-iv-active-2023-10-31.json",
+      "sha256": "23aa0fe944c14901d7b0d1bed963d417ba847f676feae6bbe3e276a0bea44da2",
+      "bytes": 45115,
+      "authority": "NGA",
+      "source_url": "https://msi.nga.mil/api/publications/broadcast-warn?navArea=4&status=active&output=html",
+      "retrieved_from": "https://web.archive.org/web/20231031220545id_/https://msi.nga.mil/api/publications/broadcast-warn?navArea=4&status=active&output=html",
+      "retrieved_at": "2026-11-13T23:33:04Z",
+      "extraction": "Wayback Machine capture of 2023-10-31T22:05:45Z, raw body, gzip removed. The body is JSON although the query said output=html.",
+      "note": "NGA's own service answered 503 for every request on 2026-11-13. This archived answer is the only NGA-served JSON in the fixtures. It holds NAVAREA IV 1231/23 for Falcon 9 Starlink Group 6-25 from Cape Canaveral."
+    },
+    {
+      "file": "uscg-lnm-45-2026-starship-flight15.txt",
+      "sha256": "a90555164add45ee0de1ec00d3ff0b990883de13feb463e6569282a18d628025",
+      "bytes": 2093,
+      "authority": "USCG",
+      "source_url": "https://www.sealagom.com/coastal/174/message/54261/",
+      "retrieved_from": "https://www.sealagom.com/coastal/174/message/54261/",
+      "retrieved_at": "2026-11-13T10:02:00Z",
+      "extraction": "From PR #363. The mirror rewrites the Coast Guard's D-M-S coordinates as D-M.mm; the Coast Guard's own text is record 58067 in uscg-space-ops-2026-11-13.geojson.",
+      "note": "Starship Flight 15 launch."
+    },
+    {
+      "file": "uscg-space-ops-2026-11-13.geojson",
+      "sha256": "524b13514f21f1e9406284e02e247d4133814323922bca216830529caba29aa3",
+      "bytes": 69051,
+      "authority": "USCG",
+      "source_url": "https://navcen.uscg.gov/sites/default/files/msi/spaceOpsPoly_1.geojson",
+      "retrieved_from": "https://navcen.uscg.gov/sites/default/files/msi/spaceOpsPoly_1.geojson",
+      "retrieved_at": "2026-11-13T23:29:34Z",
+      "extraction": "Response body, byte for byte.",
+      "note": "Last-Modified Thu, 12 Nov 2026 21:15:01 GMT. 23 space-operations records, all districts."
+    }
+  ]
+}

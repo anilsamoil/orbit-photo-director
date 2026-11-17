@@ -121,6 +121,10 @@ describe('launch-corridor', () => {
     expect(button('other').getAttribute('aria-pressed')).toBe('false');
     expect(corridor.clearLaunchOnMap('other')).toBe(false);
     mode.setMapLaunchMode(true);
+    expect(button('other').getAttribute('aria-pressed')).toBe('false');
+    expect(lines()).toEqual([]);
+    expect(document.getElementById('launch-ascent-caption')?.hidden).toBe(true);
+    button('other').click();
     expect(button('other').getAttribute('aria-pressed')).toBe('true');
     read.mockReturnValue({ ...tiers, mapPins: [] });
     corridor.refreshAscentTrajectorySource();

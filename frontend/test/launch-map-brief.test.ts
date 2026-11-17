@@ -1,15 +1,49 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderMapLaunchBrief } from '../src/launch-map-brief';
 import { launchCatalog } from '../src/launch-catalog';
+import { publishHazardNotes } from '../src/launch-hazards';
 import { tiersAt } from '../src/launch-tiers';
 import { _setFollowEnvForTest, applyFollowISS, focusLaunchOnMap } from '../src/map';
 import { launchStore } from '../src/launch-store';
 import { getMapLaunchMode, setMapLaunchMode } from '../src/map-launch-mode';
 import { assessment, catalog, iso, launch, NOW, plannerItem, state, supported } from './launch-fixtures';
 
-afterEach(() => { vi.restoreAllMocks(); localStorage.removeItem('opd-map-launch-brief-open'); _setFollowEnvForTest(null, false); document.body.replaceChildren(); });
+afterEach(() => { vi.restoreAllMocks(); localStorage.removeItem('opd-map-launch-brief-open'); _setFollowEnvForTest(null, false); document.body.replaceChildren(); publishHazardNotes([]); });
 
 describe('map launch brief', () => {
+  it('keeps the modeled ascent toggle through an undrawn hazard notice refresh', () => {
+    const tiers = tiersAt(catalog([plannerItem()]), NOW);
+    vi.spyOn(launchCatalog, 'read').mockReturnValue(tiers);
+    vi.spyOn(Date, 'now').mockReturnValue(NOW);
+    const box = document.createElement('div');
+    document.body.append(box);
+    let selected: string | null = null;
+    const isShown = (eventId: string): boolean => selected === eventId;
+    const show = (eventId: string): void => {
+      selected = selected === eventId ? null : eventId;
+      renderMapLaunchBrief(box, state(), NOW, show, isShown);
+    };
+    renderMapLaunchBrief(box, state(), NOW, show, isShown);
+    box.querySelector<HTMLDetailsElement>('.map-launch-primary')!.open = true;
+    box.querySelector<HTMLButtonElement>('.launch-brief-actions button')!.click();
+    expect(selected).toBe('vulcan');
+    publishHazardNotes([], [{
+      eventId: 'vulcan', noticeId: 'N-1', reason: 'not_drawn', text: 'No published polygon.',
+      sourceUrl: 'https://example.test/notice', checkedAt: '2026-09-07T12:00:00Z',
+    }]);
+    const current = box.querySelector<HTMLDetailsElement>('.map-launch-primary')!;
+    expect(current.open).toBe(false);
+    expect(current.querySelector('[data-hazard-listed="not_drawn"]')?.textContent).toContain('N-1 is not drawn. No published polygon.');
+    expect(current.querySelector('[data-hazard-listed] a')?.getAttribute('href')).toBe('https://example.test/notice');
+    expect(current.textContent).toContain('Modeled, grade B.');
+    const hide = current.querySelector<HTMLButtonElement>('.launch-brief-actions button')!;
+    expect(hide.textContent).toBe('Hide modeled ascent');
+    expect(hide.getAttribute('aria-pressed')).toBe('true');
+    hide.click();
+    expect(selected).toBeNull();
+    expect(box.querySelector('.launch-brief-actions button')?.textContent).toBe('Show site and modeled ascent');
+    expect(box.querySelector('.launch-brief-actions button')?.getAttribute('aria-pressed')).toBe('false');
+  });
   it('closes Other launches and keeps its connected summary focused through refresh', () => {
     const tiers = tiersAt(catalog([plannerItem(), plannerItem({ event_id: 'z-other' })]), NOW);
     vi.spyOn(launchCatalog, 'read').mockReturnValue(tiers);

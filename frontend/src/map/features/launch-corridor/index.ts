@@ -3,10 +3,11 @@ import { openLaunchDetails, renderLegacyLaunchCard } from '../../../launch-card'
 import { launchCatalog, subscribeLaunchSlots } from '../../../launch-catalog';
 import {
   activeHazardFeatures,
+  activeHazardListings,
+  hazardFactText,
   HAZARD_LABEL,
   loadPublishedHazards,
   publishHazardNotes,
-  STARSHIP_FLIGHT15_EVENT_ID,
   type HazardBundle,
   type HazardLoad,
   type HazardNote,
@@ -113,8 +114,10 @@ function notesOf(features: readonly GeoJSON.Feature[]): HazardNote[] {
   for (const feature of features) {
     const props = feature.properties;
     if (!props) continue;
+    const eventId = props.event_id;
     const noticeId = props.notice_id;
     const areaId = props.area_id;
+    const also = props.also;
     const domain = props.domain;
     const restriction = props.restriction_class;
     const windowStart = props.window_start;
@@ -122,11 +125,11 @@ function notesOf(features: readonly GeoJSON.Feature[]): HazardNote[] {
     const sourceUrl = props.source_url;
     const checkedAt = props.checked_at;
     const qualification = props.qualification;
-    if (typeof noticeId !== 'string' || typeof areaId !== 'string') continue;
-    if (typeof domain !== 'string' || typeof restriction !== 'string') continue;
+    if (typeof eventId !== 'string' || typeof noticeId !== 'string' || typeof areaId !== 'string') continue;
+    if (typeof also !== 'string' || typeof domain !== 'string' || typeof restriction !== 'string') continue;
     if (typeof windowStart !== 'string' || typeof windowEnd !== 'string') continue;
     if (typeof sourceUrl !== 'string' || typeof checkedAt !== 'string' || typeof qualification !== 'string') continue;
-    notes.push({ noticeId, areaId, domain, restriction, windowStart, windowEnd, sourceUrl, checkedAt, qualification });
+    notes.push({ eventId, noticeId, areaId, also, domain, restriction, windowStart, windowEnd, sourceUrl, checkedAt, qualification });
   }
   return notes;
 }
@@ -195,7 +198,13 @@ function hazardSignature(features: readonly GeoJSON.Feature[]): string {
     return [
       String(feature.id ?? ''),
       coords,
+      String(props?.event_id ?? ''),
+      String(props?.launch_name ?? ''),
+      String(props?.notice_id ?? ''),
+      String(props?.area_id ?? ''),
+      String(props?.domain ?? ''),
       String(props?.restriction_class ?? ''),
+      String(props?.also ?? ''),
       String(props?.checked_at ?? ''),
       String(props?.qualification ?? ''),
       String(props?.source_url ?? ''),
@@ -205,19 +214,32 @@ function hazardSignature(features: readonly GeoJSON.Feature[]): string {
   }).join('|');
 }
 
-function eligibleAttempt(now: number): { startMs: number; endMs: number } | null {
-  const pin = launchCatalog.read(now)?.mapPins.find((launch) => launch.eventId === STARSHIP_FLIGHT15_EVENT_ID);
-  if (!pin) return null;
-  if (state.selectedEventId !== null && state.selectedEventId !== STARSHIP_FLIGHT15_EVENT_ID) return null;
-  return launchCatalog.attempt(STARSHIP_FLIGHT15_EVENT_ID, now);
+/** Every current map pin, or only the selected one while a selected launch is still a pin. */
+function eligiblePins(now: number): readonly TierLaunch[] {
+  const pins = launchCatalog.read(now)?.mapPins ?? [];
+  const selected = pins.filter((launch) => launch.eventId === state.selectedEventId);
+  return selected.length ? selected : pins;
+}
+
+function hazardFeaturesOf(eventId: string): GeoJSON.Feature[] {
+  return state.hazardFeatures.filter((feature) => feature.properties?.event_id === eventId);
 }
 
 function paintHazards(core: MapCore, now: number): void {
-  const attempt = state.hazardBundle ? eligibleAttempt(now) : null;
-  const features = state.hazardBundle ? activeHazardFeatures(state.hazardBundle, now, attempt) : [];
+  const bundle = state.hazardBundle;
+  const pins = bundle ? eligiblePins(now) : [];
+  const features = bundle
+    ? pins.flatMap((pin) => (
+      activeHazardFeatures(bundle, pin.eventId, now, launchCatalog.attempt(pin.eventId, now))
+        .map((feature) => ({ ...feature, properties: { ...feature.properties, launch_name: pin.name } }))
+    ))
+    : [];
+  const listings = bundle
+    ? pins.flatMap((pin) => activeHazardListings(bundle, pin.eventId, now, launchCatalog.attempt(pin.eventId, now)))
+    : [];
   const signature = hazardSignature(features);
   state.hazardFeatures = features;
-  publishHazardNotes(notesOf(features));
+  publishHazardNotes(notesOf(features), listings);
   if (signature !== state.hazardSignature || !core.hasSource('launch-hazards')) {
     state.hazardSignature = signature;
     core.setGeoJson('launch-hazards', { type: 'FeatureCollection', features });
@@ -228,9 +250,9 @@ function paintHazards(core: MapCore, now: number): void {
 
 function settlePendingFocus(core: MapCore): void {
   const pending = state.pendingFocusId;
-  if (!pending || pending !== STARSHIP_FLIGHT15_EVENT_ID) return;
-  if (!state.hazardFeatures.length || !getMapLaunchMode()) return;
-  if (state.selectedEventId !== pending || !getMapLaunchMode()) {
+  if (!pending) return;
+  if (!hazardFeaturesOf(pending).length || !getMapLaunchMode()) return;
+  if (state.selectedEventId !== pending) {
     state.pendingFocusId = null;
     return;
   }
@@ -240,7 +262,6 @@ function settlePendingFocus(core: MapCore): void {
     state.pendingFocusId = null;
     return;
   }
-  if (!state.hazardFeatures.length) return;
   state.pendingFocusId = null;
   fitLaunch(core, tierFocusPoints(pin), true);
 }
@@ -331,7 +352,10 @@ function applyLaunchVisibility(): void {
 export function syncMapLaunchMode(): void {
   if (!state.modeUnsub) {
     state.modeUnsub = subscribeMapLaunchMode((enabled) => {
-      if (!enabled) state.pendingFocusId = null;
+      if (!enabled) {
+        state.pendingFocusId = null;
+        state.selectedEventId = null;
+      }
       const core = state.core;
       core?.closePopup(enabled ? 'target' : 'launch');
       if (!core) return;
@@ -424,16 +448,33 @@ function watchCamera(core: MapCore): void {
 function hazardPopup(features: { properties: Record<string, unknown> | null }[]): HTMLElement {
   const content = document.createElement('div');
   const title = document.createElement('p');
-  title.textContent = 'Published hazard areas \u2014 not a flight path or navigation guidance';
+  title.textContent = HAZARD_LABEL;
   content.append(title);
+  const named = new Set<string>();
   for (const feature of features) {
     const props = feature.properties;
     if (!props) continue;
+    const launchName = typeof props.launch_name === 'string' ? props.launch_name : '';
+    if (launchName && !named.has(launchName)) {
+      named.add(launchName);
+      const launch = document.createElement('p');
+      launch.dataset.hazardLaunch = '1';
+      launch.textContent = launchName;
+      content.append(launch);
+    }
     const start = Date.parse(String(props.window_start ?? ''));
     const end = Date.parse(String(props.window_end ?? ''));
     const when = Number.isFinite(start) && Number.isFinite(end) ? tierWindowText(start, end) : '';
     const fact = document.createElement('p');
-    fact.textContent = `${String(props.notice_id)} area ${String(props.area_id)}, ${String(props.domain)} ${String(props.restriction_class)}. ${when} Checked ${String(props.checked_at ?? '')}. ${String(props.qualification ?? '')}`;
+    fact.textContent = hazardFactText({
+      noticeId: String(props.notice_id),
+      areaId: String(props.area_id),
+      also: String(props.also ?? ''),
+      domain: String(props.domain),
+      restriction: String(props.restriction_class),
+      checkedAt: String(props.checked_at ?? ''),
+      qualification: String(props.qualification ?? ''),
+    }, when);
     const link = document.createElement('a');
     link.href = String(props.source_url ?? '');
     link.rel = 'noopener noreferrer';
@@ -444,26 +485,26 @@ function hazardPopup(features: { properties: Record<string, unknown> | null }[])
   return content;
 }
 
-function hazardNoticeKey(noticeId: unknown, areaId: unknown): string | null {
-  if (typeof noticeId !== 'string' || typeof areaId !== 'string') return null;
-  if (noticeId.length === 0 || areaId.length === 0) return null;
-  return `${noticeId}\u0000${areaId}`;
+function hazardNoticeKey(eventId: unknown, noticeId: unknown, areaId: unknown): string | null {
+  if (typeof eventId !== 'string' || typeof noticeId !== 'string' || typeof areaId !== 'string') return null;
+  if (eventId.length === 0 || noticeId.length === 0 || areaId.length === 0) return null;
+  return `${eventId}\u0000${noticeId}\u0000${areaId}`;
 }
 
 function hazardPopupKeys(features: { properties: Record<string, unknown> | null }[]): string[] {
   return features.flatMap((feature) => {
-    const key = hazardNoticeKey(feature.properties?.notice_id, feature.properties?.area_id);
+    const key = hazardNoticeKey(feature.properties?.event_id, feature.properties?.notice_id, feature.properties?.area_id);
     return key ? [key] : [];
   });
 }
 
-/** Keep an already-open hazard popup on the notice and area just painted. */
+/** Keep an already-open hazard popup on the launch, notice and area just painted. */
 function refreshHazardPopup(features: readonly GeoJSON.Feature[]): void {
   const content = state.hazardPopupContent;
   const keys = state.hazardPopupKeys;
   if (!content || keys.length === 0) return;
   const shown = keys.flatMap((key) => {
-    const match = features.find((feature) => hazardNoticeKey(feature.properties?.notice_id, feature.properties?.area_id) === key);
+    const match = features.find((feature) => hazardNoticeKey(feature.properties?.event_id, feature.properties?.notice_id, feature.properties?.area_id) === key);
     return match ? [match] : [];
   });
   if (shown.length !== keys.length) {
@@ -559,8 +600,10 @@ function frameKey(bearing: number, padding: FitPadding): string {
 }
 
 function frameHazards(core: MapCore): void {
-  if (!state.hazardArmed || state.userMoved || !state.hazardFeatures.length || !getMapLaunchMode()) return;
-  const pin = launchCatalog.read(core.clock.now())?.mapPins.find((launch) => launch.eventId === STARSHIP_FLIGHT15_EVENT_ID);
+  const selected = state.selectedEventId;
+  if (!state.hazardArmed || state.userMoved || selected === null || !getMapLaunchMode()) return;
+  if (!hazardFeaturesOf(selected).length) return;
+  const pin = launchCatalog.read(core.clock.now())?.mapPins.find((launch) => launch.eventId === selected);
   if (!pin) return;
   const bearing = core.bearing();
   const padding = hazardFitPadding();
@@ -629,17 +672,15 @@ function fitLaunch(core: MapCore, points: [number, number][], hazard: boolean): 
 
 function tierFocusPoints(pin: TierLaunch): [number, number][] {
   const points: [number, number][] = [[pin.site.lon, pin.site.lat]];
-  if (pin.eventId === STARSHIP_FLIGHT15_EVENT_ID) {
-    for (const feature of state.hazardFeatures) {
-      if (feature.geometry.type !== 'Polygon') continue;
-      const ring = feature.geometry.coordinates[0];
-      if (!ring) continue;
-      for (const position of ring) {
-        const lon = position[0];
-        const lat = position[1];
-        if (typeof lon !== 'number' || typeof lat !== 'number') continue;
-        points.push([lon, lat]);
-      }
+  for (const feature of hazardFeaturesOf(pin.eventId)) {
+    if (feature.geometry.type !== 'Polygon') continue;
+    const ring = feature.geometry.coordinates[0];
+    if (!ring) continue;
+    for (const position of ring) {
+      const lon = position[0];
+      const lat = position[1];
+      if (typeof lon !== 'number' || typeof lat !== 'number') continue;
+      points.push([lon, lat]);
     }
   }
   const tracks = [
@@ -667,13 +708,11 @@ export function focusLaunchOnMap(eventId: string): boolean {
     if (!pin) return false;
     core.closePopup('launch');
     state.selectedEventId = eventId;
-    const waiting = eventId === STARSHIP_FLIGHT15_EVENT_ID
-      && state.hazardFeatures.length === 0
+    const waiting = hazardFeaturesOf(eventId).length === 0
       && (state.hazardPending || state.hazardBundle === null);
     state.pendingFocusId = waiting ? eventId : null;
     syncLaunchHazards(now);
-    const hazard = eventId === STARSHIP_FLIGHT15_EVENT_ID && state.hazardFeatures.length > 0;
-    fitLaunch(core, tierFocusPoints(pin), hazard);
+    fitLaunch(core, tierFocusPoints(pin), hazardFeaturesOf(eventId).length > 0);
     if (core.hasSource('ascent-pad')) refreshAscentTrajectorySource();
     return true;
   }

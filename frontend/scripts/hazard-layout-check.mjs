@@ -3,10 +3,36 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { chromium, webkit } from 'playwright';
 
 const ORIGIN = process.env.HAZARD_ORIGIN ?? 'http://127.0.0.1:5199';
-const OUT = '/opt/cursor/artifacts';
-const CATALOG_PATH = new URL('../test/fixtures/starship-catalog-2026-11-10.json', import.meta.url);
+const OUT = process.env.HAZARD_OUT ?? '/opt/cursor/artifacts';
+const FIXTURES = new URL('../test/fixtures/', import.meta.url);
+const HAZARDS = readFileSync(new URL('hazards-v2-2026-11-13.json', FIXTURES), 'utf8');
 const LABEL = 'Published hazard areas \u2014 not a flight path or navigation guidance';
-const INSIDE = Date.parse('2026-11-13T22:50:00Z');
+const SCENARIOS = [
+  {
+    name: 'starship',
+    catalog: 'starship-catalog-2026-11-10.json',
+    now: Date.parse('2026-11-13T22:50:00Z'),
+    pad: [-97.15799, 25.99677],
+    areas: ['A', 'B', '6/7129'],
+    card: [
+      'NAVAREA IV 1080/26', 'area A', 'maritime', 'UTC', 'Checked 2026-11-13T10:02:00Z',
+      'three hours prior to the earliest launch', 'SFC-UNL', 'INTERNATIONAL WATERS',
+      'USCG LNM 58296 is not drawn. Safety Zone.',
+    ],
+  },
+  {
+    name: 'vulcan',
+    catalog: 'launch-catalog-2026-11-13.json',
+    now: Date.parse('2026-11-14T17:40:00Z'),
+    pad: [-80.58303644, 28.58341025],
+    areas: ['A', 'B', 'C', '6/7111'],
+    card: [
+      'NAVAREA IV 1099/26', 'area C', 'maritime', 'UTC', 'Checked 2026-11-13T23:27:32Z',
+      'TFR 6/7111 (also TFR 6/7112)', 'SFC-FL180', '12 MILE COASTAL LIMIT',
+      'NAVAREA IV 1099/26 publishes a time the map could not read: "1616550Z TO 161828"',
+    ],
+  },
+];
 const CONTROLS = [
   '#map-launch-coverage',
   '.map-toolbar',
@@ -21,12 +47,15 @@ const SIZES = [
   [1024, 768],
   [1180, 820],
   [834, 1210],
+  [820, 1180],
+  [768, 1024],
   [874, 402],
   [402, 874],
+  [1440, 900],
 ];
 
-function catalogFor(nowMs) {
-  const catalog = JSON.parse(readFileSync(CATALOG_PATH, 'utf8'));
+function catalogFor(name, nowMs) {
+  const catalog = JSON.parse(readFileSync(new URL(name, FIXTURES), 'utf8'));
   catalog.generated_at = new Date(nowMs - 60_000).toISOString();
   catalog.geometry_valid_until = new Date(nowMs + 10 * 60_000).toISOString();
   catalog.schedule_valid_until = new Date(nowMs + 60 * 60_000).toISOString();
@@ -76,8 +105,9 @@ function trackFor(nowMs) {
   };
 }
 
-async function prepare(page, nowMs) {
-  const { text, pointer } = catalogFor(nowMs);
+async function prepare(page, scenario) {
+  const nowMs = scenario.now;
+  const { text, pointer } = catalogFor(scenario.catalog, nowMs);
   await page.addInitScript((frozen) => {
     Date.now = () => frozen;
     localStorage.setItem('opd-map-chrome', 'shown');
@@ -103,6 +133,7 @@ async function prepare(page, nowMs) {
     contentType: 'application/json',
     body: '{"error":"not_found"}',
   }));
+  await page.route('**/hazards/v2/launches.json', (route) => json(route, HAZARDS));
 }
 
 async function openLaunches(page) {
@@ -153,7 +184,7 @@ function captionProbe() {
   };
 }
 
-function polygonProbe() {
+function polygonProbe(padPosition) {
   const controls = ['#map-launch-coverage', '.map-toolbar', '.map-control-dock', '.map-controls-time', '#map-legend-toggle', '#map-legend-panel', '#map-chrome-toggle', '.maplibregl-ctrl-group'];
   const map = window.__opdMap;
   const source = map.getSource('launch-hazards');
@@ -187,7 +218,7 @@ function polygonProbe() {
     ));
     areas[feature.properties.area_id] = clear.length;
   }
-  const pad = map.project([-97.15799, 25.99677]);
+  const pad = map.project(padPosition);
   const card = document.getElementById('map-launch-coverage');
   const cardBox = card && !card.hidden ? card.getBoundingClientRect() : null;
   const padInside = !!(cardBox && cardBox.width > 1 && pad.x > cardBox.left && pad.x < cardBox.right && pad.y > cardBox.top && pad.y < cardBox.bottom);
@@ -205,8 +236,8 @@ function cardProbe() {
   };
 }
 
-function assertHazardAreas(engine, size, areas) {
-  for (const id of ['A', 'B', '6/7129']) {
+function assertHazardAreas(engine, size, areas, expected) {
+  for (const id of expected) {
     const count = areas?.[id];
     if (!Number.isFinite(count) || count < 1) {
       throw new Error(`${engine} ${size}: area ${id} count is ${String(count)}`);
@@ -223,43 +254,62 @@ const engines = [
 for (const [name, browserType] of engines) {
   const browser = await browserType.launch();
   try {
-    for (const [width, height] of SIZES) {
+    for (const scenario of SCENARIOS) for (const [width, height] of SIZES) {
       const context = await browser.newContext({ viewport: { width, height } });
       const page = await context.newPage();
       const errors = [];
       page.on('pageerror', (error) => errors.push(String(error)));
-      await prepare(page, INSIDE);
+      await prepare(page, scenario);
       await openLaunches(page);
       const follow = page.locator('#toggle-follow-iss');
       if ((await follow.getAttribute('class'))?.includes('active')) await follow.click();
+      await page.evaluate((pad) => {
+        const card = document.getElementById('map-launch-coverage')?.getBoundingClientRect();
+        const shift = [0, 0];
+        if (card && card.width > 1 && card.width <= window.innerWidth * 0.6) shift[0] = -card.right / 2;
+        else if (card && card.width > 1 && card.bottom <= window.innerHeight * 0.6) shift[1] = -card.bottom / 2;
+        window.__opdMap.jumpTo({ center: pad, zoom: 3.2 });
+        window.__opdMap.panBy(shift, { duration: 0 });
+      }, scenario.pad);
+      await page.waitForTimeout(1500);
+      const unselected = await page.evaluate(captionProbe);
+      const painted = await page.evaluate(() => {
+        const source = window.__opdMap.getSource('launch-hazards');
+        const data = source && (source._data.geojson || source._data);
+        return (data?.features ?? []).map((feature) => feature.properties.area_id).sort();
+      });
+      const noneFile = `${name}_${scenario.name}_${width}x${height}_none.png`;
+      await page.screenshot({ path: `${OUT}/${noneFile}`, fullPage: false });
       await page.evaluate(() => {
         const details = document.querySelector('#map-launch-coverage .map-launch-primary');
         if (details) details.open = true;
         window.__opdMap.setBearing(143.26);
       });
-      const show = page.locator('#map-launch-coverage .launch-brief-actions .btn');
+      const show = page.locator('#map-launch-coverage .launch-brief-actions .btn').first();
       if (await show.count()) await show.click();
       await page.waitForTimeout(2200);
       const caption = await page.evaluate(captionProbe);
-      const polygons = await page.evaluate(polygonProbe);
+      const polygons = await page.evaluate(polygonProbe, scenario.pad);
       const card = await page.evaluate(cardProbe);
-      const shot = (width === 874 && height === 402) || (width === 1024 && height === 768) || (width === 1180 && height === 820);
-      const file = shot ? `${name}_hazard_${width}x${height}.png` : null;
-      if (file) await page.screenshot({ path: `${OUT}/${file}`, fullPage: false });
-      report.push({ engine: name, size: `${width}x${height}`, caption, polygons, card, errors, file });
+      const file = `${name}_${scenario.name}_${width}x${height}_selected.png`;
+      await page.screenshot({ path: `${OUT}/${file}`, fullPage: false });
+      report.push({
+        engine: name, scenario: scenario.name, size: `${width}x${height}`,
+        unselected, painted, caption, polygons, card, errors, file, noneFile,
+      });
       await context.close();
     }
     const context = await browser.newContext({ viewport: { width: 1024, height: 768 } });
     const page = await context.newPage();
     let hazardStatus = 200;
     let hazardFetches = 0;
-    await prepare(page, INSIDE);
-    await page.route('**/hazards/v1/**', (route) => {
+    await prepare(page, SCENARIOS[0]);
+    await page.route('**/hazards/v2/launches.json', (route) => {
       hazardFetches += 1;
       if (hazardStatus === 404) {
         return route.fulfill({ status: 404, contentType: 'application/json', body: '{"error":"missing"}' });
       }
-      return route.continue();
+      return route.fulfill({ status: 200, contentType: 'application/json', body: HAZARDS });
     });
     await openLaunches(page);
     const before = hazardFetches;
@@ -314,8 +364,9 @@ for (const [name, browserType] of engines) {
 
 for (const row of report) {
   if (row.size === 'catalog-refresh-after-404') continue;
+  const scenario = SCENARIOS.find((entry) => entry.name === row.scenario);
   try {
-    assertHazardAreas(row.engine, row.size, row.polygons?.areas);
+    assertHazardAreas(row.engine, row.size, row.polygons?.areas, scenario.areas);
   } catch (error) {
     row.areaError = error instanceof Error ? error.stack : String(error);
   }
@@ -326,14 +377,17 @@ const failed = report.filter((row) => {
   if (errors.length) return true;
   if (row.size === 'catalog-refresh-after-404') return row.clearedFetches <= row.before || row.restoredFetches <= row.clearedFetches;
   const caption = row.caption;
+  const scenario = SCENARIOS.find((entry) => entry.name === row.scenario);
+  const before = row.unselected;
+  if (before.text !== LABEL || before.hidden || before.hits.length > 0 || before.outside.length > 0) return true;
+  if (row.painted.join() !== [...scenario.areas].sort().join()) return true;
+  const areas = row.polygons.areas ?? {};
   const card = row.card.text ?? '';
   return caption.text !== LABEL || caption.hidden || caption.rangeText !== LABEL
     || caption.hits.length > 0 || caption.outside.length > 0 || !caption.legend
+    || Object.keys(areas).length !== scenario.areas.length
     || row.areaError || row.polygons.padInside
-    || !card.includes('NAVAREA IV 1080/26') || !card.includes('area A') || !card.includes('maritime')
-    || !card.includes('UTC') || !/CST|CDT/.test(card) || !card.includes('Checked 2026-11-13T10:02:00Z')
-    || !card.includes('three hours prior to the earliest launch') || !card.includes('SFC-UNL')
-    || !card.includes('international waters')
+    || scenario.card.some((needle) => !card.includes(needle)) || !/CST|CDT/.test(card)
     || !row.card.hrefs.some((href) => href.startsWith('https://'));
 });
 writeFileSync(`${OUT}/hazard-layout-report.json`, JSON.stringify({ failed: failed.length, report }, null, 2));
