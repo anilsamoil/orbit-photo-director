@@ -133,11 +133,13 @@ The web side keeps polling `/manifest.json` every 60 seconds. On the `ios` host 
 | Policy | Meaning | Layers in release 1 |
 | --- | --- | --- |
 | `baseline` | In the baseline pack. Deeper zooms go to the tile store. | Blue Marble, Black Marble 2016, Natural Earth lines and labels |
-| `durable` | Kept on disk after fetch, inside a size budget | GIBS daily true colour (latest two days), SNAP forecast cloud frames |
+| `durable` | Kept on disk after fetch, inside the tile-store cap | GIBS daily true colour (latest two days), SNAP forecast cloud frames |
 | `session` | Kept briefly | Geostationary IR, RealEarth Meteosat |
 | `website` | Fetched and kept exactly as the website's service worker does today: the world view at zoom 0 to 3 once a session, kept 30 days; dark grey at zoom 6, 8 and 10 near the top three targets after each new plan; viewed tiles up to 100 for 7 days. Never bundled. | Esri imagery, Esri dark grey, Esri reference labels |
 
 The gateway answers in this order: baseline pack, tile store, network. A miss with no network returns nothing and the map overzooms the baseline. The baseline sits under the online layers in the map style, so a missing Esri tile shows Earth, not black.
+
+The tile store has a 512 MiB cap (536,870,912 bytes), measured as the sum of downloaded tile payload bytes across all layers. The bundled baseline pack, installed plans and outbox are outside this cap. Before storing a tile, remove expired tiles, then evict least-recently-used tiles until the new tile fits. Do not store a tile larger than the cap. Layer retention rules are upper limits within this cap. A fill-and-evict test checks the byte total, eviction order and preservation of the baseline, plans and outbox.
 
 Prefetch matches the website exactly: the world view of the switchable layers once a session, and one tile per zoom at 6, 8 and 10 near the top three targets after each new plan. `frontend/src/tile-precache.ts` builds those URLs through `host.tileUrl`, so in the app they go to the gateway and are stored; the app has no service worker to store them otherwise.
 
@@ -149,13 +151,21 @@ Prefetch matches the website exactly: the world view of the switchable layers on
 | --- | --- | --- |
 | PlanStore | Stores installed plans under Application Support. Keeps the current plan, the previous one and one more. | Stop the process between any two steps of an install: `current` still resolves to a complete plan whose every artifact matches its SHA-256. |
 | SyncEngine | Checks the manifest, downloads to a staging folder, verifies, checks the plan has every field this build requires, installs, backs off on failure. Runs on foreground, on connectivity, on a timer and in background refresh. | A failed or partial download never changes `current`. A newer readable version always wins; an older one never replaces a newer one; an unreadable one is not installed and the app says an update is needed. |
-| Outbox | One file per unsent write, named by its dedupe key. | An entry is deleted only after the server answers `{ok:true}`. A lost response followed by a retry, in the same month or any later month, produces one server record. Nothing is dropped to make room. |
-| TileGateway | The lookup order and the size budget. | The baseline is never evicted. Local bytes are returned without touching the network. |
+| Outbox | One file per unsent write, named by its dedupe key. | An entry is deleted only after the server answers `{ok:true}`, which requires a completed or verified monthly log write. Interrupted writes and concurrent retries across month boundaries produce one canonical monthly record. Nothing is dropped to make room. |
+| TileGateway | The lookup order and the 512 MiB tile-store cap. | The baseline is never evicted. Local bytes are returned without touching the network. A fill test proves the cap and least-recently-used eviction. |
 | AlertPlanner | Chooses which alerts to schedule from the alert plan. | Never more than the system limit. The coverage end it reports equals the last scheduled alert. |
 | CredentialStore | Protocol here; Keychain behind it in `OPDHost`. | The token never appears in a log, a diagnostics export or JavaScript. |
 | Diagnostics | A capped event log and a snapshot. | The export contains no token and no personal target coordinates. |
 
 `OPDHost` is the thin iOS layer: the bridge, the background refresh task, the notification centre, the Keychain, the sign-in sheet and the web view delegate.
+
+### Log acknowledgment and recovery
+
+The Worker conditionally creates an immutable, month-independent record keyed by account namespace and dedupe key. It keeps the canonical payload, including the first receipt time, and the original monthly destination. Preserve the existing key format, `log/<arrival yyyymm>/<namespace><sanitized dedupe key>.json`, including the profile namespace used by existing readers. A competing request reads the winning record and uses its payload and destination.
+
+Every request, including every retry, completes or verifies the monthly write from that record before returning `{ok:true}`. Create the monthly object conditionally. If it already exists, verify that it matches the canonical payload. A marker alone is not success. A failed or ambiguous write returns a retryable failure and leaves the outbox entry pending. R2 conditional writes are atomic per object, not across the two objects. See [R2 conditional operations](https://developers.cloudflare.com/r2/api/s3/conditional-operations/).
+
+Tests interrupt the request between the month-independent and monthly writes, after the monthly write but before acknowledgment, and during concurrent retries across adjacent and non-adjacent months. Each case leaves one canonical record at the original monthly destination, readable by existing monthly-prefix readers. No retry returns success while that record is missing.
 
 ## The queue between syncs
 
@@ -185,7 +195,7 @@ The problem has three parts. Google refuses to sign in inside an embedded web vi
 
 ```
 App                 system sign-in sheet        Cloudflare Access       Worker
- │ enroll ───────────► GET /api/device/enroll ──► Google or PIN ───────► verify the Access identity and the allowlist
+ │ enroll ───────────► GET /api/device/enroll ──► Google ─────────────► verify the Access identity
  │                     ?challenge=...                                    create a one-time code (5 minutes),
  │                                                                       bound to the profile and the challenge
  │ ◄────────────────── redirect snap-enroll://done?code=... ◄────────────┘
@@ -196,13 +206,14 @@ App                 system sign-in sheet        Cloudflare Access       Worker
  │ GET /d/manifest.json   Authorization: Bearer ... ───────────────────► check the hash, not revoked, act as that profile
 ```
 
-- `/api/device/enroll` stays behind Access. A person who chooses Google signs in once, in the system sheet, with Google or the one-time PIN.
-- `/d/*` gets an Access bypass application, as `/api/profiles` has today. The Worker is the only gate on that path, so it fails closed: no token, an unknown token or a revoked token is a 401 with no body detail.
+- `/api/device/enroll` stays behind a separate Access application that admits anyone with a Google account, with no approval step. Google sign-in runs in the system sheet. The Worker verifies this enrollment application's audience and signed identity, without the website email allowlist. Existing website and owner routes keep their access rules.
+- `/d/*` gets an Access bypass application, as `/api/profiles` has today. The Worker's email allowlist, including the check in `calibration-auth.ts`, must not apply to `/d/*` or the Google enrollment callback. The bootstrap routes `/d/enroll` and `/d/enroll/apple` verify their enrollment proof. Other `/d/*` routes require a device token and fail closed: no token, an unknown token or a revoked token is a 401 with no body detail.
 - A device token carries the account that enrolled it. The Worker resolves that account to the same profile and granted profiles as it does for the website (`worker/src/browser-identity.ts`), and `/d/*` acts inside them and no further.
 - A token does not expire. It is revoked per device, by the owner, through a route behind Access.
 - Every `/d/*` request carries the app's build number, and the owner's device list shows each device's last build. W-63 uses it to know which builds are still in use.
 - Bearer-token requests carry no cookie, so the same-origin write rule that guards the website does not apply to `/d/*`. The design note for work package W-20 states that reasoning for the security review.
 - Reading the installed plan never needs a valid token. A rejected token shows a clear state and keeps every stored byte.
+- An enrollment test uses new Apple and Google accounts absent from the website allowlist. Each enrolls without approval, gets only its own profile, and still cannot reach website or owner-only routes without their existing authorization.
 
 ### Sign in with Apple
 
@@ -219,11 +230,19 @@ App                                   Worker
 
 The account key is the Apple user identifier, not the email: an Apple ID can hide its email behind a relay address. Sign-up is open: any Apple ID or Google account gets a profile at once. The Worker's email allowlist does not apply to `/d/*`; abuse control is the daily rate limit, per-account quotas on targets and log entries, and revocation from the owner's device list.
 
+An identity token proves identity but cannot revoke Apple's authorization. At account deletion, the native Apple sheet obtains a fresh authorization code, reauthenticating if needed. The app sends the code and identity token to `/d/account/delete` through native networking. The Worker verifies that the Apple subject matches the account being deleted and exchanges the code at `POST https://appleid.apple.com/auth/token` with `grant_type=authorization_code`. It verifies the returned identity and durably stores the revocable refresh or access token encrypted for the deletion job. An expired or already-used code needs a fresh authorization, not a retry of the same code.
+
+The owner configures a server-only Sign in with Apple private key with the capability enabled, its key ID, the Apple Developer Team ID and the app's client ID (bundle ID). The Worker uses these to sign a short-lived ES256 client-secret JWT. This is separate from the App Store Connect release key. No credential value goes in the repository, app bundle or logs. See Apple's [private-key setup](https://developer.apple.com/help/account/capabilities/create-a-sign-in-with-apple-private-key), [token validation](https://developer.apple.com/documentation/signinwithapplerestapi/generate-and-validate-tokens) and [account deletion guidance](https://developer.apple.com/documentation/technotes/tn3194-handling-account-deletions-and-revoking-tokens-for-sign-in-with-apple).
+
 ### Profiles, sign-out and deletion
 
 - Each account has its own profile, resolved by the Worker as for the website. A new account starts with an empty personal target list on top of the curated baseline.
 - One account per device at a time. Sign out keeps that account's unsent outbox entries, stamped with the account, and uploads them when it signs in again. It deletes the device token.
-- "Delete account" asks once, then calls `/d/account/delete`: the Worker removes the profile's targets, its device tokens and its account record, keeps the shot log only if the owner's retention rule says so, and the app returns to the baseline.
+- "Delete account" asks once, then calls `/d/account/delete` with the signed-in device token. For an Apple account it uses the fresh authorization flow above. Reject wrong-account Apple proof before accepting deletion. If that account has a revocable Apple token, persist a resumable deletion job with the encrypted provider token before invalidating device access. The Worker blocks account use, removes the profile's targets and device tokens, and applies the owner's log-retention rule to both monthly records and canonical dedupe payloads. For Google accounts, remove the account record directly. The app clears that account's local outbox, Keychain and stored personal data and returns to the baseline.
+- For an Apple account, the job calls `POST https://appleid.apple.com/auth/revoke` with form fields `client_id`, the signed `client_secret`, `token`, and the matching `token_type_hint`. A `200` response, including for an already-revoked token, completes revocation. The job then removes the retained provider token and account record. See Apple's [token revocation endpoint](https://developer.apple.com/documentation/signinwithapplerestapi/revoke-tokens).
+- A timeout, lost reply or transient Apple failure keeps the deletion job pending. Worker-owned retries resume that job with backoff using the retained provider token, even after a Worker interruption or app closure. Credential-configuration failures remain visible for repair. Pending revocation returns `202` and the app reports it as pending, never complete. A client replay with a revoked device token gets the normal `401`; it cannot create another deletion job or imply completion. Full completion requires both Apple revocation and SNAP cleanup.
+- If the signed-in person confirms deletion but cannot obtain a revocable token or fresh code, SNAP still deletes the account record, account data and device credentials. The app states that Apple revocation is incomplete and directs the person to revoke SNAP in their Apple account settings, as TN3194 requires. Apple credential-revocation notifications clear any remaining local credential and return the app to the baseline.
+- Deletion tests cover a matching fresh code, wrong-account proof, an expired or consumed code requiring reauthentication, Apple token-exchange and revocation failures, a lost revocation reply, interruption and repeated deletion, and the no-token manual-revocation path. They verify that account access is blocked, no false completion is reported, retries finish once, and deleted credentials and personal data are removed.
 - The owner's device list shows each account, its devices and their last build, and can revoke any of them.
 
 ### Before sign-in

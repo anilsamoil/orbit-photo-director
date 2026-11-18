@@ -25,7 +25,13 @@ In App Store Connect:
 2. Add yourself to an internal TestFlight group.
 3. Under Users and Access, Integrations, App Store Connect API, create a key with the App Manager role. Download the key file. Apple shows it once.
 
-Then on GitHub, in the repository's Settings, Environments: create an environment named `ios-release`, set yourself as its required reviewer, and add the key's three values as secrets of that environment. Name the three secrets `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID` and `APP_STORE_CONNECT_PRIVATE_KEY` (the whole text of the downloaded `.p8` file). W-03 and W-70 read these names.
+Then on GitHub, in the repository's Settings, Environments: create an environment named `ios-release` and set yourself as its required reviewer. Add these three secrets. W-03 and W-70 read these names:
+
+| Secret | Format, without a value |
+| --- | --- |
+| `APP_STORE_CONNECT_KEY_ID` | The key ID string |
+| `APP_STORE_CONNECT_ISSUER_ID` | The issuer ID UUID |
+| `APP_STORE_CONNECT_PRIVATE_KEY` | The full contents of the downloaded `.p8` file, including its header, footer and line breaks |
 
 **Why:** the release job signs and uploads with this key. Keeping it in a protected environment means no build can be signed without your approval.
 **Send back:** the bundle identifier and the name. Never the key.
@@ -42,7 +48,7 @@ Name one person on Earth with an iPhone or iPad who can spend ten minutes on a c
 
 Once the app is in the App Store, ask NASA to approve SNAP and install it on the iPad and the iPhone in orbit. The agents prepare an approval packet with W-71: what the app does, every server it contacts, what it stores, the one permission it asks for (notifications), and that it has no tracking and no third-party analytics.
 
-Apple fixes an app's distribution method at the first submission, so the plan commits to the unlisted App Store listing and does not switch later. Ask NASA early what the approval packet must contain and how long their approval takes.
+This project chooses public App Store distribution before submission and requests unlisted distribution. Apple fixes public versus private distribution at approval. Switching between public and private after approval needs a new app record and review; a public app can still become unlisted. See Apple's [distribution methods](https://developer.apple.com/help/app-store-connect/manage-your-apps-availability/set-distribution-methods/). Ask NASA early what the approval packet must contain and how long their approval takes.
 
 **Why:** no build reaches orbit without this approval. It may take longer than any code.
 **Send back:** anything NASA needs in the packet, and their expected approval time.
@@ -58,8 +64,9 @@ Decide whether Xcode goes on the Mac on Earth. It needs your Apple ID sign-in on
 
 When the organizer reports that the device-access design passed its review:
 
-1. Approve a Cloudflare Access bypass application for the path `/d/*` on both map hosts.
-2. Approve the Worker deploy.
+1. Configure the server-only Sign in with Apple credential for account deletion: a private key enabled for Sign in with Apple, its key ID, your Apple Developer Team ID and the app's client ID (bundle ID). Place the private key in the Worker's secret store yourself. This credential signs the client-secret JWT for Apple's token exchange and revocation endpoints. It is separate from the App Store Connect upload key. Send no credential values back to the agents.
+2. Approve a Cloudflare Access bypass application for the path `/d/*` on both map hosts and a separate Google enrollment application that admits Google accounts without the website allowlist.
+3. Approve the Worker deploy.
 
 **Why:** this is what replaces the sign-in cookie that expired on you. It is the security-sensitive part of the plan, so it waits for a review and for you.
 

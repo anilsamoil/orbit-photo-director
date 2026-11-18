@@ -35,9 +35,9 @@ A gate is a point where work stops until something is shown. The organizer recor
 | G2 Offline acceptance | W-72, on the hosted workflow | Cold-launch offline; Earth draws; the ISS prediction moves; a target remains usable; an alert appears while locked; a recorded shot survives restart and uploads once. Then a new build installed over the previous one keeps the credential, the plan, the outbox, the kept tiles and the settings, and the queued entries upload once. | Fix before any signed release build |
 | G3 Ground device | Ground tester, checklist from W-72 | The same lines, from a TestFlight install, on a real device on Earth matching the orbit iPad first: iOS or iPadOS 26 and, if possible, an iPad. The iPhone is covered by the iOS 26 simulator, plus an iPhone on iOS 26 if the tester has one. With no matching device, the closest one plus the exact simulator runtime stand in, and the gap goes into `STATUS.md`. | Fix before the build goes to orbit |
 | G7 Device approval | Owner, with W-71's approval packet, once the app is in the App Store | NASA approves SNAP and installs it on the iPad and the iPhone in orbit | The website remains the tool. Answer what the device managers ask. |
-| G4 Orbit | Owner, ten-minute checklist from W-72 | Needs G6 and G7. Install from the unlisted App Store link (or the device managers' push), enroll, one LOS period, one alert, one logged shot | The website remains the tool. Fix and resend. |
+| G4 Orbit | Owner, ten-minute checklist from W-72 | Needs G6 and G7. After NASA installs the build from the App Store, launch and test it: enroll, one LOS period, one alert, one logged shot | The website remains the tool. Fix and resend. |
 | G5 Crew | Owner | Fourteen days of the owner's use with no lockout and no lost log | Hold the crew rollout |
-| G6 No-expiry route | W-71, then the ground tester | The unlisted App Store listing is approved; the ground tester installs the App Store build over the TestFlight build, state carries over, and no expiry date shows | Fix the named reason and resubmit. Apple declining unlisted distribution: use a public listing. |
+| G6 No-expiry route | W-71, then the ground tester | The App Store listing is approved, unlisted or public if Apple declines unlisted distribution; the ground tester installs the App Store build over the TestFlight build, state carries over, and no expiry date shows | Fix the named reason and resubmit. Apple declining unlisted distribution: use a public listing. |
 
 ### Testing without the iPad in orbit
 
@@ -45,13 +45,13 @@ On 2026-11-16 the App Store on the iPad in orbit refused TestFlight, while other
 
 - **Every day: simulators.** The hosted workflow runs the app in the iOS Simulator on GitHub's Macs from W-01 on, with no Apple account. G2 runs there. Once Xcode is on the Mac on Earth (owner step 5), Claude and Codex can also drive the simulator from their own sessions and take screenshots.
 - **Before orbit: one real device on Earth.** G3 needs a person on the ground with an iPhone or iPad (owner step 4). A simulator cannot show real memory limits, real background refresh or real alert delivery.
-- **Orbit: the App Store, installed by NASA.** The unlisted App Store listing (W-71) is the only route to the orbit devices. No TestFlight and no direct install reaches them.
+- **Orbit: the App Store, installed by NASA.** The App Store is the only channel to the orbit devices, preferably unlisted, with a public listing if Apple declines the unlisted request (W-71). No TestFlight and no direct install reaches them.
 
 ### Delivery routes to the iPad in orbit, in order of preference
 
 The orbit devices (an 11-inch iPad Pro with M4 on iPadOS 26.6.2 and an iPhone 17 Pro on iOS 26.6.1) are managed: every app needs approval from the agency's device management (gate G7). The owner is seeking that approval.
 
-1. The unlisted App Store listing (W-71). Once the app is in the App Store, the owner asks NASA to approve it and install it on the devices. Builds do not expire. Each build goes through App Review, which takes days, so orbit fixes are slower than with TestFlight. Apple fixes the distribution method at first submission, so there is no later switch to another channel.
+1. The unlisted App Store listing (W-71). Once the app is in the App Store, the owner asks NASA to approve it and install it on the devices. Builds do not expire. Each build goes through App Review, which takes days, so orbit fixes are slower than with TestFlight. This project chooses public App Store distribution before submission and requests unlisted distribution. Apple fixes public versus private distribution at approval. A later switch between public and private needs a new app record and review, but public-to-unlisted remains possible. See Apple's [distribution methods](https://developer.apple.com/help/app-store-connect/manage-your-apps-availability/set-distribution-methods/).
 2. TestFlight reaches the ground tester only; NASA will not approve it in orbit.
 3. If NASA does not approve the app: the plan's fallback, hardening the website.
 
@@ -69,7 +69,7 @@ Wave 0   W-00 ─┬─ W-01 ── W-02 (G1)
                └─ W-40
 G0       W-03 (needs W-02, G0): signed host proof on a ground device, second half of G1
 Wave 1   W-11 (needs W-10, W-02)   W-12 (needs W-10)   W-32 (needs W-30, W-31, W-02)   W-41 (needs W-40, W-11)
-         W-21 (needs W-20, owner)   W-60 (needs W-21, W-32)   W-63 (needs W-30, W-10)
+         W-21 (needs W-20, owner)   W-60 (needs W-21, W-32, W-12, W-41)   W-63 (needs W-30, W-10)
          W-32 also needs W-11
 Wave 2   W-42   W-50   W-33 (needs W-50)   W-61   W-62          then W-72 (G2)
 Wave 3   W-70 (needs G0, G2)   G3   W-71 (needs G2, submits in parallel with G3)   G6   G7 (owner, after G6)   G4   W-73 (G5)
@@ -109,7 +109,7 @@ Sizes are agent effort: S is under a day, M is one to three days, L is more.
 
 ### W-03 Signed host proof on a ground device (S)
 - **Needs:** W-02, G0.
-- **Change:** the release job's first use. Sign the W-02 proof build with the App Store Connect API key from the `ios-release` environment secrets `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID` and `APP_STORE_CONNECT_PRIVATE_KEY`, upload it to TestFlight, and have the ground tester install it and run the ten checks.
+- **Change:** the release job's first use. Sign the W-02 proof build with the App Store Connect API key from the `ios-release` environment secrets: `APP_STORE_CONNECT_KEY_ID` is the key ID string, `APP_STORE_CONNECT_ISSUER_ID` is the issuer ID UUID, and `APP_STORE_CONNECT_PRIVATE_KEY` is the full contents of the downloaded `.p8` file. Upload it to TestFlight and have the ground tester install it and run the ten checks. No values go in the repository or logs.
 - **Done when:** the build reached TestFlight from a workflow run with only the owner's approval; the ground tester's results for all ten checks are in `G1-HOST-PROOF.md`, with the device model and OS version. This also proves signing, upload and install before any feature depends on them.
 
 ### W-10 Web host seam, browser side (M)
@@ -132,17 +132,17 @@ Sizes are agent effort: S is under a day, M is one to three days, L is more.
 
 ### W-20 Device access in the Worker (L, security-sensitive)
 - **Change, in three steps, each reviewed:**
-  1. `docs/ios/DEVICE-ACCESS.md`: both sign-in choices (Sign in with Apple and Google through Access), open account creation for any Apple ID or Google account, per-account quotas, sign-out, account deletion, the threat model, the enrollment sequence, token storage, revocation, rate limits, and why the same-origin write rule does not apply to bearer-token requests. Compare it with the service-token fallback in ARCHITECTURE.md and pick one.
+  1. `docs/ios/DEVICE-ACCESS.md`: both sign-in choices (Sign in with Apple and Google through Access), open account creation for any Apple ID or Google account with no approval step, per-account quotas, sign-out, account deletion, the threat model, the enrollment sequence, token storage, revocation, rate limits, and why the same-origin write rule does not apply to bearer-token requests. Specify a separate Google enrollment Access application and audience that admits accounts absent from the website allowlist. The `calibration-auth.ts` allowlist check must not apply to `/d/*` or the enrollment callback; website and owner routes keep their existing authorization.
   2. A security review of that note before any code.
   3. `worker/src/device-auth.ts` and its routing: `/api/device/enroll` (behind Access), `/d/enroll`, `/d/*` for the plan, published data and the API, and an owner-only list and revoke route behind Access.
-  3a. `/d/enroll/apple`: verify the Apple identity token (signature against Apple's published keys, issuer, audience equal to the bundle ID, expiry), key the account on the Apple user identifier, create a new account at once; per-account quotas on targets and log entries. `/d/account/delete` for the signed-in account. Revocation in the owner's device list.
-  4. Log idempotency that does not depend on the month the request arrives. Today the object key is `log/<arrival yyyymm>/<dedupe key>` (`worker/src/index.ts:285-291`), so a write acknowledged on 30 November and retried on 1 January finds neither the January nor the December key and duplicates. Add an idempotency marker keyed only by namespace and dedupe key (for example `log/_keys/<namespace><key>`), checked and written atomically before the monthly record; the monthly record stays so every existing reader still finds new entries. Tests: a lost acknowledgment retried in the same month, the next month and a non-adjacent month each yield one record.
-- **Tests, in the style of `worker/test/access-gate.test.ts`:** a code is single use; a code expires at five minutes; a wrong verifier fails; an unknown or revoked token is 401 with no detail; a token cannot read or write a profile its account is not granted; `/d/session` returns the same shape as `/api/browser/session`; `/d/*` cannot reach a human-only route; the daily rate limit holds; an Apple token with the wrong audience, issuer or signature, or expired, is refused; a new Apple or Google account gets its own profile at once and reaches no other; an account over its quota is refused with a clear error; account deletion removes the profile's targets and tokens and the deleted token is refused afterwards; a log entry whose acknowledgment is lost and retried in the same, the next, or a non-adjacent month is stored once; the existing Worker suite stays green.
+  3a. `/d/enroll/apple`: verify the Apple identity token (signature against Apple's published keys, issuer, audience equal to the bundle ID, expiry), key the account on the Apple user identifier, create a new account at once; per-account quotas on targets and log entries. `/d/account/delete` implements ARCHITECTURE.md's fresh Apple authorization-code exchange, server-only Sign in with Apple client-secret credential, token revocation at Apple's `/auth/revoke` endpoint, durable retry job and no-token manual-revocation path. Revocation in the owner's device list.
+  4. Log idempotency that does not depend on the month the request arrives. Today the object key is `log/<arrival yyyymm>/<namespace><sanitized dedupe key>.json` (`worker/src/index.ts:285-291`), so a write acknowledged on 30 November and retried on 1 January finds neither the January nor the December key and duplicates. Conditionally create an immutable record keyed only by account namespace and dedupe key, for example `log/_keys/<namespace>/<key>`. It keeps the canonical payload, first receipt time and original monthly destination, preserving the existing profile namespace and `.json` suffix. Concurrent requests read the winning record. Every request and retry completes or verifies the monthly write from that record before returning `{ok:true}`. A marker alone is not success. A failed or ambiguous monthly write returns a retryable failure, leaving the outbox pending. Existing readers still use monthly records. Tests interrupt between writes and after the monthly write but before acknowledgment, and race concurrent retries across adjacent and non-adjacent months. Every successful response requires one matching record at the original monthly destination, not a copy in the retry's month.
+- **Tests, in the style of `worker/test/access-gate.test.ts`:** a code is single use; a code expires at five minutes; a wrong verifier fails; an unknown or revoked token is 401 with no detail; a token cannot read or write a profile its account is not granted; `/d/session` returns the same shape as `/api/browser/session`; `/d/*` cannot reach a human-only route; the daily rate limit holds; an Apple token with the wrong audience, issuer or signature, or expired, is refused; new Apple and Google accounts absent from the website allowlist enroll without approval and get only their own profile; an account over its quota is refused with a clear error; account deletion removes the profile's targets and tokens and the deleted token is refused afterwards; Apple deletion tests cover fresh and expired codes, wrong-account proof, exchange and revocation failures, lost replies, interruption, repeated requests and manual revocation when no token can be obtained, with no false completion; a log entry whose acknowledgment is lost and retried in the same, the next, or a non-adjacent month is stored once; interruption and concurrent-retry tests prove the recovery rule in step 4; the existing Worker suite stays green.
 - **Done when:** the review signs off and the tests are green. Nothing is deployed in this package.
 
 ### W-21 Deploy device access (S, owner approves)
 - **Needs:** W-20.
-- **Change:** an Access bypass application for `/d/*` on both map hosts; the Worker deploy by the runbook.
+- **Change:** an Access bypass application for `/d/*` on both map hosts; the separate Google enrollment Access application and open-signup policy from W-20; the Worker deploy by the runbook.
 - **Done when:** a test device enrolled under a profile made for testing reads the manifest and writes one log entry that appears once. No rating is fabricated in a real profile.
 
 ### W-30 OPDKit: PlanStore and SyncEngine (M)
@@ -164,12 +164,12 @@ Sizes are agent effort: S is under a day, M is one to three days, L is more.
 
 ### W-40 Baseline map pack (M)
 - **Change:** `app/tiles/build.py` produces one MBTiles file: Blue Marble and Black Marble 2016 at zoom 0 to 5, and Natural Earth lines and labels. `app/tiles/SOURCES.md` records each source, its licence or credit line, and the retrieval date. The pack is a release asset; `app/tiles/pack.lock.json` pins its SHA-256 and the workflow verifies it.
-- **Done when:** the pack's size is reported and the app download stays inside the size budget; every source's credit shows in the app with no network; the fetch from GIBS was throttled and done once.
+- **Done when:** the pack's measured byte size is reported, with its contribution to the app download identified; W-70 reports measured full-app and update download sizes once signed builds exist. There is no project download-size limit. Every source's credit shows in the app with no network; the fetch from GIBS was throttled and done once.
 - **Traps:** no Esri tile goes in the pack. If a source's terms are unclear, leave it out and write it in `FOLLOWUPS.md`.
 
 ### W-41 Tile gateway (M)
 - **Needs:** W-40, W-11.
-- **Done when:** the lookup order is baseline, tile store, network; a unit test proves the network is not touched when local bytes exist; the baseline is never evicted; the size budget holds under a fill test; the app fetches exactly the tiles the website prefetches today (world view of the switchable layers once a session, dark grey and GIBS at zoom 6, 8 and 10 near the top three targets after each new plan) and the gateway stores them under each layer's policy.
+- **Done when:** the lookup order is baseline, tile store, network; a unit test proves the network is not touched when local bytes exist. The tile store holds at most 512 MiB (536,870,912 bytes) of downloaded tile payloads across all layers, excluding the bundled baseline, plans and outbox. A fill-and-evict test exceeds the cap, removes expired tiles before least-recently-used tiles, verifies the byte total never exceeds the cap after a write, and keeps the baseline, plans and outbox intact. A tile larger than the cap is not stored. The app fetches exactly the tiles the website prefetches today (world view of the switchable layers once a session, dark grey and GIBS at zoom 6, 8 and 10 near the top three targets after each new plan) and the gateway stores them under each layer's retention limits and the shared cap.
 
 ### W-42 The map with no network (S)
 - **Needs:** W-41.
@@ -181,8 +181,8 @@ Sizes are agent effort: S is under a day, M is one to three days, L is more.
 - **Done when:** the planner never schedules more than the limit; alerts that left the plan are removed; the coverage end equals the last scheduled alert; the sleep window holds across midnight UTC; a simulator test sees the pending requests after a plan is set; permission denied is shown as a state, not an error.
 
 ### W-60 Enrollment and identity (M)
-- **Needs:** W-21, W-32.
-- **Done when:** a first launch opens on the baseline with no sign-in: curated targets, device-computed passes from the built-in or CelesTrak element set, the map; a Sign in button offers Sign in with Apple and Google; either completes enrollment and the profile name shows; relaunch needs no sign-in; sign out returns to the baseline and keeps that account's unsent entries; "Delete account" asks once, deletes server-side and returns to the baseline; a rejected token shows a banner and reading continues.
+- **Needs:** W-21, W-32, W-12 (device-computed passes), W-41 (baseline tile gateway).
+- **Done when:** a first launch opens on the baseline with no sign-in: curated targets, device-computed passes from the built-in or CelesTrak element set, the map; a Sign in button offers Sign in with Apple and Google; either completes enrollment and the profile name shows; relaunch needs no sign-in; sign out returns to the baseline and keeps that account's unsent entries; "Delete account" asks once, deletes server-side and returns to the baseline. Apple deletion obtains a fresh authorization code through the native sheet, reauthenticating when needed, and reports pending revocation or manual action without claiming completion. W-20's failure and retry cases are exercised through this UI. A rejected token shows a banner and reading continues.
 
 ### W-61 Lifecycle and recovery (S)
 - **Done when:** web process termination reloads to the same tab; a lost WebGL context rebuilds the map; a memory warning reaches the web side; links to other sites open in Safari; the layouts hold at iPhone 17 Pro and iPad Pro 11-inch sizes (the orbit devices) in both orientations and at iPad split-view widths; the keep-awake setting works.
@@ -197,8 +197,8 @@ Sizes are agent effort: S is under a day, M is one to three days, L is more.
 
 ### W-70 Signed build and TestFlight for the ground tester (M)
 - **Needs:** W-03 (the release job), G2.
-- **Change:** the release job from W-03, limited to `main` and to the `ios-release` environment with the owner as required reviewer; signing with the App Store Connect API key from the `ios-release` secrets `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID` and `APP_STORE_CONNECT_PRIVATE_KEY`; upload; build numbers from the workflow run; while ground testing continues, a scheduled job that cuts a refresh build when the newest one is 45 days old.
-- **Done when:** a build appears in TestFlight from a workflow run with no manual step other than the owner's approval; the secrets appear in no log.
+- **Change:** the release job from W-03, limited to `main` and to the `ios-release` environment with the owner as required reviewer; signing with the App Store Connect API key from the `ios-release` secrets `APP_STORE_CONNECT_KEY_ID` (key ID string), `APP_STORE_CONNECT_ISSUER_ID` (issuer ID UUID) and `APP_STORE_CONNECT_PRIVATE_KEY` (full `.p8` file contents); upload; build numbers from the workflow run; while ground testing continues, a scheduled job that cuts a refresh build when the newest one is 45 days old.
+- **Done when:** a build appears in TestFlight from a workflow run with no manual step other than the owner's approval; the secrets appear in no log; measured full-app and update download sizes for iPhone and iPad are recorded with the baseline-pack size from W-40.
 
 ### W-71 App Store submission, the route to orbit (M)
 - **Needs:** G2. Preparation can start in Wave 1.
