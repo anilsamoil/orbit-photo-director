@@ -161,11 +161,11 @@ Prefetch matches the website exactly: the world view of the switchable layers on
 
 ### Log acknowledgment and recovery
 
-The Worker conditionally creates an immutable, month-independent record keyed by account namespace and dedupe key. It keeps the canonical payload, including the first receipt time, and the original monthly destination. Preserve the existing key format, `log/<arrival yyyymm>/<namespace><sanitized dedupe key>.json`, including the profile namespace used by existing readers. A competing request reads the winning record and uses its payload and destination.
+The Worker conditionally creates an immutable, month-independent record keyed by the server-authorized selected-profile namespace and dedupe key. It keeps the canonical payload, including the first receipt time, and the original monthly destination. Preserve the existing key format, `log/<arrival yyyymm>/<namespace><sanitized dedupe key>.json`, including the profile namespace used by existing readers. A competing request reads the winning record and uses its payload and destination.
 
 Every request, including every retry, completes or verifies the monthly write from that record before returning `{ok:true}`. Create the monthly object conditionally. If it already exists, verify that it matches the canonical payload. A marker alone is not success. A failed or ambiguous write returns a retryable failure and leaves the outbox entry pending. R2 conditional writes are atomic per object, not across the two objects. See [R2 conditional operations](https://developers.cloudflare.com/r2/api/s3/conditional-operations/).
 
-Tests interrupt the request between the month-independent and monthly writes, after the monthly write but before acknowledgment, and during concurrent retries across adjacent and non-adjacent months. Each case leaves one canonical record at the original monthly destination, readable by existing monthly-prefix readers. No retry returns success while that record is missing.
+Tests interrupt the request between the month-independent and monthly writes, after the monthly write but before acknowledgment, and during concurrent retries across adjacent and non-adjacent months. Each case leaves one canonical record at the original monthly destination, readable by existing monthly-prefix readers. No retry returns success while that record is missing. Identical entries for two profiles granted to one account are stored separately. Identical entries from two authorized accounts writing the same shared profile dedupe to one record.
 
 ## The queue between syncs
 
