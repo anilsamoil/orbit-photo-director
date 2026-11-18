@@ -17,7 +17,8 @@ const { devices } = require('playwright');
 const WHEN = Date.parse('2026-11-14T23:40:00Z');
 const EVENT = 'fixture-iss-cape';
 const SIZES = ['402x874', '874x402', '1024x768', '1180x820', '768x1024', '834x1210', '1440x900'];
-const TOGGLE_SIZES = ['402x874', '874x402', '1024x768', '1440x900'];
+const TOGGLE_SIZES = ['402x874', '874x402', '834x1210', '1210x834', '1180x820', '768x1024', '1024x768', '1440x900'];
+const HAZARD_BUNDLE = resolve(repo, 'frontend/test/fixtures/hazards-v2-2026-11-13.json');
 const MODELED = 'ef9850ad-1096-425b-9d27-f7bbd186e61a';
 const OTHER = 'fixture-baikonur';
 const SECTOR = 'fixture-starbase';
@@ -378,11 +379,21 @@ async function runToggle() {
     await page.route('**/launch/catalog/latest.json', (route) => jsonRoute(route, published.pointer));
     await page.route('**/launch/catalog/v/**', (route) => jsonRoute(route, published.text));
     await page.route('**/launch/latest.json', (route) => jsonRoute(route, { error: 'not_found' }, 404));
+    await page.route('**/hazards/v2/launches.json', (route) => jsonRoute(route, readFileSync(HAZARD_BUNDLE, 'utf8')));
     const errors = [];
     page.on('pageerror', (error) => errors.push(String(error)));
     const read = () => page.evaluate(toggleBoard, toggleIds);
+    const reveal = async (locator) => {
+      try {
+        await locator.scrollIntoViewIfNeeded();
+      } catch (error) {
+        const message = String(error && error.message ? error.message : error);
+        if (!/detached|not attached/i.test(message)) throw error;
+        await locator.scrollIntoViewIfNeeded();
+      }
+    };
     const activate = async (locator, method) => {
-      await locator.scrollIntoViewIfNeeded();
+      await reveal(locator);
       if (method === 'tap') await locator.tap();
       else if (method === 'click') await locator.click();
       else {
@@ -419,6 +430,16 @@ async function runToggle() {
     await page.waitForFunction((id) => (
       document.querySelector(`#map-launch-coverage .map-launch-primary [data-event-id="${id}"] .launch-brief-actions button`)?.textContent === 'Show site and modeled ascent'
     ), MODELED, { timeout: 20_000 });
+    await page.waitForFunction(() => {
+      const map = window.__opdMap;
+      if (!map || !map.isStyleLoaded() || map.isMoving()) return false;
+      const source = map.getSource('launch-hazards');
+      const data = source && (source._data.geojson || source._data);
+      return (data?.features?.length ?? 0) > 0;
+    }, null, { timeout: 20_000 });
+    await page.evaluate(() => new Promise((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(resolve));
+    }));
     await page.waitForFunction((id) => (
       document.querySelector(`[data-event-id="${id}"] .launch-brief-actions button`)?.textContent === 'Show published hazard areas'
     ), HAZARD, { timeout: 20_000 });
@@ -430,7 +451,10 @@ async function runToggle() {
       if (!map || map.isMoving()) return false;
       const canvas = map.getCanvas().getBoundingClientRect();
       return map.queryRenderedFeatures([[0, 0], [canvas.width, canvas.height]], { layers: ['launch-hazard-fill-layer'] }).length > 0;
-    }, null, { timeout: 15_000 }).catch(() => null);
+    }, null, { timeout: 15_000 });
+    await page.evaluate(() => new Promise((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(resolve));
+    }));
     await page.evaluate(() => {
       const primary = document.querySelector('#map-launch-coverage .map-launch-primary');
       const more = document.querySelector('#map-launch-coverage .map-launch-more');
@@ -473,7 +497,10 @@ async function runToggle() {
     if (point) {
       if (touch) await page.touchscreen.tap(point.x, point.y);
       else await page.mouse.click(point.x, point.y);
-      await page.waitForTimeout(600);
+      await page.waitForFunction(() => {
+        const map = window.__opdMap;
+        return !!map && !map.isMoving() && !!document.querySelector('.maplibregl-popup');
+      }, null, { timeout: 10_000 });
       hazardPopup = (await read()).popup ? 'open' : 'closed';
     }
     await openDetails('#map-launch-coverage .map-launch-primary');
@@ -655,6 +682,7 @@ try {
   await page.route('**/launch/catalog/latest.json', (route) => jsonRoute(route, stamped.pointer));
   await page.route('**/launch/catalog/v/**', (route) => jsonRoute(route, stamped.text));
   await page.route('**/launch/latest.json', (route) => jsonRoute(route, { error: 'not_found' }, 404));
+  await page.route('**/hazards/v2/launches.json', (route) => jsonRoute(route, readFileSync(HAZARD_BUNDLE, 'utf8')));
   const errors = [];
   page.on('pageerror', (error) => errors.push(String(error)));
   await page.goto(`${origin}/?e2e&u=anil`, { waitUntil: 'domcontentloaded' });

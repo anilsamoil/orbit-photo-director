@@ -45,7 +45,7 @@ These go red if the fresh or grace constants move, if the stale line changes, if
 - `test_starship_is_fresh_for_12_h_and_kept_as_last_good_for_72_h`
 - `test_a_cached_set_that_reenters_inside_the_grace_is_dropped`
 
-`frontend/scripts/verify-map-pins.mjs` pins `a CelesTrak request that fails is a failed lookup, not a miss`. Do not run that mutator while editing this skill. It rewrites product source. #370 (`d9516ca`) re-anchored the six `frontend/src/satellites.ts` finds and added two contracts: `showing a launch collapses its expanded brief before refresh` and `hiding a selected ascent clears its geometry and caption`. The file has 51 anchors. A scan of those find strings against current source reports 0 missing, so a run reports 0 `STALE` and 51 `pinned`.
+`frontend/scripts/verify-map-pins.mjs` pins `a CelesTrak request that fails is a failed lookup, not a miss`. Do not run that mutator while editing this skill. It rewrites product source. #370 (`d9516ca`) re-anchored the six `frontend/src/satellites.ts` finds and added two contracts: `showing a launch collapses its expanded brief before refresh` and `hiding a selected ascent clears its geometry and caption`. The file has 61 anchors. A scan of those find strings against current source reports 0 missing, so a run reports 0 `STALE` and 61 `pinned`.
 
 The device pass is one WebKit context created at the size. It publishes fictional `SHIP 91` at 13 h, so the badge reads `stale orbit`, and it frames the ISS marker and the Starship diamond together.
 
@@ -67,7 +67,7 @@ Stdout is `starship orbit <WxH> iss 1 starship 1 stale "stale orbit, epoch 13 h 
 ## Gotchas
 
 - The stale label is not a framing aid. The along-track figures above are the reason.
-- `frontend/scripts/verify-map-pins.mjs` has 51 anchors and the six `frontend/src/satellites.ts` finds match the current guards. A `STALE` or `UNPINNED` line is a real failure. Do not run the mutator from this skill.
+- `frontend/scripts/verify-map-pins.mjs` has 61 anchors and the six `frontend/src/satellites.ts` finds match the current guards. A `STALE` or `UNPINNED` line is a real failure. Do not run the mutator from this skill.
 - A hosts-file blackhole of `gibs.earthdata.nasa.gov` to `127.0.0.1` is connection refused. WebKit then takes more than 45 s to mount the ISS marker and track. `drive map` times out at `map ready`. Stub the tile with `isolateSnapRequests` instead.
 - The built-in Starship lookup has names and patterns only. A row may also carry `catnr` or `intldes`, and the browser will use them, but the published Starship search does not hard-code either.
 - Fresh includes the instant at 12 h. The stale label starts once the age is over 12 h. The grace includes the instant at 72 h. The next millisecond is dropped.
