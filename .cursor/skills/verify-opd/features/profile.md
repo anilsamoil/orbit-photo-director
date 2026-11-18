@@ -9,6 +9,7 @@ Profile holds the signed-in astronaut, the distance threshold, personal targets,
 - `profile-add` adds a target named Verify Harbor.
 - `profile-hidden` shows Hidden curated targets. Restore removes `verify-mesa` from that list, the GET drops that id, and a new Chrome profile shows the card again.
 - `profile-lookup` resolves the fixture timestamp and drops a lookup pin on the map. It then resolves a last-good TLE at that TLE's own epoch, and a 2035 timestamp. A 2035 time that still propagates shows `low confidence — TLE age` and `ISS at`. A 2035 time where every element set fails SGP4 shows `orbit data is out of date, reconnect to refresh`.
+- `profile-hydration` is #374 (`c431fc4`). A verified account profile whose name starts with `u-` loads personal targets from `GET /api/browser/profiles/<name>/targets`. A failed read does not latch. The next Profile open, with no reload, fetches again. A distance-slider change during that read keeps the new threshold and the server rows. A local target edit during that read keeps the edit and does not add a server-only row. A signed-out 401 shows `Please sign in again to open your own profile. Your saved data has been kept.` and does not fetch targets. An anonymous `?u=` adoption (`isVerified` false) does not fetch. Crew roster profiles do not hydrate.
 
 ## How to get to it (user POV)
 
@@ -32,6 +33,28 @@ Preconditions:
 - **2035 lookup.** The script then resolves `2035-06-01T00:00:00.000Z`. The fixture's live CelesTrak set still propagates that far, so the chip is `low confidence — TLE age ...` and the line contains `ISS at`. The bundled 2026-09-27 set does not propagate that far. When every candidate fails SGP4, the line is `orbit data is out of date, reconnect to refresh`. Any other failed lookup says `Calculation failed — TLE may be missing or malformed.` The script accepts the low-confidence chip or the stale sentence.
 - **Proof.** `evidence/profile-picker.png`, `evidence/profile-picker-local.png`, `evidence/profile.png`, `evidence/profile-target.png`, `evidence/profile-hidden.png`, `evidence/profile-lookup.png`, `evidence/profile-lookup-map.png`, `evidence/profile-lookup-last-good.png`, and `evidence/profile-lookup-2035.png`.
 - **Devices.** Desktop Chrome runs first. WebKit iPhone 13, iPhone 17 Pro, and iPad Pro 11 run these steps. iPhone 17 Pro also repeats the signed-in and local picker checks in landscape. Their shots are `evidence/iphone-13/`, `evidence/iphone-17-pro/`, and `evidence/ipad-pro-11/`.
+
+## Hydration on a local Vite server
+
+`drive profile` does not prove #374. One Chromium process, context created at 1440 by 900:
+
+```bash
+OPD_VERIFY_VIEWPORT=1440x900 node .cursor/skills/verify-opd/scripts/profile-hydration.mjs
+```
+
+The script uses the verify origin and `isolateSnapRequests`. It does not fetch a public host. Identities are synthetic: profile `u-pilot`, display `Pilot Example`, mailbox `pilot@example.com`. The anonymous page is `?u=guest`. No real name is required.
+
+Stub `GET /api/browser/session` and `/api/browser/profiles/<name>/targets` on that local server, or with `page.route` in front of it:
+
+- `401` on the session shows the sign-in sentence in `#status-banner`, leaves `#tab-profile` disabled, and records zero targets requests.
+- A non-JSON `404` on the session with `?u=guest` opens Profile and records zero targets requests.
+- The first targets read for `u-pilot` returns `503`. Opening Profile retries. The server row `Harbor Example` appears. The document was not reloaded.
+- Hold the first targets read, set `#profile-threshold-slider` to 800, and let the 150ms debounce save. Releasing the read keeps `800 km` and `Harbor Example`.
+- Seed `opd-profile-u-pilot` with `Harbor Local`. Hold the first read, edit that row to `Harbor Kept`, and save. Releasing a response that also contains `Server Only` leaves `Harbor Kept` on the list and does not add `Server Only`.
+
+Stdout is `profile hydration signed-out 401 sign-in message targets 0`, `profile hydration anonymous ?u= targets 0`, `profile hydration retry reads <n> harbor kept`, `profile hydration slider 800 km harbor kept`, and `profile hydration local edit kept server-only absent`. Shots are `profile-hydration-signed-out.png`, `profile-hydration-anonymous.png`, `profile-hydration-retry.png`, `profile-hydration-slider.png`, and `profile-hydration-edit.png`.
+
+Known issues, not passes: a server target whose name is only whitespace fails `validatePersonalTargetInput` (`name_empty` after trim) and `hydrateUnchangedProfile` returns before adding any row, so that one field blocks the list. `handleAdd` still toasts `after the next hourly update` for a `u-` profile. Do not treat either as a green check.
 
 ## Gotchas
 

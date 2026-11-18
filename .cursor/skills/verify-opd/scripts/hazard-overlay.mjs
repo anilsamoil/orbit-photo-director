@@ -16,7 +16,8 @@ const { devices } = require('playwright');
 const LABEL = 'Published hazard areas \u2014 not a flight path or navigation guidance';
 const WHEN = Date.parse('2026-11-13T22:50:00Z');
 const EVENT = '0f867f0c-5422-4d44-93b8-d7faaae7019b';
-const SIZES = ['402x874', '874x402', '1024x768', '1180x820', '768x1024', '834x1210', '1440x900'];
+const SIZES = ['402x874', '874x402', '834x1210', '1210x834', '1180x820', '768x1024', '1024x768', '1440x900'];
+const HAZARD_ROUTE = '**/hazards/v2/launches.json';
 const CONTROLS = [
   '#map-launch-coverage',
   '.map-toolbar',
@@ -44,7 +45,7 @@ if (!SIZES.includes(size)) fail(`OPD_VERIFY_VIEWPORT must be one of ${SIZES.join
 if (!['layout', 'popup', 'camera'].includes(probe)) fail('OPD_HAZARD_PROBE must be layout, popup, or camera');
 
 const catalogPath = resolve(repo, 'frontend/test/fixtures/starship-catalog-2026-11-10.json');
-const hazardPath = resolve(repo, `frontend/public/hazards/v1/${EVENT}.json`);
+const hazardPath = resolve(repo, 'frontend/test/fixtures/hazards-v2-2026-11-13.json');
 
 function catalogBody() {
   const catalog = JSON.parse(readFileSync(catalogPath, 'utf8'));
@@ -142,10 +143,23 @@ async function arm(page) {
   await page.route('**/launch/catalog/latest.json', (route) => jsonRoute(route, stamped.pointer));
   await page.route('**/launch/catalog/v/**', (route) => jsonRoute(route, stamped.text));
   await page.route('**/launch/latest.json', (route) => jsonRoute(route, { error: 'not_found' }, 404));
-  await page.route(`**/hazards/v1/${EVENT}.json`, (route) => {
+  await page.route(HAZARD_ROUTE, (route) => {
     if (hazardOverride) return jsonRoute(route, hazardOverride.body, hazardOverride.status);
-    return route.fallback();
+    return jsonRoute(route, readFileSync(hazardPath, 'utf8'));
   });
+}
+
+async function waitPainted(page) {
+  await page.waitForFunction(() => {
+    const map = window.__opdMap;
+    if (!map || !map.isStyleLoaded() || map.isMoving()) return false;
+    const source = map.getSource('launch-hazards');
+    const data = source && (source._data.geojson || source._data);
+    return (data?.features?.length ?? 0) > 0;
+  }, null, { timeout: 20_000 });
+  await page.evaluate(() => new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  }));
 }
 
 async function openLaunches(page) {
@@ -284,7 +298,7 @@ async function layoutPass(page) {
   });
   const show = page.locator('#map-launch-coverage .launch-brief-actions .btn').first();
   if (await show.count()) await show.click();
-  await page.waitForTimeout(1200);
+  await waitPainted(page);
   const measured = await page.evaluate(layoutProbe, CONTROLS);
   const ignored = errors.filter((error) => !error.includes('nasa.gov') && !error.includes('gibs.earthdata'));
   const problems = [];
@@ -312,15 +326,23 @@ async function layoutPass(page) {
   console.log(`hazard layout ${size} lines ${measured.lines} hits 0 polygons 3 linestrings 0 vertices 30/16/6 tbc 1 note reachable tfr ${measured.areas['6/7129']}`);
 }
 
+function starshipLaunch(body) {
+  const launch = body.launches.find((item) => item.event_id === EVENT);
+  if (!launch) fail('hazard bundle has no Starship launch');
+  return launch;
+}
+
 function withSecondAreaA(body) {
   const copy = JSON.parse(JSON.stringify(body));
-  const notice = copy.notices.find((item) => item.area_id === 'A');
-  const feature = copy.geojson.features.find((item) => item.properties.area_id === 'A');
-  copy.notices.push({ ...notice, notice_id: 'HYDROPAC 999/26' });
-  copy.geojson.features.push({
+  const launch = starshipLaunch(copy);
+  const notice = launch.notices.find((item) => item.notice_id === 'NAVAREA IV 1080/26' && item.area_id === 'A');
+  const feature = launch.geojson.features.find((item) => item.properties?.notice_id === 'NAVAREA IV 1080/26' && item.properties?.area_id === 'A');
+  if (!notice || !feature) fail('hazard bundle has no Starship area A');
+  launch.notices.push({ ...notice, notice_id: 'HYDROPAC 999/26' });
+  launch.geojson.features.push({
     ...feature,
-    id: 'HYDROPAC 999/26\u0000A',
-    properties: { ...feature.properties, notice_id: 'HYDROPAC 999/26' },
+    id: 'hydropac-999-26-a',
+    properties: { ...feature.properties, notice_id: 'HYDROPAC 999/26', name: 'HYDROPAC 999/26 area A' },
   });
   return copy;
 }
@@ -334,7 +356,7 @@ async function popupPass(page) {
   if ((await follow.getAttribute('class'))?.includes('active')) await follow.click();
   const show = page.locator('#map-launch-coverage .launch-brief-actions .btn').first();
   if (await show.count()) await show.click();
-  await page.waitForFunction(() => window.__opdMap && window.__opdMap.loaded() && !window.__opdMap.isMoving(), null, { timeout: 15_000 });
+  await waitPainted(page);
   const click = await page.evaluate(() => {
     const map = window.__opdMap;
     const canvas = map.getCanvas().getBoundingClientRect();
@@ -380,7 +402,9 @@ async function popupPass(page) {
     return popup && popup.textContent.includes('NAVAREA IV 1080/26 area A') && popup.textContent.includes('HYDROPAC 999/26 area A');
   }, null, { timeout: 10_000 });
   const amended = withSecondAreaA(published);
-  amended.checked_at = '2026-11-13T23:00:00Z';
+  for (const notice of starshipLaunch(amended).notices) {
+    if (notice.area_id === 'A') notice.checked_at = '2026-11-13T23:00:00Z';
+  }
   hazardOverride = { status: 200, body: amended };
   const direct = await page.evaluate(async () => {
     const mod = await import('/src/map/features/launch-corridor/index.ts');
@@ -427,8 +451,8 @@ async function gesture(page, kind) {
   hazardOverride = { status: 200, body: readFileSync(hazardPath, 'utf8') };
   let release = () => {};
   const gate = new Promise((resolve) => { release = resolve; });
-  await page.unroute(`**/hazards/v1/${EVENT}.json`);
-  await page.route(`**/hazards/v1/${EVENT}.json`, async (route) => {
+  await page.unroute(HAZARD_ROUTE);
+  await page.route(HAZARD_ROUTE, async (route) => {
     await gate;
     return jsonRoute(route, hazardOverride.body, 200);
   });
@@ -438,7 +462,7 @@ async function gesture(page, kind) {
   const north = page.locator('#bearing-north');
   if (await north.count()) await north.click();
   await page.waitForFunction(() => window.__opdMap && !window.__opdMap.isMoving(), null, { timeout: 10_000 });
-  const button = page.locator('#map-launch-coverage .launch-brief-actions .btn', { hasText: 'Show launch site' });
+  const button = page.locator('#map-launch-coverage .launch-brief-actions .btn', { hasText: 'Show site and assumed sector' });
   await button.first().waitFor({ timeout: 15_000 });
   await button.first().click();
   const canvas = page.locator('#map canvas');
@@ -451,11 +475,11 @@ async function gesture(page, kind) {
     await canvas.click({ position: { x: box.width / 2, y: box.height / 2 } });
     await page.keyboard.press('ArrowRight');
   }
-  await page.waitForTimeout(300);
+  await page.waitForFunction(() => window.__opdMap && !window.__opdMap.isMoving(), null, { timeout: 10_000 });
   const held = await cameraOf(page);
   release();
   await waitForCaption(page);
-  await page.waitForTimeout(400);
+  await waitPainted(page);
   const after = await cameraOf(page);
   if (!sameCamera(held, after)) {
     fail(`hazard camera ${kind} ${size} moved ${JSON.stringify({ held, after })}`);
