@@ -58,7 +58,7 @@ Decide whether Xcode goes on the Mac on Earth. It needs your Apple ID sign-in on
 
 When the organizer reports that the device-access design passed its review:
 
-1. Configure the server-only Sign in with Apple credential for account deletion: a private key enabled for Sign in with Apple, its key ID, your Apple Developer Team ID and the app's client ID (bundle ID). Place the private key in the Worker's secret store yourself. This credential signs the client-secret JWT for Apple's token exchange and revocation endpoints. It is separate from the App Store Connect upload key. Send no credential values back to the agents.
+1. Configure the server-only Sign in with Apple credential for enrollment and deletion. Use a private key enabled for Sign in with Apple, its key ID, your Apple Developer Team ID, and the app's client ID (bundle ID). Place the private key in the Worker's secret store yourself. The Worker uses this key to sign the client-secret JWT for Apple's token exchange and revocation endpoints. This is a separate key from the App Store Connect upload key. Send no credential values back to the agents.
 2. Approve a Cloudflare Access bypass application for the path `/d/*` on both map hosts and a separate Google enrollment application that admits Google accounts without the website allowlist.
 3. Approve the Worker deploy.
 
@@ -70,11 +70,24 @@ Device access lets the app sync without the website session cookie. The W-20 sec
 - If offline Esri layers are needed, confirm permission for the exact sources, prefetch method, and retention. Use the licensed baseline until permission is recorded. See [D-7 and the Esri rights question](../designs/ios-app.md#esri-rights).
 - When to start the crew rollout. G5 requires fourteen days of orbit use with no lockout or lost log.
 
-## 8. Each release
+## 8. App Store listing and releases
+
+### Every candidate
 
 1. Approve the release job when the organizer supplies the candidate. The ground tester installs through TestFlight or W-74 and runs G3.
-2. After authenticated W-72 (G2) and G3 pass for that candidate, select it in App Store Connect. Choose public distribution and manual release. In Review Notes, say the app is intended for unlisted distribution and provide the reviewer access from W-71. Submit it to App Review. See Apple's [distribution methods](https://developer.apple.com/help/app-store-connect/manage-your-apps-availability/set-distribution-methods/).
-3. Once submitted, send Apple's [unlisted distribution request](https://developer.apple.com/support/unlisted-app-distribution/). After App Review approval and the unlisted decision, [release the approved version](https://developer.apple.com/help/app-store-connect/manage-your-apps-availability/select-an-app-store-version-release-option). Use the unlisted link if approved or the public listing if declined.
-4. Confirm the listing is live. The tester installs from it over the ground build already on their device, without uninstalling, and checks state and expiry for G6. After G3 and G6 pass, ask NASA to install or update from that listing as in step 4a.
+2. After authenticated W-72 (G2) and G3 pass for that candidate, select it in App Store Connect. Choose manual release. Set the Privacy Policy field to the public URL tested in W-71 and verify it matches the in-app link. Provide W-71's reviewer access in Review Notes.
+
+### First listing
+
+1. Choose public distribution. In Review Notes, state that the app is intended for unlisted distribution, then submit to App Review. See Apple's [distribution methods](https://developer.apple.com/help/app-store-connect/manage-your-apps-availability/set-distribution-methods/).
+2. Send Apple's unlisted distribution request after submission. After App Review approval and the unlisted decision, release the version. Use the unlisted link if approved or the public listing if declined. [Apple's unlisted distribution instructions](https://developer.apple.com/support/unlisted-app-distribution/) · [Manual release](https://developer.apple.com/help/app-store-connect/manage-your-apps-availability/select-an-app-store-version-release-option)
+
+### Later versions
+
+Submit the new version to App Review and release after approval. Keep the existing listing and its approved distribution method. Apple carries the approved unlisted method forward to later versions. [Apple's unlisted distribution instructions](https://developer.apple.com/support/unlisted-app-distribution/)
+
+### After each release
+
+Confirm the version is live. The tester installs from the listing over the ground build already on their device, without uninstalling, and checks state and expiry for G6. After G3 and G6 pass, ask NASA to install or update from that listing as in step 4a.
 
 **Why:** NASA installs from the App Store; that is the one route to the orbit devices. App Store builds do not expire. The website stays as the fallback either way.

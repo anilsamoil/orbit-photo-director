@@ -2,7 +2,7 @@
 
 Kept by the organizer. Short enough to read on a phone.
 
-Last updated: 2026-11-16
+Last updated: 2026-11-21
 
 - **Gate reached:** none. G0 requires active Apple Developer Program membership, the app record, and the release credentials. G1 (host proof) is open. G7 (NASA approval) follows G3 and G6 and requires the App Store listing.
 - **Shipped:** nothing.
