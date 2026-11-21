@@ -38,6 +38,10 @@ Arrange a tester on Earth with an iPad on iPadOS 26 if available. An iPhone on i
 - **TestFlight.** Add the tester as an App Store Connect user and include them in an internal tester group. Internal testing can start without Beta App Review.
 - **Ad hoc (W-74).** If the tester cannot use TestFlight, privately collect their device identifier, register the device in Apple Developer, and make it available to the ad hoc provisioning profile. Confirm registration to the organizer without sharing the identifier. The tester installs and replaces builds through the W-74 delivery path.
 
+Before G3, arrange a ground device that can run the same-revision development-signed build for W-33. Register it for development provisioning, pair it with Xcode, and enable Developer Mode. If it is also the G3 candidate device, run the development proof before installing and seeding the signed distribution predecessor.
+
+Reserve a second compatible physical ground device that can be erased for the W-33 encrypted-backup restore. Arrange access to the matching TestFlight candidate or register both distribution test devices for W-74. Use only a disposable test account and synthetic data for the backup.
+
 ## 4a. Approval for the managed devices
 
 Ask NASA early about packet requirements and timing. After G3 and G6 pass, send W-71's approval packet and the live App Store listing to NASA. Ask NASA to approve and install SNAP on the iPad and iPhone in orbit (G7). The packet covers app behavior, every outbound origin, on-device storage, notification permission and the absence of tracking or third-party analytics.
@@ -69,6 +73,12 @@ Device access lets the app sync without the website session cookie. The W-20 sec
 - Alert defaults: how many minutes before a target, which targets (all, yours, launches), and a sleep window with no alerts.
 - If offline Esri layers are needed, confirm permission for the exact sources, prefetch method, and retention. Use the licensed baseline until permission is recorded. See [D-7 and the Esri rights question](../designs/ios-app.md#esri-rights).
 - When to start the crew rollout. G5 requires fourteen days of orbit use with no lockout or lost log.
+
+## 7a. Log retention policy
+
+Before W-20 finalizes deletion cleanup and before W-71 publishes the privacy policy, decide what happens to a deleted profile's monthly shot logs and canonical dedupe payloads. State what is removed at deletion, what can be retained, and the start event and deadline for any retention period. Include legacy monthly records.
+
+Send the decision to the organizer to record in `DECISIONS.md`. W-20 implements and tests that rule. W-71 publishes the same rule.
 
 ## 8. App Store listing and releases
 
