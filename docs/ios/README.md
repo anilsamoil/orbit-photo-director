@@ -1,6 +1,6 @@
 # SNAP for iPhone and iPad
 
-SNAP is becoming an app for the operator's iPad and iPhone so that it keeps working when the station's link drops. Release 1 is a native shell around the existing web frontend: the screens stay as they are, and native code takes over storage, syncing, the map tiles, alerts and sign-in. Native screens come later, one at a time. The website does not change.
+SNAP is becoming an app for the NASA-managed iPad and iPhone in orbit so that it keeps working when the station link drops. Release 1 uses a native shell around the existing screens. Native code handles storage, sync, map tiles, alerts and sign-in.
 
 Planned on 2026-11-15. No app code exists yet.
 
@@ -12,7 +12,7 @@ Planned on 2026-11-15. No app code exists yet.
 | [ARCHITECTURE.md](ARCHITECTURE.md) | The shape, the nouns, the contracts, the rules the build enforces |
 | [WORK_PLAN.md](WORK_PLAN.md) | The work packages, their order, the gates, the rules for every pull request |
 | [OWNER_STEPS.md](OWNER_STEPS.md) | The steps only the owner can do |
-| [codex-cold-read-2026-11-15.md](codex-cold-read-2026-11-15.md) | The second opinion, word for word |
+| [codex-cold-read-2026-11-15.md](codex-cold-read-2026-11-15.md) | The second opinion and its findings |
 | [STATUS.md](STATUS.md) | Where the work stands today |
 | [DECISIONS.md](DECISIONS.md) | Decisions made after the design doc |
 | [FOLLOWUPS.md](FOLLOWUPS.md) | Problems found and not yet fixed |

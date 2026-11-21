@@ -1,6 +1,6 @@
 # Codex cold read, 2026-11-15
 
-Second opinion on the iPhone and iPad app plan, from Codex (model gpt-6.1-sol, read-only sandbox). It read a structured summary and the repository, not the planning conversation. The text below is its reply word for word. One mechanical change: absolute paths to the checkout were shortened to repository-relative paths.
+Second opinion on the iPhone and iPad app plan, from Codex (model gpt-6.1-sol, read-only sandbox). It read a structured summary and the repository, not the planning conversation. Checkout paths are repository-relative. The excerpts reflect the current orbit route and omit personal material.
 
 gstack recorded the run as `OUTSIDE_STATUS: unverified` because its checker could not parse the severity format used here. The findings were read in full and each has a disposition in [WORK_PLAN.md](WORK_PLAN.md).
 
@@ -14,11 +14,9 @@ The existing ISS view becomes the viewfinder: target approaching, which Cupola w
 
 The overlooked architectural idea is the **downloadable plan as a complete, independently usable artifact**. Make that reliable first. The richer copilot is a later destination consistent with premise 1.
 
-**2. What excites them most**
+**2. Offline requirement**
 
-> “so it stays more robust and is less dependent on ... Internet coverage up here.”
-
-They want confidence that the tool will be ready when the photograph happens. Native presentation is their proposed means of getting that confidence.
+The app must show the map, predict the ISS position and keep the next target usable when the station link is unavailable.
 
 **3. The project that gets halfway there: Capacitor**
 
@@ -57,15 +55,15 @@ Keep the current TypeScript UI and orbital calculations initially. Add native ow
 
 I would change C’s proposed sequencing: **do not automatically build a Swift orbital core next.** First have the generator publish notification-ready opportunities and schedule them during successful syncs. Introduce native propagation only when a measured requirement needs recalculation while the web UI is unavailable. Widgets and Lock Screen features can wait.
 
-B spends too much of a four-month mission rebuilding working behavior, particularly the ISS view.
+B would spend development time rebuilding working behavior, particularly the ISS view.
 
 **What breaks first:** I would test custom-origin artifact hashing and MapLibre worker loading first because either can stop the prototype. The first integration failure already supported by repository evidence is authentication: the proposed service token does not satisfy the current Worker’s human identity and write-origin requirements.
 
-**The premise I reject literally is 2(c): “an alert fires before each target even with the app closed.”** Scheduling known alerts is supported; unlimited replenishment and guaranteed audible presentation are not. Apple does not guarantee background-task execution at the requested time. Notifications also depend on authorization and presentation settings. [Background scheduling](https://developer.apple.com/documentation/backgroundtasks/bgtaskrequest/earliestbegindate), [local notifications](https://developer.apple.com/documentation/usernotifications/scheduling-a-notification-locally-from-your-app).
+**Premise 2(c) needs a bound on closed-app alerts.** SNAP can schedule known passes. iOS controls background-task timing, notification authorization, and presentation. [Background scheduling](https://developer.apple.com/documentation/backgroundtasks/bgtaskrequest/earliestbegindate), [local notifications](https://developer.apple.com/documentation/usernotifications/scheduling-a-notification-locally-from-your-app).
 
 Evidence proving the concern: load more opportunities than the pending-notification budget, leave the app unopened without background execution, and compare delivered alerts with the intended schedule. Separately test Focus, denied permissions, reboot, and expired orbital data.
 
-Premise 3 is feasible, but **TestFlight installation is not mission-length availability**: builds expire after 90 days, shorter than the remaining mission. [Apple’s TestFlight overview](https://developer.apple.com/help/app-store-connect/test-a-beta-version/testflight-overview/).
+Ground TestFlight builds expire 90 days after upload. The NASA-installed App Store build is the orbit delivery route. [Apple’s TestFlight overview](https://developer.apple.com/help/app-store-connect/test-a-beta-version/testflight-overview/).
 
 **6. Technical findings**
 
@@ -157,7 +155,7 @@ Recommendation: **Create a pinned, reproducible hosted build and signing pipelin
 
 A fully cached, otherwise healthy app can become unavailable when its beta build expires after 90 days. A replacement upload alone does not update the installed device. [Apple’s expiration rule](https://testflight.apple.com/).
 
-Recommendation: **Track the installed build’s expiration, deliver replacements well in advance, and assess a reviewed distribution route for continued use because the remaining mission exceeds one TestFlight build’s lifetime.** Keep downloads small and verify installation on both orbital devices.
+Recommendation: **Track the installed build’s expiration, deliver replacements well in advance, and assess a reviewed distribution route for continued use because a ground build has a fixed lifetime.** Keep downloads small and verify installation on both orbital devices through the App Store route.
 
 **F14 — Medium: Remote diagnosis needs to survive offline operation.**
 

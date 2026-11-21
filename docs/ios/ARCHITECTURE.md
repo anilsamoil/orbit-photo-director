@@ -32,8 +32,8 @@ Use these words and no synonyms.
 | host | What SNAP runs inside: `browser` or `ios`. |
 | host seam | `frontend/src/host/`. The only web code that knows the host. |
 | bridge | How the `ios` side of the seam calls native code. Hidden behind the seam. |
-| plan | One published version: `manifest.json` and the artifacts it names. Same as today. |
-| installed plan | A plan the device has downloaded, verified and stored. |
+| plan | One published version. The device receives a grant-filtered `manifest.json` and the artifacts it names. |
+| installed plan | A plan the device has downloaded, verified and stored for an account. |
 | extended queue | Passes the device computes from now to seven days ahead, replaced by published scored passes where they exist. Geometry and lighting only. |
 | alert plan | The list of alerts the web side hands to native code. |
 | outbox | The durable list of writes not yet acknowledged by the server. |
@@ -106,11 +106,11 @@ Members marked `?` exist only on the `ios` host. Web code checks `capabilities`,
 
 | Path | Class | How the `ios` host answers |
 | --- | --- | --- |
-| `/manifest.json`, `/v/<version>/*` | plan | From the installed plan. Never the network on the calling path. |
+| `/manifest.json`, `/v/<version>/*` | plan | From the active account's installed plan and granted artifacts. Never the network on the calling path. |
 | `/launch/latest.json`, `/launch/v/*`, `/launch/catalog/*` | published | Stored copy at once; refreshed by sync |
 | `/hazards/v1/*` | published | Network; last good copy, marked stale, when offline |
 | `/lightning/latest.json` | live | Network only. It is stale after eight minutes by design. |
-| `/api/browser/session` | identity | The last answer from `/d/session`, stored at enrollment and refreshed by sync. Same JSON shape as the website's, so the profile menu and its granted profiles work unchanged. |
+| `/api/browser/session` | identity | The active account's last answer from `/d/session`, stored at enrollment and refreshed by sync. Same JSON shape as the website's, so the profile menu and its granted profiles work unchanged. |
 | `/api/log` POST | outbox | Not called. `calib.ts` uses `host.outbox` when the capability exists. |
 | `/api/log` GET, `/api/browser/profiles/*`, `/api/kp`, `/api/aurora`, `/api/wx`, `/api/cloud` | api | Network with the device token, sent to `/d/api/...`. Offline, it rejects like a failed `fetch`, so today's error paths run. |
 | `/api/cal` | local | The Remind flow uses `host.alerts` instead of a calendar file |
@@ -123,8 +123,10 @@ The web side keeps polling `/manifest.json` every 60 seconds. On the `ios` host 
 
 ### Storage, in two tiers
 
-- **Tier 1, must never be lost.** Installed plans, the profile binding, the device token and the outbox. Native only. A write is acknowledged after it is on disk.
-- **Tier 2, should survive.** Everything the web side keeps under an `opd-` key: preferences, the personal target copy, caches. The `ios` host mirrors these to a native file in the background and restores them when web storage comes up empty. No call site changes, so a storage key added by a later web change is covered without anyone thinking about the app.
+- **Tier 1, durable native storage.** Installed plans, the profile binding, the device token, and the outbox. A write is acknowledged after it is on disk.
+- **Tier 2, recoverable web storage.** The `ios` host mirrors `opd-` preferences, personal target copies, and caches to native storage for the active account. It restores only that account's mirror. Signed-out baseline state has its own namespace. The bundled curated targets and baseline map pack are shared.
+
+Key installed plans, mirrored web storage, account-derived caches, and alert plans by the stable account ID. Account-derived caches include tiles prefetched around personal targets. On sign-out or account change, detach the old account's plan and caches, clear their web-view copies, and cancel its pending target alerts before loading another account or the baseline. Bind in-flight sync, mirror, and alert work to the account activation that started it. Discard results from an earlier activation, including one that finishes after a switch back. After sync confirms that a grant was removed, stop serving that profile's local artifacts, clear its cached views, and cancel its pending alerts. Deleting an account also removes its stored data.
 
 ### Tiles
 
@@ -132,16 +134,16 @@ The web side keeps polling `/manifest.json` every 60 seconds. On the `ios` host 
 
 | Policy | Meaning | Layers in release 1 |
 | --- | --- | --- |
-| `baseline` | In the baseline pack. Deeper zooms go to the tile store. | Blue Marble, Black Marble 2016, Natural Earth lines and labels |
+| `baseline` | Bundle separate raster MBTiles at zoom 0 to 5 and a GeoJSON lines and labels asset. Include attribution for each asset. | Blue Marble, Black Marble 2016, Natural Earth lines and labels |
 | `durable` | Kept on disk after fetch, inside the tile-store cap | GIBS daily true colour (latest two days), SNAP forecast cloud frames |
 | `session` | Kept briefly | Geostationary IR, RealEarth Meteosat |
-| `website` | Fetched and kept exactly as the website's service worker does today: the world view at zoom 0 to 3 once a session, kept 30 days; dark grey at zoom 6, 8 and 10 near the top three targets after each new plan; viewed tiles up to 100 for 7 days. Never bundled. | Esri imagery, Esri dark grey, Esri reference labels |
+| `online` | Fetch on demand where the source terms permit. Prefetch and disk retention are disabled by default. Enable offline use only under [confirmed permission for the exact sources and use](../designs/ios-app.md#esri-rights). | Esri imagery, Esri dark grey, Esri reference labels |
 
 The gateway answers in this order: baseline pack, tile store, network. A miss with no network returns nothing and the map overzooms the baseline. The baseline sits under the online layers in the map style, so a missing Esri tile shows Earth, not black.
 
 The tile store has a 512 MiB cap (536,870,912 bytes), measured as the sum of downloaded tile payload bytes across all layers. The bundled baseline pack, installed plans and outbox are outside this cap. Before storing a tile, remove expired tiles, then evict least-recently-used tiles until the new tile fits. Do not store a tile larger than the cap. Layer retention rules are upper limits within this cap. A fill-and-evict test checks the byte total, eviction order and preservation of the baseline, plans and outbox.
 
-Prefetch matches the website exactly: the world view of the switchable layers once a session, and one tile per zoom at 6, 8 and 10 near the top three targets after each new plan. `frontend/src/tile-precache.ts` builds those URLs through `host.tileUrl`, so in the app they go to the gateway and are stored; the app has no service worker to store them otherwise.
+The iOS host disables Esri world-view and per-target prefetch by default. For permitted GIBS prefetch, `frontend/src/tile-precache.ts` routes requests through `host.tileUrl` to the gateway after each new plan. The top three targets get one tile per source zoom at 6, 8, and 9. Requested zoom 10 clamps to source zoom 9. The browser host keeps its existing prefetch. W-42 verifies offline baseline rendering and attribution with Esri disabled.
 
 ## Native parts
 
@@ -149,8 +151,8 @@ Prefetch matches the website exactly: the world view of the switchable layers on
 
 | Part | Job | The property its tests must hold |
 | --- | --- | --- |
-| PlanStore | Stores installed plans under Application Support. Keeps the current plan, the previous one and one more. | Stop the process between any two steps of an install: `current` still resolves to a complete plan whose every artifact matches its SHA-256. |
-| SyncEngine | Checks the manifest, downloads to a staging folder, verifies, checks the plan has every field this build requires, installs, backs off on failure. Runs on foreground, on connectivity, on a timer and in background refresh. | A failed or partial download never changes `current`. A newer readable version always wins; an older one never replaces a newer one; an unreadable one is not installed and the app says an update is needed. |
+| PlanStore | Stores installed plans under Application Support by account. Keeps the current plan, the previous one, and one more for each account. | Stop the process between any two steps of an install. `current` still resolves to a complete plan for the same account and every artifact matches its SHA-256. |
+| SyncEngine | Downloads the account's filtered manifest and artifacts to a staging folder, verifies required fields and hashes, installs, and backs off on failure. Runs on foreground, on connectivity, on a timer, and in background refresh. | A failed or partial download leaves `current` intact. For the active account, the newer readable version wins. An unreadable version stays out of `current` and the app says an update is needed. |
 | Outbox | One file per unsent write, keyed by the tuple of account, original selected profile, and dedupe key. | An entry is deleted only after the server answers `{ok:true}`, which requires a completed or verified monthly log write. Interrupted writes and concurrent retries across month boundaries produce one canonical monthly record. Nothing is dropped to make room. |
 | TileGateway | The lookup order and the 512 MiB tile-store cap. | The baseline is never evicted. Local bytes are returned without touching the network. A fill test proves the cap and least-recently-used eviction. |
 | AlertPlanner | Chooses which alerts to schedule from the alert plan. | Never more than the system limit. The coverage end it reports equals the last scheduled alert. |
@@ -161,11 +163,15 @@ Prefetch matches the website exactly: the world view of the switchable layers on
 
 ### Log acknowledgment and recovery
 
-The Worker conditionally creates an immutable, month-independent record keyed by the server-authorized selected-profile namespace and dedupe key. It keeps the canonical payload, including the first receipt time, and the original monthly destination. Preserve the existing key format, `log/<arrival yyyymm>/<namespace><sanitized dedupe key>.json`, including the profile namespace used by existing readers. A competing request reads the winning record and uses its payload and destination.
+`POST /api/log` and `POST /d/api/log` keep their own authentication and authorization. Once authorized, both call the same log reservation and writer, including the existing machine-authenticated `/api/log` path. Resolve the stored profile on the server under each route's existing rules. The reservation is keyed by that profile and the original client dedupe key, independent of account, route, and arrival month. Requests without a dedupe key keep their append behavior.
 
-Every request, including every retry, completes or verifies the monthly write from that record before returning `{ok:true}`. Create the monthly object conditionally. If it already exists, verify that it matches the canonical payload. A marker alone is not success. A failed or ambiguous write returns a retryable failure and leaves the outbox entry pending. R2 conditional writes are atomic per object, not across the two objects. See [R2 conditional operations](https://developers.cloudflare.com/r2/api/s3/conditional-operations/).
+The legacy key is `log/<arrival yyyymm>/<namespace><sanitized dedupe key>.json`. The payload stores the original key and a Worker-generated `received_at`. During cutover, return retryable failures on both write routes and drain in-flight legacy writes before scanning all retained legacy months. For each record with a nonempty stored key, use the stored profile and original key to seed a reservation. Use the existing legacy default profile for records without a profile field. Preserve the exact stored payload, first receipt time, and object path. If the same tuple already appears in several months, adopt the earliest receipt and break ties by object path. Keep historical objects intact. Legacy appends with an empty or absent key stay readable. Resume writes only when the scan is complete and all writers use the shared reservation. A rollback must keep that writer or pause writes again.
 
-Tests interrupt the request between the month-independent and monthly writes, after the monthly write but before acknowledgment, and during concurrent retries across adjacent and non-adjacent months. Each case leaves one canonical record at the original monthly destination, readable by existing monthly-prefix readers. No retry returns success while that record is missing. Identical entries for two profiles granted to one account are stored separately. Identical entries from two authorized accounts writing the same shared profile dedupe to one record.
+New deduped objects use `log/<arrival yyyymm>/~v2~<profile>~d~<encoded key>.json`. The encoded key is unpadded base64url of the original string's UTF-16 code units in big-endian order. This encoding preserves distinct keys that the old sanitizer collapsed. The reserved `~` delimiter separates fields and makes the format disjoint from legacy paths. Appends use `~a~<uuid>` in place of `~d~<encoded key>`. Monthly readers merge both formats before applying the result limit and still check the record's profile. The Worker conditionally creates the immutable reservation and stores the canonical payload and monthly path in it. A competing writer uses the winning reservation.
+
+Every request completes or verifies the reserved monthly write before returning `{ok:true}`. Create the monthly object conditionally. If the object exists, verify it against the reserved payload. A failed or ambiguous write returns a retryable failure and leaves the outbox entry pending. R2 evaluates each conditional write atomically at its destination key. [R2 conditional operations](https://developers.cloudflare.com/r2/api/s3/conditional-operations/)
+
+Seed a legacy object with its own receipt timestamp. Retry in the same, next, and a non-adjacent month and verify that every acknowledgment refers to the unchanged legacy object. Include a fixture where a different tuple produces the same legacy path, plus two distinct raw keys that sanitize to the same string. Verify that the other tuple never adopts the wrong record, that new destinations are distinct, and that monthly reads return only the authorized profile in either format. Interrupt writes between reservation and monthly write and after the monthly write but before acknowledgment. Race retries across both routes and months. No retry succeeds while the reserved monthly record is missing. Identical entries for two granted profiles stay separate. Two authorized accounts writing the same shared profile dedupe to one record.
 
 ## The queue between syncs
 
@@ -185,9 +191,11 @@ interface AlertItem  { id: string; fireAt: string; title: string; body: string; 
 interface AlertStatus { authorized: boolean; scheduled: number; coveredThrough: string | null; planHorizonEnd: string | null }
 ```
 
-Native code stores the plan, schedules the earliest items up to the system limit of 64 less two reserved slots, and removes pending alerts that left the plan. One reserved slot holds "SNAP alerts run out soon. Open SNAP to set more." at the coverage end. The other holds the build-expiry warning. In background refresh, native code rolls the window forward from the stored plan. It needs no orbit math to do that.
+Native code stores the plan, schedules the earliest items up to the system limit of 64 less two reserved slots, and removes pending alerts that left the plan. One reserved slot holds "SNAP alerts run out soon. Open SNAP to set more." at the coverage end. The other holds an expiry alert only on the ground tester's TestFlight or ad hoc build. An App Store install clears any expiry request left by the ground build. In background refresh, native code rolls the window forward from the stored plan. It needs no orbit math to do that.
 
 The screens show `coveredThrough` as "Alerts set through ...". Settings: lead time, which targets, and a sleep window with no alerts.
+
+Background refresh only rolls forward the active account's alert plan or the signed-out baseline plan. Seed two previously enrolled accounts with installed plans, mirrored caches, and alert plans in the native test. Give both accounts one shared profile and give the first account an additional private profile. Switch the active account with the link down. Verify that the switch cancels the previous account's pending target alerts, shows only the new account's state, and ignores late sync or scheduling work from the old account. A switch without a verified incoming account shows the baseline until enrollment succeeds.
 
 ## Sign-in and device access
 
@@ -203,17 +211,25 @@ App                 system sign-in sheet        Cloudflare Access       Worker
  │                                                                       store its SHA-256 with the profile and the label
  │ ◄──────────────────────────────── {token, profile, device_id} ◄──────┘
  │ store the token in the Keychain
- │ GET /d/manifest.json   Authorization: Bearer ... ───────────────────► check the hash, not revoked, act as that profile
+ │ GET /d/manifest.json   Authorization: Bearer ... ───────────────────► check the token and filter by current grants
 ```
 
 - `/api/device/enroll` stays behind a separate Access application that admits anyone with a Google account, with no approval step. Google sign-in runs in the system sheet. The Worker verifies this enrollment application's audience and signed identity, without the website email allowlist. Existing website and owner routes keep their access rules.
-- `/d/*` gets an Access bypass application, as `/api/profiles` has today. The Worker's email allowlist, including the check in `calibration-auth.ts`, must not apply to `/d/*` or the Google enrollment callback. The rate-limited `/d/enroll/apple/session` route starts Apple enrollment without a device token. The bootstrap routes `/d/enroll` and `/d/enroll/apple` verify their enrollment proof. Other `/d/*` routes require a device token and fail closed: no token, an unknown token or a revoked token is a 401 with no body detail.
+- `/d/*` gets an Access bypass application, as `/api/profiles` has today. The Worker's email allowlist, including the check in `calibration-auth.ts`, must not apply to `/d/*` or the Google enrollment callback. The rate-limited `/d/enroll/apple/session` route starts Apple enrollment without a device token. The bootstrap routes `/d/enroll` and `/d/enroll/apple` verify enrollment proof. The deletion status route accepts only its deletion receipt. All other `/d/*` routes require a device token. Missing, unknown, and revoked tokens return `401` with no body detail.
 - A device token carries the account that enrolled it. The Worker resolves that account to the same profile and granted profiles as it does for the website (`worker/src/browser-identity.ts`), and `/d/*` acts inside them and no further.
 - A token does not expire. It is revoked per device, by the owner, through a route behind Access.
-- Every `/d/*` request carries the app's build number, and the owner's device list shows each device's last build. W-63 uses it to know which builds are still in use.
+- Every `/d/*` request carries the app's build number, and the owner's device list shows each device's last build. W-63 retains App Store fixtures from the first release even when no device reports a build number.
 - Bearer-token requests carry no cookie, so the same-origin write rule that guards the website does not apply to `/d/*`. The design note for work package W-20 states that reasoning for the security review.
-- Reading the installed plan never needs a valid token. A rejected token shows a clear state and keeps every stored byte.
+- The active account can read its installed plan while offline or after the server rejects its token. On rejection, the app shows a sign-in prompt and preserves the account's stored data.
 - An enrollment test uses new Apple and Google accounts absent from the website allowlist. Each enrolls without approval, gets only its own profile, and still cannot reach website or owner-only routes without their existing authorization.
+
+### Plan artifact authorization
+
+For `/d/manifest.json`, the Worker keeps the known shared artifacts and filters `artifacts.profiles` to the account's own profile and current grants. Preserve the version and integrity metadata for the artifacts that remain. Return the projection with `Cache-Control: private, no-store`. Sync refreshes the account's view when grants change even if the plan version stays the same.
+
+For each `/d/v/*` request, resolve the canonical versioned path against the published plan artifact types before reading R2. Shared artifact paths are available to any authenticated device. A profile artifact path identifies its profile, and the Worker checks the account's current grants on that request. Prior receipt of a manifest conveys no authority. Reject unrecognized paths and ungranted profile paths with the same `404`, including on retained plan versions. Return authorized artifacts with `Cache-Control: private, no-store` and keep the website's routes unchanged.
+
+Use synthetic profile artifacts in the Worker tests. Compare manifests for accounts with different grants on the same version. Test direct artifact reads for the account's own profile, a legitimate shared grant, and an unrelated profile whose URL never appeared in the filtered manifest. Remove the shared grant between manifest and artifact reads and verify that the next direct request fails. Verify that every artifact referenced by a filtered manifest remains readable and matches its published hash while the grant and version are valid.
 
 ### Sign in with Apple
 
@@ -239,12 +255,21 @@ The owner configures a server-only Sign in with Apple private key with the capab
 
 - Each account has its own profile, resolved by the Worker as for the website. A new account starts with an empty personal target list on top of the curated baseline.
 - One account per device at a time. Sign-out deletes the device token and keeps the account's unsent entries. Drain sends entries only for the signed-in account and uses each entry's original selected profile even if another profile is now selected. The Worker checks the account's grant for that profile on upload.
-- "Delete account" asks once, then calls `/d/account/delete` with the signed-in device token. For an Apple account it uses the fresh authorization flow above. Reject wrong-account Apple proof before accepting deletion. If that account has a revocable Apple token, persist a resumable deletion job with the encrypted provider token before invalidating device access. The Worker blocks account use, removes the profile's targets and device tokens, and applies the owner's log-retention rule to both monthly records and canonical dedupe payloads. For Google accounts, remove the account record directly. The app clears that account's local outbox, Keychain and stored personal data and returns to the baseline.
+- "Delete account" asks once, then calls `/d/account/delete` with the signed-in device token. For an Apple account it uses the fresh authorization flow above. Reject wrong-account Apple proof before accepting deletion. If the account has a revocable Apple token, persist a resumable deletion job with the encrypted provider token and receipt binding before invalidating device access. The Worker blocks account use, removes the profile's targets and device tokens, and applies the owner's log-retention rule to both monthly records and canonical dedupe payloads. For Google accounts, remove the account record directly. The app clears that account's local outbox, Keychain credentials, and stored personal data and returns to the baseline.
 - For an Apple account, the job calls `POST https://appleid.apple.com/auth/revoke` with form fields `client_id`, the signed `client_secret`, `token`, and the matching `token_type_hint`. A `200` response, including for an already-revoked token, completes revocation. The job then removes the retained provider token and account record. See Apple's [token revocation endpoint](https://developer.apple.com/documentation/signinwithapplerestapi/revoke-tokens).
-- A timeout, lost reply or transient Apple failure keeps the deletion job pending. Worker-owned retries resume that job with backoff using the retained provider token, even after a Worker interruption or app closure. Credential-configuration failures remain visible for repair. Pending revocation returns `202` and the app reports it as pending, never complete. A client replay with a revoked device token gets the normal `401`; it cannot create another deletion job or imply completion. Full completion requires both Apple revocation and SNAP cleanup.
+- A timeout, lost reply, or transient Apple failure keeps the deletion job pending. Worker-owned retries resume the job with backoff using the retained provider token, even after a Worker interruption or app closure. Credential configuration failures remain visible for repair. Pending deletion returns `202`. A replay with the revoked device token returns `401` and creates no job. Full completion requires both Apple revocation and SNAP cleanup.
 - If the signed-in person confirms deletion but cannot obtain a revocable token or fresh code, SNAP still deletes the account record, account data and device credentials. The app states that Apple revocation is incomplete and directs the person to revoke SNAP in their Apple account settings, as TN3194 requires. Apple credential-revocation notifications clear any remaining local credential and return the app to the baseline.
-- Deletion tests cover a matching fresh code, wrong-account proof, an expired or consumed code requiring reauthentication, Apple token-exchange and revocation failures, a lost revocation reply, interruption and repeated deletion, and the no-token manual-revocation path. They verify that account access is blocked, no false completion is reported, retries finish once, and deleted credentials and personal data are removed.
 - The owner's device list shows each account, its devices and their last build, and can revoke any of them.
+
+### Apple deletion receipt
+
+Before sending the deletion request, native code generates a high-entropy receipt and saves it separately from the account credential. It sends the receipt hash with the request. The Worker binds that hash to the deletion job when it accepts the request. `GET /d/account/delete/status` uses the receipt as a bearer credential and returns only deletion state and timing. The receipt grants no other access. Keep the status response uncached and the receipt out of JavaScript, URLs, logs, and diagnostics.
+
+The app can check the receipt after clearing the account credential. Settings shows deletion status and the expected completion time, within 24 hours of acceptance. If more time is needed, keep showing pending and say that deletion is taking longer than expected. Recheck on relaunch or reconnect and show confirmation when the status is complete. The manual-revocation path reports that action is required. Keep status available while deletion is pending and for 30 days after it completes or reaches the manual-revocation state. A terminal status keeps no account identifier or provider token. Store the terminal status before removing the job state needed to recover after interruption. [Apple's account deletion guidance](https://developer.apple.com/help/app-review/guideline-reference/5-1-1-account-deletion)
+
+If the initial response is lost, use the saved receipt to recover the result. A returned status confirms acceptance and triggers the same local cleanup as the initial response. If the Worker has no status for the receipt, the app shows that acceptance is unconfirmed and can retry with a valid account credential and fresh Apple proof if required. The same receipt and the same account can only identify one deletion job.
+
+Deletion tests cover a matching fresh code, wrong-account proof, an expired or consumed code requiring reauthentication, Apple token exchange and revocation failures, a lost revocation reply, interruption, repeated deletion, and the no-token manual-revocation path. Drop the initial response after acceptance, restart the app and Worker while pending, and delay Apple revocation past the expected time. Verify that the app recovers the same receipt, clears the account data and revoked credential, stays pending past the deadline, and shows confirmation after revocation and cleanup succeed once. Verify that a lost response before acceptance stays unconfirmed, an invalid receipt reveals no status, and a valid receipt cannot read any other route.
 
 ### Before sign-in
 
@@ -255,17 +280,17 @@ A signed-out app needs no token. It reads the curated targets built into the app
 | Moment | What happens |
 | --- | --- |
 | First launch, no account | The baseline: curated targets built into the app, passes computed on the device, the map and the ISS view. A Sign in button offers Sign in with Apple and Google. |
-| Cold launch, no signal | The shell loads from the app. `/manifest.json` and the artifacts come from the installed plan. The map draws from the baseline and the tile store. The ISS moves from the stored orbit data. The banner says LOS and the plan's age. |
+| Cold launch, no signal | The shell loads from the app. A signed-in device reads `/manifest.json` and its artifacts from the active account's installed plan. A signed-out device uses the baseline. The map draws from the baseline and the tile store. The ISS moves from the stored orbit data. The banner says LOS and the plan's age. |
 | The link returns, app closed | If iOS grants a background refresh: sync installs a newer plan, the outbox drains, alerts roll forward. If it does not, all of that happens at the next open. |
 | Shoot tapped with no signal | The entry is written to the outbox, then the screen confirms. It uploads once when the link returns. |
 | The web process is killed | The web view delegate reloads the shell. The web side restores the tab and the aim from storage, as it does after a browser reload. |
 | An install is interrupted | The staging folder is discarded at next launch. The previous plan stays current. |
-| The token is rejected | Sync and the outbox pause. A banner offers sign-in. Reading continues. |
+| The token is rejected | Sync and the outbox pause. A banner offers sign-in. Reading the active account's installed plan continues. |
 | The orbit data is old | Past 48 hours the position readout shows the age. Alerts keep firing with the age in their text. |
 | Storage is nearly full | Tile storing stops first. Plans and the outbox are never trimmed. |
 | A newer plan lacks a field this build needs | It is not installed. The previous plan stays current. A banner says an update is needed. |
 | A new build is installed over the old one | The credential, installed plans, outbox, kept tiles and settings carry over. |
-| The build nears expiry | A banner from 30 days out, an alert at 10 days out. |
+| A ground build nears expiry | Show a banner from 30 days out and an alert at 10 days. TestFlight uses its App Store Connect build deadline. Ad hoc uses the provisioning profile expiry. Ask the ground tester to install the replacement on the same channel. App Store installs have no expiry display or alert. Missing receipt data leaves launch available offline. |
 
 ## Rules the build enforces
 
