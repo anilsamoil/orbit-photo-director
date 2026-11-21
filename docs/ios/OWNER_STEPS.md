@@ -40,7 +40,7 @@ Arrange a tester on Earth with an iPad on iPadOS 26 if available. An iPhone on i
 
 Before G3, arrange a ground device that can run the same-revision development-signed build for W-33. Register it for development provisioning, pair it with Xcode, and enable Developer Mode. If it is also the G3 candidate device, run the development proof before installing and seeding the signed distribution predecessor.
 
-Reserve a second compatible physical ground device that can be erased for the W-33 encrypted-backup restore. Arrange access to the matching TestFlight candidate or register both distribution test devices for W-74. Use only a disposable test account and synthetic data for the backup.
+Reserve a second compatible physical ground device that can be erased for the W-33 encrypted-backup restore. Arrange access to the matching TestFlight candidate or register both distribution test devices for W-74. Use two disposable test accounts and synthetic data for the backup.
 
 ## 4a. Approval for the managed devices
 
