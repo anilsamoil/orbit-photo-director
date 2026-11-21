@@ -151,7 +151,7 @@ Prefetch matches the website exactly: the world view of the switchable layers on
 | --- | --- | --- |
 | PlanStore | Stores installed plans under Application Support. Keeps the current plan, the previous one and one more. | Stop the process between any two steps of an install: `current` still resolves to a complete plan whose every artifact matches its SHA-256. |
 | SyncEngine | Checks the manifest, downloads to a staging folder, verifies, checks the plan has every field this build requires, installs, backs off on failure. Runs on foreground, on connectivity, on a timer and in background refresh. | A failed or partial download never changes `current`. A newer readable version always wins; an older one never replaces a newer one; an unreadable one is not installed and the app says an update is needed. |
-| Outbox | One file per unsent write, named by its dedupe key. | An entry is deleted only after the server answers `{ok:true}`, which requires a completed or verified monthly log write. Interrupted writes and concurrent retries across month boundaries produce one canonical monthly record. Nothing is dropped to make room. |
+| Outbox | One file per unsent write, keyed by the tuple of account, original selected profile, and dedupe key. | An entry is deleted only after the server answers `{ok:true}`, which requires a completed or verified monthly log write. Interrupted writes and concurrent retries across month boundaries produce one canonical monthly record. Nothing is dropped to make room. |
 | TileGateway | The lookup order and the 512 MiB tile-store cap. | The baseline is never evicted. Local bytes are returned without touching the network. A fill test proves the cap and least-recently-used eviction. |
 | AlertPlanner | Chooses which alerts to schedule from the alert plan. | Never more than the system limit. The coverage end it reports equals the last scheduled alert. |
 | CredentialStore | Protocol here; Keychain behind it in `OPDHost`. | The token never appears in a log, a diagnostics export or JavaScript. |
@@ -173,7 +173,7 @@ The published plan covers little time. The Queue artifact holds the top 5 passes
 
 `frontend/src/plan-extend/` computes passes on the device from now to seven days ahead, from the published target list, the personal targets and the newest orbit data. It propagates the orbit once into a shared ephemeris and tests every target against it, using the generator's 800 km distance limit (`generator/config.py:56`). The dropped-pin finder in `frontend/src/pin-drop.ts` propagates per pin with a 1,500 km limit and is too slow for this; only its geometry helpers are reused, with the sun and terminator math. It fills geometry, lighting regime and a score from regime fit, distance from nadir and priority, the same three formulas as `generator/score.py`. It fills no cloud number.
 
-A published scored pass replaces the device pass for the same target when their closest approaches are within five minutes. Queue shows up to five passes in the next 90 minutes, published picks first by score, then device passes by time. Each remaining device pass is marked `provenance: 'device'` and shown merged by time with published passes, tagged "geometry only". A device pass is marked approximate when its closest-approach time minus the epoch of the orbit data used exceeds 48 hours, and the mark is recomputed when newer orbit data is installed; W-12's accuracy check may move that threshold. A script in the repository runs the Python pass finder on a fixed orbit and target set and writes reference vectors. The TypeScript tests must match them inside the generator's own sampling step. That is what keeps the two from drifting.
+A published scored pass replaces the device pass for the same target when their closest approaches are within five minutes. Queue shows up to five passes in the next 90 minutes. It lists published picks first by score, then device passes by time. Upcoming lists published picks first, then device passes by time. Each remaining device pass is marked `provenance: 'device'` and tagged "geometry only". A device pass is marked approximate when its closest-approach time minus the epoch of the orbit data used exceeds 48 hours, and the mark is recomputed when newer orbit data is installed; W-12's accuracy check may move that threshold. A script in the repository runs the Python pass finder on a fixed orbit and target set and writes reference vectors. The TypeScript tests must match them inside the generator's own sampling step. That is what keeps the two from drifting.
 
 ## Alerts
 
@@ -207,7 +207,7 @@ App                 system sign-in sheet        Cloudflare Access       Worker
 ```
 
 - `/api/device/enroll` stays behind a separate Access application that admits anyone with a Google account, with no approval step. Google sign-in runs in the system sheet. The Worker verifies this enrollment application's audience and signed identity, without the website email allowlist. Existing website and owner routes keep their access rules.
-- `/d/*` gets an Access bypass application, as `/api/profiles` has today. The Worker's email allowlist, including the check in `calibration-auth.ts`, must not apply to `/d/*` or the Google enrollment callback. The bootstrap routes `/d/enroll` and `/d/enroll/apple` verify their enrollment proof. Other `/d/*` routes require a device token and fail closed: no token, an unknown token or a revoked token is a 401 with no body detail.
+- `/d/*` gets an Access bypass application, as `/api/profiles` has today. The Worker's email allowlist, including the check in `calibration-auth.ts`, must not apply to `/d/*` or the Google enrollment callback. The rate-limited `/d/enroll/apple/session` route starts Apple enrollment without a device token. The bootstrap routes `/d/enroll` and `/d/enroll/apple` verify their enrollment proof. Other `/d/*` routes require a device token and fail closed: no token, an unknown token or a revoked token is a 401 with no body detail.
 - A device token carries the account that enrolled it. The Worker resolves that account to the same profile and granted profiles as it does for the website (`worker/src/browser-identity.ts`), and `/d/*` acts inside them and no further.
 - A token does not expire. It is revoked per device, by the owner, through a route behind Access.
 - Every `/d/*` request carries the app's build number, and the owner's device list shows each device's last build. W-63 uses it to know which builds are still in use.
@@ -218,15 +218,16 @@ App                 system sign-in sheet        Cloudflare Access       Worker
 ### Sign in with Apple
 
 ```
-App                                   Worker
- │ Sign in with Apple (native sheet)
- │   identity token from Apple
- │ POST /d/enroll/apple {identity_token, label} ─► verify the token's signature against Apple's published keys,
- │                                               issuer appleid.apple.com, audience = the app's bundle ID, expiry
- │                                               known account: mint a token for its profile
- │                                               new account: create it and mint a token
- │ ◄──────────── {token, profile} ─────────────┘
+App                                                     Worker
+ │ POST /d/enroll/apple/session ──────────────────────► create a short-lived session with an unpredictable nonce
+ │ ◄────────────── {session_id, nonce} ────────────────┘
+ │ Set the nonce on the native Apple authorization request
+ │ Receive the identity token from Apple
+ │ POST /d/enroll/apple {session_id, identity_token, label} ─► verify the token and atomically consume the session
+ │ ◄────────────────── {token, profile} ─────────────────────┘
 ```
+
+The Worker verifies the token's signature against Apple's published keys, issuer (`https://appleid.apple.com`), audience (the app's bundle ID), and expiry. It requires the signed `nonce` claim to match the nonce stored for `session_id`. An atomic consume must succeed while the session is unexpired and unused before the Worker creates a new account or issues a device token. Only one request can consume the session. [Apple's identity-token verification](https://developer.apple.com/documentation/signinwithapple/verifying-a-user)
 
 The account key is the Apple user identifier, not the email: an Apple ID can hide its email behind a relay address. Sign-up is open: any Apple ID or Google account gets a profile at once. The Worker's email allowlist does not apply to `/d/*`; abuse control is the daily rate limit, per-account quotas on targets and log entries, and revocation from the owner's device list.
 
@@ -237,7 +238,7 @@ The owner configures a server-only Sign in with Apple private key with the capab
 ### Profiles, sign-out and deletion
 
 - Each account has its own profile, resolved by the Worker as for the website. A new account starts with an empty personal target list on top of the curated baseline.
-- One account per device at a time. Sign out keeps that account's unsent outbox entries, stamped with the account, and uploads them when it signs in again. It deletes the device token.
+- One account per device at a time. Sign-out deletes the device token and keeps the account's unsent entries. Drain sends entries only for the signed-in account and uses each entry's original selected profile even if another profile is now selected. The Worker checks the account's grant for that profile on upload.
 - "Delete account" asks once, then calls `/d/account/delete` with the signed-in device token. For an Apple account it uses the fresh authorization flow above. Reject wrong-account Apple proof before accepting deletion. If that account has a revocable Apple token, persist a resumable deletion job with the encrypted provider token before invalidating device access. The Worker blocks account use, removes the profile's targets and device tokens, and applies the owner's log-retention rule to both monthly records and canonical dedupe payloads. For Google accounts, remove the account record directly. The app clears that account's local outbox, Keychain and stored personal data and returns to the baseline.
 - For an Apple account, the job calls `POST https://appleid.apple.com/auth/revoke` with form fields `client_id`, the signed `client_secret`, `token`, and the matching `token_type_hint`. A `200` response, including for an already-revoked token, completes revocation. The job then removes the retained provider token and account record. See Apple's [token revocation endpoint](https://developer.apple.com/documentation/signinwithapplerestapi/revoke-tokens).
 - A timeout, lost reply or transient Apple failure keeps the deletion job pending. Worker-owned retries resume that job with backoff using the retained provider token, even after a Worker interruption or app closure. Credential-configuration failures remain visible for repair. Pending revocation returns `202` and the app reports it as pending, never complete. A client replay with a revoked device token gets the normal `401`; it cannot create another deletion job or imply completion. Full completion requires both Apple revocation and SNAP cleanup.
