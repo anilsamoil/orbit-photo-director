@@ -75,7 +75,7 @@ Device access lets the app sync without the website session cookie. The W-20 sec
 
 ## 7. Decisions to send back when convenient
 
-- Alert defaults: how many minutes before a target, which targets (all, yours, launches), and a sleep window with no alerts.
+- Choose the alert lead time, the scope (All, Yours, or Launches), and a sleep window. Launch alerts use verified capture windows from the [selected launch feed](ARCHITECTURE.md#alerts).
 - If offline Esri layers are needed, confirm permission for the exact sources, prefetch method, and retention. Use the licensed baseline until permission is recorded. See [D-7 and the Esri rights question](../designs/ios-app.md#esri-rights).
 - When to start the crew rollout. G5 requires fourteen days of orbit use with no lockout or lost log.
 
