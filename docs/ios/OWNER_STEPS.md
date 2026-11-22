@@ -38,7 +38,11 @@ Arrange a tester on Earth with an iPad on iPadOS 26 if available. An iPhone on i
 - **TestFlight.** Add the tester as an App Store Connect user and include them in an internal tester group. Internal testing can start without Beta App Review.
 - **Ad hoc (W-74).** If the tester cannot use TestFlight, privately collect their device identifier, register the device in Apple Developer, and make it available to the ad hoc provisioning profile. Confirm registration to the organizer without sharing the identifier. The tester installs and replaces builds through the W-74 delivery path.
 
-Before G3, arrange a ground device that can run the same-revision development-signed build for W-33. Register it for development provisioning, pair it with Xcode, and enable Developer Mode. If it is also the G3 candidate device, run the development proof before installing and seeding the signed distribution predecessor.
+### W-33 development signing and debugger
+
+Approve an owner-controlled Mac on Earth for the W-33 run. This is the Mac that pairs with the physical ground device and attaches Xcode's debugger. As the individual Apple Developer Program Account Holder, sign in to Xcode on that Mac yourself. Select your paid team and enable automatic signing for the SNAP development build. Pair the ground device, enable Developer Mode, and let Xcode register it and create its development provisioning profile. Use Apple Development signing on that Mac. Keep the signing key in its Keychain and record no account or device identifiers. The internal TestFlight invitation gives the tester App Store Connect access only. [Apple account roles](https://developer.apple.com/help/app-store-connect/manage-your-team/overview-of-accounts-and-roles) [Xcode device signing and debugging](https://developer.apple.com/documentation/Xcode/running-your-app-on-simulated-or-physical-devices)
+
+Before G3, launch the candidate's exact source revision on that device from Xcode. Confirm the debugger hits a breakpoint in the refresh submission code and can resume. Record the designated ground Mac's role, the source revision, Apple Development signing, device model and OS, and the redacted attachment result. If this is also the G3 candidate device, finish the development proof before installing and seeding the signed distribution predecessor.
 
 Reserve two compatible physical ground devices that can be erased for the W-33 encrypted-backup restores. Use one to make the backup, then restore it onto both. Arrange access to the matching TestFlight candidate or register both distribution test devices for W-74. Use two disposable test accounts and synthetic data for the backup.
 
@@ -51,9 +55,9 @@ Step 8 explains how to publish the App Store listing used for G7.
 **Why:** no build reaches orbit without this approval. It may take longer than any code.
 **Send back:** anything NASA needs in the packet, and their expected approval time.
 
-## 5. Xcode on the Mac (optional)
+## 5. Xcode on the main Mac (optional)
 
-Decide whether Xcode goes on the Mac on Earth. It needs your Apple ID sign-in once and roughly 20 to 25 GB with a simulator. The agents can finish the setup after that.
+Decide whether Xcode goes on the main generator Mac for simulator work. It needs your Apple ID sign-in once and roughly 20 to 25 GB with a simulator. The agents can finish the setup after that. Install Xcode on the designated W-33 ground Mac for development signing and debugger attachment as described in step 4.
 
 **Why:** with it the agents can run the app in a simulator while they work, which is faster. Without it every app build runs on GitHub's Macs, which works and is slower.
 **Send back:** yes or no.
