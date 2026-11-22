@@ -40,7 +40,7 @@ Arrange a tester on Earth with an iPad on iPadOS 26 if available. An iPhone on i
 
 Before G3, arrange a ground device that can run the same-revision development-signed build for W-33. Register it for development provisioning, pair it with Xcode, and enable Developer Mode. If it is also the G3 candidate device, run the development proof before installing and seeding the signed distribution predecessor.
 
-Reserve a second compatible physical ground device that can be erased for the W-33 encrypted-backup restore. Arrange access to the matching TestFlight candidate or register both distribution test devices for W-74. Use two disposable test accounts and synthetic data for the backup.
+Reserve two compatible physical ground devices that can be erased for the W-33 encrypted-backup restores. Use one to make the backup, then restore it onto both. Arrange access to the matching TestFlight candidate or register both distribution test devices for W-74. Use two disposable test accounts and synthetic data for the backup.
 
 ## 4a. Approval for the managed devices
 
@@ -76,7 +76,7 @@ Device access lets the app sync without the website session cookie. The W-20 sec
 
 ## 7a. Log retention policy
 
-Before W-20 finalizes deletion cleanup and before W-71 publishes the privacy policy, decide what happens to a deleted profile's monthly shot logs and canonical dedupe payloads. State what is removed at deletion, what can be retained, and the start event and deadline for any retention period. Include legacy monthly records.
+Before W-20 finalizes deletion cleanup and before W-71 publishes the privacy policy, decide what happens to a deleted profile's monthly shot logs, canonical dedupe reservations, and recoverable shot details in write records and fences. State what is removed at deletion, what can be retained, and the start event and deadline for any retention period. Include legacy monthly records and encoded destination paths.
 
 Send the decision to the organizer to record in `DECISIONS.md`. W-20 implements and tests that rule. W-71 publishes the same rule.
 
