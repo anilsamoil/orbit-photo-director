@@ -19,7 +19,8 @@ Confirm to the organizer that the membership is active and the required agreemen
 Register the app identifier in Apple Developer and enable Sign in with Apple. In App Store Connect:
 
 1. Create the app record with that identifier. "SNAP Orbit Photo Director" is a candidate name.
-2. Under Users and Access, Integrations, App Store Connect API, create a team key with the permissions needed for automatic provisioning, cloud-managed Apple Distribution signing and upload. Download the key file. Apple shows it once. See [cloud-managed signing permissions](https://developer.apple.com/help/account/certificates/cloud-managed-certificates).
+2. Under **Users and Access → Integrations → App Store Connect API**, check whether API access is approved. If access has never been requested, the Account Holder selects **Request Access**, agrees to the terms and submits the request. If approval is pending, wait for Apple’s approval before creating a key. [App Store Connect API setup](https://developer.apple.com/help/app-store-connect/get-started/app-store-connect-api)
+3. Once access is approved, create a team key under **Team Keys** with the permissions needed for automatic provisioning, cloud-managed Apple Distribution signing and upload. Download the key file. Apple shows it once. [Cloud-managed signing permissions](https://developer.apple.com/help/account/certificates/cloud-managed-certificates)
 
 Then on GitHub, in the repository's Settings, Environments: create an environment named `ios-release` and set yourself as its required reviewer. Add these three secrets. W-03 and W-70 read these names:
 
