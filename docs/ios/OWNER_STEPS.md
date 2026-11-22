@@ -85,6 +85,8 @@ Before W-20 finalizes deletion cleanup and before W-71 publishes the privacy pol
 
 Erase associated records by default. For any legally required retention, record the basis, affected records, start event, and exact deadline. Keep retained data outside product reads and erase its keys and values at expiry. Include legacy monthly records and encoded logical destinations.
 
+Before enabling deletion, confirm the inventory of original personal-target imports and derivatives, including bootstrap JSON, spreadsheets, repo copies and operator backups. Record attribution, which copies SNAP controls, and the verified disposition of each. Use only controlled inputs for continued imports. Disclose any historical public copies outside SNAP's erasure control and block them as import or recovery sources. See the [source-copy inventory](ARCHITECTURE.md#personal-target-import-sources).
+
 Send the decision to the organizer to record in `DECISIONS.md`. W-20 implements and verifies the rule. W-71 publishes it.
 
 ## 8. App Store listing and releases
