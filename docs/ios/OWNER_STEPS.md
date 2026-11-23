@@ -73,6 +73,8 @@ When the organizer reports that the device-access design passed its review:
 4. Before enabling opt-in Apple recovery email in Settings, configure the delivery path reviewed in W-20. Keep its credentials in the Worker's secret store and send no values back. Apple enrollment and key-based deletion work without this delivery path.
 5. Approve the Worker deploy.
 
+For the signed enrollment and restore tests, arrange a supported physical FIDO2 security key. For a migrated website account's first native binding, have the cutover operator check the holder in person against the migration record and approve only that holder's attested enrollment attempt. If the check is unavailable, leave the account on the website. See [the recovery-key and migration contract](ARCHITECTURE.md#signed-out-apple-deletion-recovery).
+
 Device access lets the app sync without the website session cookie. The W-20 security review and owner approval are required before deploy.
 
 ## 7. Decisions to send back when convenient
