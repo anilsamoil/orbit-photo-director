@@ -71,7 +71,7 @@ When the organizer reports that the device-access design passed its review:
 2. Approve a Cloudflare Access bypass application for the path `/d/*` on both map hosts and a separate Google enrollment application that admits Google accounts without the website allowlist.
 3. Configure the Sign in with Apple server notification endpoint and confirm the audience with W-20. Enable App Attest and confirm production attestation for the signed ground builds and live Worker.
 4. Before enabling opt-in Apple recovery email in Settings, configure the delivery path reviewed in W-20. Keep its credentials in the Worker's secret store and send no values back. Apple enrollment and key-based deletion work without this delivery path.
-5. Approve the Worker deploy.
+5. Approve the Worker deploy, with first native binding for Apple and Google limited to disposable fixtures until W-60 opens the First binding gate.
 
 For signed enrollment and restore testing, arrange the holder-controlled software credential and a supported physical FIDO2 key to test each offered option. For the first native binding of a migrated website generation or any other existing website generation with private data or grants, have the operator check the holder in person against the migration record or other independent prior evidence of ownership. Approve only that holder's attested enrollment attempt. If the check is unavailable, leave the account on the website. See [the enrollment and recovery contract](ARCHITECTURE.md#signed-out-apple-deletion-recovery).
 
