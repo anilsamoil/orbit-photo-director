@@ -70,7 +70,7 @@ When the organizer reports that the device-access design passed its review:
 1. Configure the server-only Sign in with Apple credential for enrollment and deletion. Use a private key enabled for Sign in with Apple, its key ID, your Apple Developer Team ID, and the app's client ID (bundle ID). Place the private key in the Worker's secret store yourself. The Worker uses this key to sign the client-secret JWT for Apple's token exchange and revocation endpoints. This is a separate key from the App Store Connect upload key. Send no credential values back to the agents.
 2. Approve a Cloudflare Access bypass application for the path `/d/*` on both map hosts and a separate Google enrollment application that admits Google accounts without the website allowlist.
 3. Configure the Sign in with Apple server notification endpoint and confirm the audience with W-20. Enable App Attest and confirm production attestation for the signed ground builds and live Worker.
-4. Configure the recovery email delivery path reviewed in W-20. Keep its credentials in the Worker's secret store and send no values back.
+4. Before enabling opt-in Apple recovery email in Settings, configure the delivery path reviewed in W-20. Keep its credentials in the Worker's secret store and send no values back. Apple enrollment and key-based deletion work without this delivery path.
 5. Approve the Worker deploy.
 
 Device access lets the app sync without the website session cookie. The W-20 security review and owner approval are required before deploy.
@@ -87,7 +87,7 @@ Before W-20 finalizes deletion cleanup and before W-71 publishes the privacy pol
 
 Erase associated records by default. For any legally required retention, record the basis, affected records, start event, and exact deadline. Keep retained data outside product reads and erase its keys and values at expiry. Include legacy monthly records and encoded logical destinations.
 
-Before enabling deletion, confirm the inventory of original personal-target imports and derivatives, including bootstrap JSON, spreadsheets, repo copies and operator backups. Record attribution, which copies SNAP controls, and the verified disposition of each. Use only controlled inputs for continued imports. Disclose any historical public copies outside SNAP's erasure control and block them as import or recovery sources. See the [source-copy inventory](ARCHITECTURE.md#personal-target-import-sources).
+Before enabling deletion, confirm the inventory of original personal-target imports and derivatives, including bootstrap JSON, spreadsheets, repo copies and operator backups. Record attribution, which copies SNAP controls, and the verified disposition of each. Use only controlled inputs for continued imports. For identifiable roster data proposed for iOS, confirm the private inventory records direct collection or explicit consent and permission for the proposed use. Exclude unverified rows and derivatives from iOS imports. Disclose any historical public copies outside SNAP's erasure control and block them as import or recovery sources. See the [source-copy inventory](ARCHITECTURE.md#personal-target-import-sources).
 
 Send the decision to the organizer to record in `DECISIONS.md`. W-20 implements and verifies the rule. W-71 publishes it.
 
