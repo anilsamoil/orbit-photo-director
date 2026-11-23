@@ -37,7 +37,7 @@ The key authenticates Xcode on the hosted runner. Xcode provisions the build and
 Arrange a tester on Earth with an iPad on iPadOS 26 if available. An iPhone on iOS 26 can serve as the ground fallback with the simulator checks in G3. The tester runs W-03, G3 and the App Store upgrade at G6. Share only the ground device model, OS version and test outcome in the public records.
 
 - **TestFlight.** Add the tester as an App Store Connect user and include them in an internal tester group. Internal testing can start without Beta App Review.
-- **Ad hoc (W-74).** If the tester cannot use TestFlight, privately collect their device identifier, register the device in Apple Developer, and make it available to the ad hoc provisioning profile. Confirm registration to the organizer without sharing the identifier. The tester installs and replaces builds through the W-74 delivery path.
+- **Ad hoc (W-74).** Before W-03 and G1, privately collect the identifiers of both physical ground devices, including the second device reserved for the W-33 restore. Register both with Apple Developer and include them in the ad hoc provisioning profile. Pair each with a Mac and enable Developer Mode under **Settings → Privacy & Security** before its first W-74 install. Confirm the restart and on-device prompt. Record readiness for both devices without sharing identifiers. If HTTPS installation is unavailable, install the same signed W-74 `.ipa` from a Mac using Device Hub or Apple Configurator. [Developer Mode](https://developer.apple.com/documentation/xcode/enabling-developer-mode-on-a-device) · [Registered-device distribution](https://developer.apple.com/documentation/xcode/distributing-apps-to-your-development-devices)
 
 ### W-33 development signing and debugger
 
@@ -70,7 +70,8 @@ When the organizer reports that the device-access design passed its review:
 1. Configure the server-only Sign in with Apple credential for enrollment and deletion. Use a private key enabled for Sign in with Apple, its key ID, your Apple Developer Team ID, and the app's client ID (bundle ID). Place the private key in the Worker's secret store yourself. The Worker uses this key to sign the client-secret JWT for Apple's token exchange and revocation endpoints. This is a separate key from the App Store Connect upload key. Send no credential values back to the agents.
 2. Approve a Cloudflare Access bypass application for the path `/d/*` on both map hosts and a separate Google enrollment application that admits Google accounts without the website allowlist.
 3. Configure the Sign in with Apple server notification endpoint and confirm the audience with W-20. Enable App Attest and confirm production attestation for the signed ground builds and live Worker.
-4. Approve the Worker deploy.
+4. Configure the recovery email delivery path reviewed in W-20. Keep its credentials in the Worker's secret store and send no values back.
+5. Approve the Worker deploy.
 
 Device access lets the app sync without the website session cookie. The W-20 security review and owner approval are required before deploy.
 
@@ -95,7 +96,7 @@ Send the decision to the organizer to record in `DECISIONS.md`. W-20 implements 
 ### Every candidate
 
 1. Approve the release job when the organizer supplies the candidate. The ground tester installs through TestFlight or W-74 and runs G3.
-2. After authenticated W-72 (G2) and G3 pass for that candidate, select it in App Store Connect. Choose manual release. Set the Privacy Policy field to the public URL tested in W-71 and verify it matches the in-app link. Provide W-71's reviewer access in Review Notes.
+2. After authenticated W-72 (G2), G3 and W-71's submission checks pass for that candidate, select it in App Store Connect. Choose manual release. Set the Privacy Policy field to the public URL tested in W-71 and verify it matches the in-app link. Provide W-71's reviewer access in Review Notes.
 
 ### First listing
 
