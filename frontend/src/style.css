@@ -4732,7 +4732,7 @@ body:has(> #view.view-map):not(.map-chrome-hidden) {
   line-height: 1.2;
 }
 
-@container (min-width: 261px) {
+@container (width > 260px) {
   .maplibregl-popup-content:has(> .dropped-pin-popup) .maplibregl-popup-close-button {
     display: flex;
     align-items: flex-start;
