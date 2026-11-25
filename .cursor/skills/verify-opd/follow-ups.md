@@ -56,12 +56,6 @@ Recorded after #368 (`174d761`).
 
 Recorded after #370 (`d9516ca`).
 
-## Product gap: the wrap case still uses the old 60-character title
-
-`frontend/test/pass-row-fit.test.ts` line 315 is still `keeps a 60-character unbroken heading inside the inspector`. #361 (`55295b0`) added `keeps a 60-character heading clear of a fully reachable Close at and above 260px` and left the earlier title in place. The earlier case checks wrap of `heading60` inside the inspector. Close clearance, the 44 by 44 box, and the 260 and 260.5 caps are the later case. This skill cites the later title. A maintain run does not rename the product test.
-
-Recorded after #361 (`55295b0`).
-
 ## Product gap: pointer focus draws no ring, and a hazard tap can miss (405)
 
 After a pointer, focus lands on the brief summary and `:focus-visible` is false, so no ring is painted. Measured false at 1024 by 768, 402 by 874, 874 by 402, and 1440 by 900. `launch-planner.mjs` records `focus-visible 0` and does not fail.
@@ -69,3 +63,13 @@ After a pointer, focus lands on the brief summary and `:focus-visible` is false,
 A clear-point tap or click on a published hazard polygon is recorded and is not a pass/fail. On this pass a click opened the popup at 1440 by 900, and a tap opened it at 874 by 402. A tap at 1024 by 768 left it closed. At 402 by 874 the framed polygons had no clear point (`hazard-popup none`). Do not fail the drive when that popup stays closed.
 
 Recorded after #370 (`d9516ca`).
+
+## Resolved
+
+### Product gap: the wrap case still uses the old 60-character title
+
+`frontend/test/pass-row-fit.test.ts` line 315 is still `keeps a 60-character unbroken heading inside the inspector`. #361 (`55295b0`) added `keeps a 60-character heading clear of a fully reachable Close at and above 260px` and left the earlier title in place. The earlier case checks wrap of `heading60` inside the inspector. Close clearance, the 44 by 44 box, and the 260 and 260.5 caps are the later case. This skill cites the later title. A maintain run does not rename the product test.
+
+Recorded after #361 (`55295b0`).
+
+Resolved by renaming the earlier product test to `wraps a 60-character unbroken heading inside the inspector` to match its wrap assertion.
