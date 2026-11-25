@@ -78,7 +78,7 @@ Wave 2   W-42   W-50   W-33 (needs W-50)   W-61   W-62   W-45 (needs W-43): deta
          W-60 (needs W-21, W-32, W-12, W-41, W-50)            then W-72 (G2)
 Wave 3   W-70 (needs W-03, W-63, G2) → G3 (TestFlight or W-74) → W-71 submission → G6
          G3 and G6 → G7 (owner request, NASA approval and install) → G4 → G5 → W-73
-After G2 W-44 globe view (first update after release 1, unless the owner pulls it in)
+After G2 W-44 globe view (first update after release 1, owner decision 2026-11-25)
 Later    W-80 and up, each with a measured reason
 ```
 
@@ -315,7 +315,7 @@ Run this check on the actual `.xcarchive` selected for every App Store Connect u
 - **Traps.** Do not bulk-request GIBS tiles to build the pack; if a source must come from GIBS, follow GIBS's bulk-download guidance and record it. No Esri imagery. The pack never counts against the 512 MiB tile store cap.
 
 ### W-44 Globe view (M)
-- **Needs:** W-41, W-43. Scheduled after G2 as the first update, unless the owner pulls it into release 1.
+- **Needs:** W-41, W-43. Scheduled after G2 as the first update after release 1 (owner decision, 2026-11-25).
 - **Change.** In the iOS host, Map opens on MapLibre GL JS's globe projection and becomes the flat map as it zooms in. Draw the ISS track and marker, terminator, night lights, targets, passes and launch corridors on the globe from local data. Check every map feature on the globe; fix it there or keep it on the flat map.
 - **Done when.** Offline, the globe shows the whole Earth from the baseline and the Earth pack, and the ISS marker moves along its track across the antimeridian without a gap. Every map feature has a recorded globe result. The website's map contract tests are unchanged and green.
 

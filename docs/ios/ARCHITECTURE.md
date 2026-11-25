@@ -695,4 +695,4 @@ These extend the rules in `AGENTS.md`. Each gets a test that fails with the file
 
 ## Not in release 1
 
-The globe view (W-44), unless the owner pulls it into release 1. Swift orbit math. Widgets and the Lock Screen countdown. Native screens. Notification buttons for Shoot and Skip. Server push. Device-to-device plan sharing. Updating the web bundle without a new build. A longer plan from the generator. Android.
+The globe view (W-44), which is the first update after release 1. Swift orbit math. Widgets and the Lock Screen countdown. Native screens. Notification buttons for Shoot and Skip. Server push. Device-to-device plan sharing. Updating the web bundle without a new build. A longer plan from the generator. Android.
