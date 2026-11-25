@@ -36,4 +36,4 @@ Planned on 2026-11-15. No app code exists yet.
 
 ## The one line that defines done for release 1
 
-Cold-launch the release candidate offline on the flat map. With the packs installed, it renders zoom 8 anywhere from the W-43 Earth pack, verified at ten locations across continents and oceans, and renders zoom 12 from a W-45 detail pack at a covered verified public target. The ISS prediction moves, a target remains usable, an alert appears while locked and a recorded shot survives restart and uploads once.
+The bundled baseline and W-43 Earth pack together cover the Web Mercator grid at zoom 0 to 8, reaching about ±85.05° latitude. The poles beyond that limit are not covered. The W-43 build checks the full tile inventory and payload integrity. Cold-launch the release candidate offline on the flat map with the packs installed. Check rendering at zoom 8 from the Earth pack at ten locations across continents and oceans, and at zoom 12 from a W-45 detail pack at a covered verified public target. The ISS prediction moves, a target remains usable, an alert appears while locked and a recorded shot survives restart and uploads once.
