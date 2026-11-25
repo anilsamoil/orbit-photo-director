@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from .ascent import (
@@ -12,7 +13,7 @@ from .ascent import (
     plume_angle_score,
     rocket_sun_state,
 )
-from .ascent_profiles import match_rocket
+from .ascent_profiles import AscentProfile, match_rocket
 from .launch_assessment import PLANNING_VALID_SECONDS, build_planning_assessment
 from .launch_data import (
     SCHEDULE_STATUS_ABBREVS,
@@ -27,9 +28,11 @@ from .launch_direction import (
     Direction,
     DirectionKind,
     IssPlaneDirection,
+    ModeledDirection,
     NoDirection,
     destination_from_ll2,
     direction_for,
+    model_direction,
 )
 from .launch_evidence import (
     HORIZON_HOURS,
@@ -47,6 +50,8 @@ from .launch_opportunities import (
     sample_directed,
     sample_liftoff,
 )
+from .launch_orbit import inclination_from_ll2
+from .launch_scan import LiftoffScan, ascent_block, scan_modeled_liftoffs
 from .orbit import EARTH_RADIUS_KM, TLE, Position, _ensure_utc, great_circle_km, propagate
 
 SCHEDULE_LEASE_SECONDS = 75 * 60
@@ -68,22 +73,26 @@ _LIGHT = {
     "pad_night": "Night pad",
 }
 _TIERS = ("shot", "likely", "watch", "unassessed", "none")
-_UNACTIONABLE_PROVENANCE = frozenset({
-    "SOURCE_AGE_MTIME_ONLY",
-    "SOURCE_AGE_UNKNOWN",
-    "REPLAY_SOURCE_MISMATCH",
-})
-_UNCERTAIN_REASONS = frozenset({
-    "VIEW_UNCONFIRMED",
-    "TIMING_UNCONFIRMED",
-    "GEOMETRY_INVALID",
-    "EVALUATION_INCOMPLETE",
-    "PROFILE_UNKNOWN",
-    "SOURCE_UNAVAILABLE",
-    "EPHEMERIS_UNAVAILABLE",
-    "EPHEMERIS_OUTSIDE_HORIZON",
-    "WINDOW_UNKNOWN",
-})
+_UNACTIONABLE_PROVENANCE = frozenset(
+    {
+        "SOURCE_AGE_MTIME_ONLY",
+        "SOURCE_AGE_UNKNOWN",
+        "REPLAY_SOURCE_MISMATCH",
+    }
+)
+_UNCERTAIN_REASONS = frozenset(
+    {
+        "VIEW_UNCONFIRMED",
+        "TIMING_UNCONFIRMED",
+        "GEOMETRY_INVALID",
+        "EVALUATION_INCOMPLETE",
+        "PROFILE_UNKNOWN",
+        "SOURCE_UNAVAILABLE",
+        "EPHEMERIS_UNAVAILABLE",
+        "EPHEMERIS_OUTSIDE_HORIZON",
+        "WINDOW_UNKNOWN",
+    }
+)
 
 
 def build_launch_catalog(
@@ -138,7 +147,14 @@ def build_launch_catalog(
     chosen = sorted(near, key=lambda pair: (pair[0].t0, pair[0].id))[:MAX_EVENTS]
     for launch, row in chosen:
         item, finished = _item(
-            launch, row, tle, now, fetched_at, item_reasons, budget, claims.get(launch.id),
+            launch,
+            row,
+            tle,
+            now,
+            fetched_at,
+            item_reasons,
+            budget,
+            claims.get(launch.id),
             include_pad=include_pad,
         )
         evaluated += int(finished)
@@ -197,10 +213,14 @@ def _item(
     if launch.status_abbrev not in SCHEDULE_STATUS_ABBREVS:
         reasons.append("LAUNCH_UNCONFIRMED")
     destination_iss = destination_from_ll2(raw) is Destination.ISS
+    inclination = inclination_from_ll2(raw, launch.site_lat, launch.site_lon)
+    profile = match_rocket({"full_name": launch.rocket_type})
     g1 = _g1(launch)
     liftoffs = _diagnostic_liftoffs(launch)
     shots: list[dict] = []
     direction: Direction = NoDirection()
+    scan: LiftoffScan | None = None
+    has_iss_plane = False
     finished = True
     if g1 and tle is not None:
         if budget.clock() >= budget.deadline:
@@ -209,19 +229,49 @@ def _item(
         else:
             try:
                 shots, direction = _shots(launch, tle, destination_iss, reasons, liftoffs)
+                if isinstance(direction, NoDirection) and destination_iss and profile is not None:
+                    has_iss_plane = any(
+                        isinstance(direction_for(
+                            tle, when, launch.site_lat, launch.site_lon, Destination.ISS,
+                        ), IssPlaneDirection)
+                        for when in liftoffs
+                    )
+                if isinstance(direction, NoDirection) and not has_iss_plane:
+                    direction = model_direction(
+                        launch.site_lat,
+                        launch.site_lon,
+                        inclination,
+                    )
+                    if isinstance(direction, ModeledDirection) and profile is not None:
+                        shots, direction, scan = _modeled_shots(
+                            launch, tle, profile, direction, budget,
+                        )
+                        if scan.incomplete:
+                            reasons.append("EVALUATION_INCOMPLETE")
+                            finished = False
             except (ValueError, RuntimeError, ArithmeticError):
                 reasons.append("GEOMETRY_INVALID")
                 shots = []
                 direction = NoDirection()
     elif g1 and tle is None:
         reasons.append("EPHEMERIS_MISSING")
-    if direction.kind is DirectionKind.NONE:
+    if isinstance(direction, NoDirection) and not direction.fans and not has_iss_plane:
+        direction = model_direction(
+            launch.site_lat,
+            launch.site_lon,
+            inclination,
+        )
+    if not isinstance(direction, IssPlaneDirection):
         reasons.append("TRAJECTORY_UNVERIFIED")
+        if inclination is None:
+            reasons.append("ORBIT_UNKNOWN")
+        if profile is None:
+            reasons.append("PROFILE_UNKNOWN")
+    if isinstance(direction, ModeledDirection):
+        reasons.extend(("DIRECTION_MODELED", *direction.reasons))
 
     age_h = None if tle is None else abs((launch.t0 - tle.epoch).total_seconds()) / 3600.0
-    capture_ages = [
-        _capture_age_h(shot, tle.epoch) for shot in shots if tle is not None
-    ]
+    capture_ages = [_capture_age_h(shot, tle.epoch) for shot in shots if tle is not None]
     checked_ages = list(capture_ages)
     if age_h is not None:
         checked_ages.append(age_h)
@@ -234,7 +284,12 @@ def _item(
     blocked = {"GEOMETRY_INVALID", "EVALUATION_INCOMPLETE", "EPHEMERIS_MISSING"}
     stale = tle is None or age_h is None or age_h > SHOT_TLE_AGE_H
     if (
-        g1 and not g2 and finished and not stale and not blocked.intersection(reasons)
+        g1
+        and not g2
+        and finished
+        and not stale
+        and not blocked.intersection(reasons)
+        and not isinstance(direction, ModeledDirection)
         and _can_exclude(launch, g1, g2, finished, age_h, reasons)
     ):
         outcome = _window_outcome(launch, tle, now, fetched_at, budget, source_reasons)
@@ -250,22 +305,45 @@ def _item(
 
     usable = _receipt_usable(now, fetched_at, source_reasons)
     tier = _tier(
-        launch, g1, shots, tle.epoch if tle is not None else None,
-        fresh_negative, finished, usable, liftoffs,
+        launch,
+        g1,
+        shots,
+        tle.epoch if tle is not None else None,
+        fresh_negative,
+        finished,
+        usable,
+        liftoffs,
     )
     if _keeps_shot(
-        launch, raw, tier, now, fetched_at, source_reasons, shots, finished, reasons, claim,
+        launch,
+        raw,
+        tier,
+        now,
+        fetched_at,
+        source_reasons,
+        shots,
+        finished,
+        reasons,
+        claim,
     ):
         tier = "shot"
     elif (
-        tier == "likely" and tle is not None
+        tier == "likely"
+        and tle is not None
         and not _covers(shots, liftoffs, tle.epoch, LIKELY_SCORE_LOW, LIKELY_TLE_AGE_H, False)
     ):
         if blocked.intersection(reasons):
             tier = "watch"
         else:
             reasons.append("FORECAST_EPHEMERIS")
-    why = _why(tier, shots, reasons)
+    if isinstance(direction, ModeledDirection):
+        if tier == "shot":
+            tier = "likely"
+        elif tier == "none":
+            tier = "watch"
+    why = _why(tier, shots[:1] if isinstance(direction, ModeledDirection) else shots, reasons)
+    if scan is not None:
+        why = _scan_summary(scan, shots) + " " + why
     if "FORECAST_EPHEMERIS" in reasons:
         why = "Likely forecast — recheck with a fresh ISS orbit. " + why
     for shot in shots:
@@ -282,6 +360,10 @@ def _item(
         "reasons": sorted(set(reasons)),
         "shots": shots,
     }
+    if isinstance(direction, (ModeledDirection, NoDirection)):
+        ascent = ascent_block(direction, profile, launch)
+        if ascent is not None:
+            item["ascent"] = ascent
     item["revision"] = hashlib.sha256(canonical_bytes(item)).hexdigest()[:24]
     return item, finished
 
@@ -297,8 +379,14 @@ def _can_exclude(
     precision = (launch.time_precision or "").lower()
     capped = launch.status_abbrev == "TBC" or precision == "hour"
     return bool(
-        g1 and not g2 and finished and not capped and age_h is not None and age_h <= SHOT_TLE_AGE_H
-        and "GEOMETRY_INVALID" not in reasons and "EVALUATION_INCOMPLETE" not in reasons
+        g1
+        and not g2
+        and finished
+        and not capped
+        and age_h is not None
+        and age_h <= SHOT_TLE_AGE_H
+        and "GEOMETRY_INVALID" not in reasons
+        and "EVALUATION_INCOMPLETE" not in reasons
         and launch.status_abbrev in {"Go", "Confirmed"}
         and precision in {"second", "minute"}
     )
@@ -428,8 +516,11 @@ def _keeps_shot(
     if now >= _liftoff(launch):
         return False
     if (
-        launch.window_start is None or launch.window_end is None or not finished
-        or "GEOMETRY_INVALID" in reasons or "EVALUATION_INCOMPLETE" in reasons
+        launch.window_start is None
+        or launch.window_end is None
+        or not finished
+        or "GEOMETRY_INVALID" in reasons
+        or "EVALUATION_INCOMPLETE" in reasons
         or "EPHEMERIS_MISSING" in reasons
     ):
         return False
@@ -447,10 +538,11 @@ def _keeps_shot(
 def _g1(launch: Launch) -> bool:
     precision = (launch.time_precision or "").lower()
     start, end = launch.window_start, launch.window_end
-    if (
-        launch.status_abbrev not in SCHEDULE_STATUS_ABBREVS
-        or precision not in {"second", "minute", "hour"}
-    ):
+    if launch.status_abbrev not in SCHEDULE_STATUS_ABBREVS or precision not in {
+        "second",
+        "minute",
+        "hour",
+    }:
         return False
     if start is None or end is None or end < start or launch.t0 < start or launch.t0 > end:
         return False
@@ -479,12 +571,14 @@ def _tier(
         return "none" if fresh_negative else "watch"
     concrete = launch.status_abbrev in {"Go", "Confirmed"} and precision in {"second", "minute"}
     if (
-        concrete and epoch is not None
+        concrete
+        and epoch is not None
         and _covers(shots, liftoffs, epoch, SHOT_SCORE_LOW, SHOT_TLE_AGE_H, True)
     ):
         return "shot"
     if (
-        concrete and epoch is not None
+        concrete
+        and epoch is not None
         and _covers(shots, liftoffs, epoch, LIKELY_SCORE_LOW, LIKELY_TLE_AGE_H, False)
     ):
         return "likely"
@@ -563,7 +657,11 @@ def _shots(
         if destination_iss and profile is not None:
             try:
                 direction = direction_for(
-                    tle, liftoff, launch.site_lat, launch.site_lon, Destination.ISS,
+                    tle,
+                    liftoff,
+                    launch.site_lat,
+                    launch.site_lon,
+                    Destination.ISS,
                 )
             except (ValueError, RuntimeError, ArithmeticError):
                 reasons.append("GEOMETRY_INVALID")
@@ -595,8 +693,11 @@ def _diagnostic_liftoffs(launch: Launch) -> tuple[datetime, ...]:
     """Window start, NET, and window end. The best envelope is one of these."""
     start, end = launch.window_start, launch.window_end
     if (
-        start is None or end is None or end < start
-        or launch.t0 < start or launch.t0 > end
+        start is None
+        or end is None
+        or end < start
+        or launch.t0 < start
+        or launch.t0 > end
         or (end - start).total_seconds() > MAX_LIFTOFF_SECONDS
     ):
         return ()
@@ -608,8 +709,83 @@ def _diagnostic_liftoffs(launch: Launch) -> tuple[datetime, ...]:
     return tuple(found)
 
 
+def _modeled_shots(
+    launch: Launch,
+    tle: TLE,
+    profile: AscentProfile,
+    direction: ModeledDirection,
+    budget: EvaluationBudget,
+) -> tuple[list[dict], ModeledDirection, LiftoffScan]:
+    scan = scan_modeled_liftoffs(launch, tle, profile, direction, budget)
+    candidates: list[dict] = []
+    for sample in scan.samples:
+        if budget.clock() >= budget.deadline:
+            scan = replace(scan, incomplete=True)
+            break
+        for span in sample.scenario.spans:
+            if not budget.take() or not budget.take():
+                scan = replace(scan, incomplete=True)
+                break
+            shot = _envelope(
+                span,
+                sample.scenario,
+                tle,
+                sample.direction,
+                sample.scenario.liftoff,
+                launch.t0,
+            )
+            if shot is None:
+                raise ValueError("modeled envelope geometry is invalid")
+            candidates.append(shot)
+    ascents = [shot for shot in candidates if shot["subject"] == "ascent"]
+    best = min(
+        ascents or candidates,
+        key=lambda shot: (-shot["score"]["low"], shot["slant_km"], shot["liftoff"]),
+        default=None,
+    )
+    keep = {utc(when) for when in _diagnostic_liftoffs(launch)}
+    if best is not None:
+        keep.add(best["liftoff"])
+        direction = replace(direction, azimuth_deg=best["direction"]["azimuth_deg"])
+    retained = [shot for shot in candidates if shot["liftoff"] in keep and shot is not best]
+    return ([best] if best is not None else []) + retained, direction, scan
+
+
+def _scan_summary(scan: LiftoffScan, shots: list[dict]) -> str:
+    visible = sorted(
+        {
+            sample.scenario.liftoff
+            for sample in scan.samples
+            if any(span.subject is Subject.ASCENT for span in sample.scenario.spans)
+        }
+    )
+    if scan.incomplete:
+        return (
+            f"Modeled scan incomplete after {scan.checked} of {scan.total} liftoff minutes. "
+            "Unsampled liftoffs remain unknown."
+        )
+    if visible:
+        best = next(shot for shot in shots if shot["subject"] == "ascent")
+        when = _parse_iso8601_z(best["liftoff"]).strftime("%H:%M:%S")
+        return (
+            f"Modeled ascent in view for {len(visible)} of {scan.checked} liftoff minutes sampled. "
+            f"Best liftoff {when} UTC. Estimate; heading uncertainty has not been sampled."
+        )
+    if scan.prescreened == scan.checked:
+        return f"Modeled ascent stays out of view for all {scan.checked} liftoff minutes sampled."
+    return (
+        "Modeled ascent stays below the horizon or beyond 3500 km "
+        f"for all {scan.checked} liftoff minutes sampled."
+    )
+
+
 def _envelope(
-    span, scenario, tle: TLE, direction: Direction, evaluated_at: datetime, net: datetime,
+    span,
+    scenario,
+    tle: TLE,
+    direction: Direction,
+    evaluated_at: datetime,
+    net: datetime,
 ) -> dict | None:
     sight = span.closest
     try:
@@ -866,7 +1042,9 @@ def _direction_block(direction: Direction) -> dict:
         "kind": direction.kind.value,
         "azimuth_deg": azimuth,
         "source": direction.source,
-        "off_plane_deg": round(direction.off_plane_deg, 4),
+        "off_plane_deg": (
+            None if direction.off_plane_deg is None else round(direction.off_plane_deg, 4)
+        ),
     }
 
 
@@ -880,7 +1058,12 @@ def _window_outcome(
 ) -> dict:
     try:
         assessment = build_planning_assessment(
-            launch, tle, now, fetched_at, budget, source_reasons=source_reasons,
+            launch,
+            tle,
+            now,
+            fetched_at,
+            budget,
+            source_reasons=source_reasons,
         )
     except (ValueError, RuntimeError, ArithmeticError):
         return {"verdict": "unknown", "reason": "GEOMETRY_INVALID"}

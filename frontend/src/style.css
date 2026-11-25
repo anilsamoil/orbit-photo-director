@@ -412,10 +412,18 @@ main.view-map { padding-top: 0; }
 .card.launch-tier {
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto;
-  grid-template-areas: "name" "summary" "reason" "actions";
+  grid-template-areas: "name" "summary" "reason" "plan" "actions";
   overflow-wrap: anywhere;
 }
 .launch-tier > p { grid-area: reason; }
+.launch-tier > .launch-plan { grid-area: plan; }
+.launch-plan { display: grid; gap: 0.3rem; font-size: 0.86rem; line-height: 1.4; }
+.launch-plan > p { margin: 0; }
+.launch-plan [data-shot-plan="title"] { font-weight: 600; }
+.launch-plan [data-shot-plan="title"] ~ [data-shot-plan="title"] { margin-top: 0.5rem; }
+.launch-plan [data-shot-plan="honesty"], .launch-plan [data-shot-plan="more"] { color: var(--text-dim); }
+.launch-plan .launch-fact { display: block; }
+.launch-plan .launch-fact-label { margin-right: 0.4em; }
 .launch-name {
   background: none;
   border: 0;
@@ -1215,6 +1223,22 @@ body:not(.shotlist-bar-visible):has(> #view.view-map) > #status-banner:has(.bann
   border-radius: 0;
   z-index: 0;
 }
+.view-map .launch-hazard-caption {
+  position: absolute;
+  z-index: 4;
+  left: calc(12px + env(safe-area-inset-left, 0px));
+  bottom: calc(var(--map-command-height) + 12px);
+  max-width: min(22rem, calc(100% - 24px - env(safe-area-inset-left, 0px)));
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(7, 10, 13, 0.82);
+  color: #ffd45c;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  pointer-events: none;
+}
+.view-map .launch-hazard-caption[hidden] { display: none; }
 .view-map .map-toolbar {
   position: absolute;
   top: calc(var(--topbar-height) + 5px);
@@ -1847,6 +1871,16 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   color: var(--text-dim);
   font-size: 0.7rem;
   margin-left: auto;
+}
+.satellite-picker-notes .sat-row-note {
+  margin-top: 0.3rem;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.satellite-picker-notes .sat-row-note.error {
+  color: #ff7070;
 }
 .satellite-picker-custom {
   margin-top: 0.5rem;
@@ -3915,6 +3949,49 @@ body.map-chrome-hidden:has(#view.view-map) .help-fab,
   overflow-wrap: anywhere;
 }
 
+[data-iss-launch-verdict],
+[data-iss-launch-plan],
+[data-iss-launch-note] {
+  margin-top: 0.3rem;
+}
+
+[data-iss-launch-plan] {
+  display: grid;
+  gap: 0.15rem;
+}
+
+[data-iss-launch-card] [data-iss-launch-plan] p,
+[data-iss-launch-card] [data-iss-launch-note] {
+  font-size: 0.76rem;
+  font-weight: 400;
+}
+
+[data-iss-launch-plan-open] {
+  min-height: 44px;
+  margin-top: 0.35rem;
+}
+
+[data-iss-launch-plan-link] {
+  cursor: pointer;
+}
+
+[data-iss-launch-plan-link]::after {
+  content: ' \203A';
+  color: #ffd45c;
+}
+
+[data-iss-scene][data-iss-short] [data-iss-launch-plan],
+[data-iss-scene][data-iss-launch-place='below'] [data-iss-launch-verdict],
+[data-iss-scene][data-iss-launch-place='below'] [data-iss-launch-plan],
+[data-iss-scene][data-iss-launch-place='below'] [data-iss-launch-note],
+[data-iss-scene][data-iss-launch-place='below'] [data-iss-launch-plan-open],
+[data-iss-scene][data-iss-launch-place='over'] [data-iss-launch-verdict],
+[data-iss-scene][data-iss-launch-place='over'] [data-iss-launch-plan],
+[data-iss-scene][data-iss-launch-place='over'] [data-iss-launch-note],
+[data-iss-scene][data-iss-launch-place='over'] [data-iss-launch-plan-open] {
+  display: none;
+}
+
 [data-iss-launch-name] {
   font-size: 1rem;
 }
@@ -5026,6 +5103,22 @@ body.map-slot-launch .view-map #map-launch-coverage {
   top: var(--slot-launch-y);
   width: var(--slot-launch-w);
   max-height: var(--slot-launch-h);
+}
+
+#map-pane:has(#launch-hazard-caption:not([hidden])) #map-launch-coverage {
+  max-height: min(
+    var(--slot-launch-h, 22rem),
+    calc(100% - var(--slot-launch-y, calc(var(--topbar-height) + 71px)) - var(--map-command-height) - 4.75rem)
+  );
+}
+
+.view-map #map-launch-coverage [data-hazard-note] {
+  overflow-wrap: anywhere;
+}
+
+.view-map #launch-hazard-caption:not([hidden]) {
+  width: max-content;
+  max-width: min(22rem, calc(100% - 128px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)));
 }
 
 body.map-slot-picker .view-map .satellite-picker-panel {

@@ -50,7 +50,7 @@ import {
 } from './features/iss-marker';
 import { groundTrackFeatures } from './features/ground-track/geometry';
 import { refreshLabels, resetLabelsForTest } from './features/labels';
-import { applyTracked } from './features/tracked';
+import { applyPublishedOrbits } from './features/satellites';
 import {
   ascentPadLayer,
   ascentTrajectoryLayer,
@@ -58,10 +58,13 @@ import {
   bindExitFollow,
   bindLaunchStore,
   bindLaunchTargets,
+  launchHazardFillLayer,
+  launchHazardOutlineLayer,
   noteLaunchCore,
   refreshAscentTrajectorySource,
   resetLaunchForTest,
   setLaunchPasses,
+  syncLaunchHazards,
   syncMapLaunchMode,
 } from './features/launch-corridor';
 import {
@@ -130,7 +133,9 @@ export type { TargetHit, TargetPopupProps } from './features/targets';
 export {
   buildAscentFeatures,
   buildLaunchMapFeatures,
+  clearLaunchOnMap,
   focusLaunchOnMap,
+  isLaunchShownOnMap,
   syncMapLaunchMode as _syncMapLaunchModeForTest,
 } from './features/launch-corridor';
 export {
@@ -417,6 +422,9 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   core.ensureLayer(SUBSOLAR_LAYER);
 
   refreshAscentTrajectorySource();
+  syncLaunchHazards(core.clock.now());
+  core.ensureLayer(launchHazardFillLayer());
+  core.ensureLayer(launchHazardOutlineLayer());
   core.ensureLayer(ascentTrajectoryLayer());
   if (!core.hasLayer('ascent-pad-layer')) {
     core.ensureLayer(ascentPadLayer());
@@ -425,10 +433,11 @@ export async function renderMap(manifest: Manifest): Promise<void> {
   syncMapLaunchMode();
   bindLaunchStore();
   syncIssMarker(core);
-  applyTracked(core, trackedRecords);
+  applyPublishedOrbits(trackedRecords);
 
   if (isFirstInit) {
     clock.every(1000, (nowMs) => {
+      syncLaunchHazards(nowMs);
       if (!core || !hasIssMarker() || !scrubTrack()) return;
       if (maybeSnapToLive(nowMs)) return;
       tickIssMarker(nowMs);

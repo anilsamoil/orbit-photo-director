@@ -1,0 +1,54 @@
+<?xml version='1.0' encoding='utf-8'?>
+<XNOTAM-Update version="0.1" origin="synthetic-regression">
+  <Group>
+    <Add>
+      <Not>
+        <NotUid>
+          <dateIndexYear>2026</dateIndexYear>
+          <noSeqNo>7991</noSeqNo>
+          <txtLocalName>261113 VANDENBERG SPACE FORCE BASE Launch Vehicle</txtLocalName>
+        </NotUid>
+        <codeFacility>ZLA</codeFacility>
+        <txtNameCoordFacility>LOS ANGELES</txtNameCoordFacility>
+        <TfrNot>
+          <codeType>91.143</codeType>
+          <TFRAreaGroup>
+            <aseTFRArea>
+              <txtName>Area A</txtName>
+              <ScheduleGroup>
+                <dateEffective>2026-11-13T22:30:00</dateEffective>
+                <dateExpire>2026-11-14T00:40:00</dateExpire>
+              </ScheduleGroup>
+            </aseTFRArea>
+            <abdMergedArea>
+              <Avx>
+                <codeType>GRC</codeType>
+                <geoLat>34.75N</geoLat>
+                <geoLong>120.75W</geoLong>
+              </Avx>
+              <Avx>
+                <codeType>GRC</codeType>
+                <geoLat>34.75N</geoLat>
+                <geoLong>120.5W</geoLong>
+              </Avx>
+              <Avx>
+                <codeType>GRC</codeType>
+                <geoLat>34.5N</geoLat>
+                <geoLong>120.5W</geoLong>
+              </Avx>
+              <Avx>
+                <codeType>GRC</codeType>
+                <geoLat>34.5N</geoLat>
+                <geoLong>120.75W</geoLong>
+              </Avx>
+            </abdMergedArea>
+            <InstructionsGroup>
+              <txtInstr>EXCLUDING AIRSPACE BEYOND 12 MILE COASTAL LIMIT OVER INTERNATIONAL WATERS.</txtInstr>
+            </InstructionsGroup>
+          </TFRAreaGroup>
+        </TfrNot>
+        <txtDescrUSNS>!FDC 6/7991 ZLA CA..AIRSPACE VANDENBERG SPACE FORCE BASE, CA..TEMPORARY FLIGHT RESTRICTIONS. PURSUANT TO 14 CFR SECTION 91.143, SPACE OPS AREA, ACFT OPS ARE PROHIBITED WI AN AREA DEFINED AS 344500N1204500W TO 344500N1203000W TO 343000N1203000W TO 343000N1204500W TO POINT OF ORIGIN SFC-UNL EFFECTIVE 2611132230 UTC (1430 LOCAL 11/13/26) UNTIL 2611140040 UTC (1640 LOCAL 11/13/26). EXCLUDING AIRSPACE BEYOND 12NM COASTAL LIMIT OVER INTERNATIONAL WATERS. THIS AREA ENCOMPASSES R2516 AND PORTIONS OF W532. ADDITIONAL WARNING AND RESTRICTED AREAS WILL BE ACT. PILOTS MUST CONSULT ALL NOTAMS REGARDING THESE OPS AND MAY CTC ZLA FOR CURRENT AIRSPACE STATUS. LOS ANGELES /ZLA/ ARTCC TEL 661-555-0100 IS THE FAA CDN FAC. 2611132230-2611140040</txtDescrUSNS>
+      </Not>
+    </Add>
+  </Group>
+</XNOTAM-Update>

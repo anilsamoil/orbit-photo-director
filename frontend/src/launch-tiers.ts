@@ -1,4 +1,4 @@
-import type { LaunchCatalog, LaunchCatalogItem, ShotEnvelope } from './launch-schema';
+import type { LaunchAscent, LaunchCatalog, LaunchCatalogItem, ShotEnvelope } from './launch-schema';
 import { ALL_LAUNCHES_HORIZON_MS } from './iss-view/launches';
 import { LAUNCH_HORIZON_MS, LAUNCH_MAP_HORIZON_MS } from './launch-selectors';
 
@@ -32,10 +32,26 @@ export interface ShotProvenance {
   };
 }
 
+/** Where the launch heads, as published evidence. It never carries drawn geometry. */
+export type DirectionEvidence =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'iss_plane'; readonly azimuthDeg: number; readonly offPlaneDeg: number; readonly source: string }
+  | { readonly kind: 'published' | 'hazard_area' | 'modeled'; readonly azimuthDeg: number; readonly source: string };
+
+/** One shot envelope: one subject at one liftoff scenario. Envelopes are never merged. */
 export interface TierShot {
   readonly subject: 'pad' | 'ascent';
+  readonly liftoffMs: number;
+  readonly startMs: number;
   readonly bestMs: number;
   readonly endMs: number;
+  readonly bestOffsetS: number;
+  readonly window: ShotEnvelope['window'];
+  readonly look: { readonly azimuthDeg: number; readonly offNadirDeg: number };
+  readonly slantKm: number;
+  readonly lens: { readonly kind: ShotEnvelope['lens']; readonly reason: string };
+  readonly light: ShotEnvelope['light'];
+  readonly confidence: { readonly tleAgeH: number; readonly robust: boolean };
   readonly score: { readonly low: number; readonly high: number };
   readonly provenance: ShotProvenance | null;
 }
@@ -58,6 +74,10 @@ export interface TierLaunch {
   readonly why: string;
   readonly reasons: readonly string[];
   readonly schedule: TierSchedule;
+  readonly direction: DirectionEvidence;
+  readonly ascent: LaunchAscent | null;
+  /** Every envelope, best first. */
+  readonly shots: readonly TierShot[];
   readonly top: TierShot | null;
   readonly corridor: Corridor | null;
   readonly whenMs: number;
@@ -157,16 +177,35 @@ function provenanceOf(shot: ShotEnvelope): ShotProvenance | null {
 }
 
 function toTierShot(shot: ShotEnvelope): TierShot | null {
+  const liftoffMs = Date.parse(shot.liftoff);
+  const startMs = Date.parse(shot.start);
   const bestMs = Date.parse(shot.best);
   const endMs = Date.parse(shot.end);
-  if (!Number.isFinite(bestMs) || !Number.isFinite(endMs)) return null;
+  if (![liftoffMs, startMs, bestMs, endMs].every(Number.isFinite)) return null;
   return {
     subject: shot.subject,
+    liftoffMs,
+    startMs,
     bestMs,
     endMs,
+    bestOffsetS: shot.best_offset_s,
+    window: shot.window,
+    look: { azimuthDeg: shot.look.azimuth_deg, offNadirDeg: shot.look.off_nadir_deg },
+    slantKm: shot.slant_km,
+    lens: { kind: shot.lens, reason: shot.lens_reason },
+    light: shot.light,
+    confidence: { tleAgeH: shot.confidence.tle_age_h, robust: shot.confidence.robust },
     score: { low: shot.score.low, high: shot.score.high },
     provenance: provenanceOf(shot),
   };
+}
+
+function directionOf(direction: LaunchCatalogItem['direction']): DirectionEvidence {
+  const { kind, azimuth_deg: azimuthDeg, source, off_plane_deg: offPlaneDeg } = direction;
+  if (kind === 'none' || azimuthDeg === null || source === null) return { kind: 'none' };
+  if (kind !== 'iss_plane') return { kind, azimuthDeg, source };
+  if (offPlaneDeg === null) return { kind: 'none' };
+  return { kind, azimuthDeg, offPlaneDeg, source };
 }
 
 function shotOrder(a: ShotEnvelope, b: ShotEnvelope): number {
@@ -177,10 +216,15 @@ function shotOrder(a: ShotEnvelope, b: ShotEnvelope): number {
   return a.subject < b.subject ? -1 : 1;
 }
 
+function orderedShots(item: LaunchCatalogItem): ShotEnvelope[] {
+  const shots = item.shots.slice();
+  return item.direction.kind === 'modeled' ? shots : shots.sort(shotOrder);
+}
+
 function corridorOf(item: LaunchCatalogItem): Corridor | null {
   if (item.direction.kind === 'none') return null;
-  const ascent = item.shots.filter((shot) => shot.subject === 'ascent' && shot.track.length >= 2).sort(shotOrder);
-  const best = ascent[0];
+  const best = orderedShots(item).find((shot) => shot.subject === 'ascent'
+    && (item.direction.kind === 'modeled' || shot.track.length >= 2));
   if (!best) return null;
   const points = best.track.map((point) => ({
     lat: point.lat,
@@ -194,12 +238,8 @@ function corridorOf(item: LaunchCatalogItem): Corridor | null {
 }
 
 function toTierLaunch(item: LaunchCatalogItem): TierLaunch {
-  const shots = item.shots.flatMap((shot) => {
-    const tierShot = toTierShot(shot);
-    return tierShot ? [tierShot] : [];
-  });
-  const ranked = item.shots.filter((shot) => toTierShot(shot) !== null).sort(shotOrder);
-  const top = ranked[0] ? toTierShot(ranked[0]) : null;
+  const shots = orderedShots(item).flatMap((shot) => toTierShot(shot) ?? []);
+  const top = shots[0] ?? null;
   const netMs = Date.parse(item.schedule.net);
   const windowEndMs = instant(item.schedule.window_end);
   let liveUntilMs = Number.isFinite(netMs) ? netMs : Number.NaN;
@@ -221,6 +261,9 @@ function toTierLaunch(item: LaunchCatalogItem): TierLaunch {
       precision: item.schedule.precision,
       status: item.schedule.status,
     },
+    direction: directionOf(item.direction),
+    ascent: item.ascent ?? null,
+    shots,
     top,
     corridor: corridorOf(item),
     whenMs: top?.bestMs ?? netMs,
@@ -271,7 +314,9 @@ function passesSchedule(launch: TierLaunch, now: number, horizon: number): boole
   if (!SCHEDULE_PRECISION.has(precision)) return false;
   const net = launch.schedule.netMs;
   if (!Number.isFinite(net) || net > now + horizon) return false;
+  const start = launch.schedule.windowStartMs;
   const end = launch.schedule.windowEndMs ?? net;
+  if (start !== null && launch.schedule.windowEndMs !== null && (net < start || net > end)) return false;
   return end > now;
 }
 
@@ -296,7 +341,7 @@ function utcClock(ms: number): string {
   return new Date(ms).toISOString().slice(11, 19);
 }
 
-function utcInstant(ms: number): string {
+export function utcInstant(ms: number): string {
   return `${utcDate(ms)}, ${utcClock(ms)} UTC`;
 }
 
@@ -339,7 +384,7 @@ export function tierWindowText(startMs: number, endMs: number): string {
   return `${tierWindowUtc(startMs, endMs)} · ${houstonRange(startMs, endMs)}`;
 }
 
-/** NET, launch window, and best time. A missing window or shot omits that row. */
+/** NET and launch window. A missing window omits that row. */
 export function tierScheduleFacts(launch: TierLaunch): { label: string; text: string }[] {
   const facts: { label: string; text: string }[] = [
     { label: 'NET', text: tierInstantText(launch.schedule.netMs) },
@@ -347,7 +392,6 @@ export function tierScheduleFacts(launch: TierLaunch): { label: string; text: st
   const start = launch.schedule.windowStartMs;
   const end = launch.schedule.windowEndMs;
   if (start !== null && end !== null) facts.push({ label: 'Launch window', text: tierWindowText(start, end) });
-  if (launch.top) facts.push({ label: 'Best time', text: tierInstantText(launch.top.bestMs) });
   return facts;
 }
 

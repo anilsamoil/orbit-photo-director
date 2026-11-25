@@ -65,7 +65,8 @@ function mount(name: string): HTMLElement {
  *  `putStatus`. Records the PUT body for assertions. */
 function mockGetThenPut(serverTargets: PersonalTarget[], putStatus = 200) {
   const putBodies: Array<{ targets: PersonalTarget[] }> = [];
-  const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.startsWith('/api/log?')) return new Response('{"entries":[]}');
     const method = (init?.method ?? 'GET').toUpperCase();
     if (method === 'GET') {
       return new Response(JSON.stringify({ ok: true, targets: serverTargets }), { status: 200 });
@@ -110,7 +111,8 @@ describe('handleEdit — optimistic fresh-GET → apply → PUT', () => {
     await _test.handleEdit(PROFILE, { ...mine, lon: 11 });
 
     // GET then PUT.
-    const methods = fetchMock.mock.calls.map((c) => ((c[1] as RequestInit | undefined)?.method ?? 'GET').toUpperCase());
+    const methods = fetchMock.mock.calls.filter(([url]) => url.startsWith('/api/browser/profiles/'))
+      .map((c) => ((c[1] as RequestInit | undefined)?.method ?? 'GET').toUpperCase());
     expect(methods).toEqual(['GET', 'PUT']);
     // PUT body kept BOTH targets — the edit applied to mine, serverOnly untouched.
     expect(putBodies).toHaveLength(1);
@@ -142,7 +144,8 @@ describe('handleEdit — optimistic fresh-GET → apply → PUT', () => {
 
     const result = await _test.handleEdit(PROFILE, { ...t, lon: -1 });
     expect(result).not.toBe('ok');
-    const methods = fetchMock.mock.calls.map((c) => ((c[1] as RequestInit | undefined)?.method ?? 'GET').toUpperCase());
+    const methods = fetchMock.mock.calls.filter(([url]) => url.startsWith('/api/browser/profiles/'))
+      .map((c) => ((c[1] as RequestInit | undefined)?.method ?? 'GET').toUpperCase());
     expect(methods).toEqual(['GET']); // never PUT
     expect(loadProfile(PROFILE)!.additions[0]!.lon).toBe(-34.25); // reverted
   });

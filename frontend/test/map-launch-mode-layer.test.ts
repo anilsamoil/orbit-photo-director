@@ -41,6 +41,9 @@ function fakeMap() {
       for (const listener of [...styleListeners]) listener();
     }),
     hasSource: vi.fn((id: string) => sources.has(id)),
+    addSource: vi.fn((id: string) => {
+      sources.set(id, { setData: vi.fn() });
+    }),
     setGeoJson: vi.fn((id: string, data: unknown) => { sources.get(id)?.setData(data); }),
     on: vi.fn((event: string, listener: () => void) => {
       if (event === 'styledata') styleListeners.add(listener);

@@ -109,10 +109,16 @@ export default defineConfig({
 
         // Don't precache the source-map files — they're huge and only useful
         // when the dev tools are open.
-        globIgnores: ['**/*.map', 'sw-shell.js', 'registerSW.js'],
+        globIgnores: ['**/*.map', 'sw-shell.js', 'registerSW.js', '**/hazards/**'],
 
         // Runtime cache routing per the locked V2 plan.
         runtimeCaching: [
+          {
+            // Published hazard files change without a new app build. NetworkOnly
+            // so a 404 is never stored and a later 200 is not hidden by that 404.
+            urlPattern: /\/hazards\/.*\.json(\?.*)?$/,
+            handler: 'NetworkOnly',
+          },
           {
             // App navigations. Registered after precache, which no longer
             // contains index.html, so this route is the one that answers

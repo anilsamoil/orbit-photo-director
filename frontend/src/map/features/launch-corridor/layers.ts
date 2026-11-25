@@ -1,5 +1,34 @@
 import { getMapLaunchMode } from '../../../map-launch-mode';
-import type { CircleLayer, LineLayer } from '../../map-core/layer-spec';
+import type { CircleLayer, FillLayer, LineLayer } from '../../map-core/layer-spec';
+
+/** Amber published-hazard fill. High-risk areas carry a higher fill_opacity. */
+export function launchHazardFillLayer(): FillLayer {
+  return {
+    id: 'launch-hazard-fill-layer',
+    type: 'fill',
+    source: 'launch-hazards',
+    layout: { visibility: getMapLaunchMode() ? 'visible' : 'none' },
+    paint: {
+      'fill-color': '#ffd45c',
+      'fill-opacity': ['get', 'fill_opacity'],
+    },
+  };
+}
+
+/** Outline of the same polygons. Not a centreline or a ground track. */
+export function launchHazardOutlineLayer(): LineLayer {
+  return {
+    id: 'launch-hazard-outline-layer',
+    type: 'line',
+    source: 'launch-hazards',
+    layout: { visibility: getMapLaunchMode() ? 'visible' : 'none' },
+    paint: {
+      'line-color': '#ffd45c',
+      'line-width': 1.5,
+      'line-opacity': 0.95,
+    },
+  };
+}
 
 /** Gold corridor. Shown only while launch mode is on. */
 export function ascentTrajectoryLayer(): LineLayer {
@@ -9,9 +38,9 @@ export function ascentTrajectoryLayer(): LineLayer {
     source: 'ascent-trajectory',
     layout: { visibility: getMapLaunchMode() ? 'visible' : 'none' },
     paint: {
-      'line-color': '#ffd45c',
-      'line-width': 3,
-      'line-opacity': 0.9,
+      'line-color': ['match', ['get', 'role'], 'edge', '#ffe69a', '#ffd45c'],
+      'line-width': ['match', ['get', 'role'], 'edge', 1.5, 'model', 2.5, 3],
+      'line-opacity': ['match', ['get', 'role'], 'edge', 0.65, 'model', 0.85, 0.9],
     },
   };
 }

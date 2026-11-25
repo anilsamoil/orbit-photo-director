@@ -1,5 +1,16 @@
 import { launchCatalog } from './launch-catalog';
-import { tierScheduleFacts, tierWord, type TierLaunch } from './launch-tiers';
+import {
+  HAZARD_LABEL,
+  hazardFactText,
+  hazardListingsFor,
+  hazardListingText,
+  hazardNotesFor,
+  subscribeHazardNotes,
+  type HazardListing,
+  type HazardNote,
+} from './launch-hazards';
+import { shotPlan, type EnvelopeFacts, type ShotPlan } from './launch-shot-plan';
+import { tierScheduleFacts, tierWindowText, tierWord, type TierLaunch } from './launch-tiers';
 
 function row(container: HTMLElement, label: string, value: string): void {
   const line = document.createElement('div');
@@ -13,7 +24,49 @@ function row(container: HTMLElement, label: string, value: string): void {
   container.append(line);
 }
 
-export function renderTierCard(launch: TierLaunch, onShowMap?: (eventId: string) => void): HTMLElement {
+function note(container: HTMLElement, text: string, mark: string): void {
+  const line = document.createElement('p');
+  line.dataset.shotPlan = mark;
+  line.textContent = text;
+  container.append(line);
+}
+
+function envelopeBlock(container: HTMLElement, envelope: EnvelopeFacts): void {
+  note(container, envelope.title, 'title');
+  for (const fact of envelope.facts) row(container, fact.label, fact.text);
+}
+
+/** The card shows the best envelope. The details dialog shows every one, each on its own. */
+function planBlock(plan: ShotPlan, every: boolean): HTMLElement {
+  const block = document.createElement('div');
+  block.className = 'launch-plan';
+  const shown = every ? plan.envelopes : plan.envelopes.slice(0, 1);
+  for (const envelope of shown) envelopeBlock(block, envelope);
+  if (plan.empty) note(block, plan.empty, 'empty');
+  row(block, plan.direction.label, plan.direction.text);
+  if (plan.honesty) note(block, plan.honesty, 'honesty');
+  if (!every && plan.more) note(block, plan.more, 'more');
+  return block;
+}
+
+export function launchMapToggleKind(launch: TierLaunch): 'modeled' | 'sector' | null {
+  if (!launch.ascent || (launch.corridor && launch.direction.kind !== 'modeled')) return null;
+  return launch.ascent.grade === 'D' ? 'sector' : 'modeled';
+}
+
+function paintMapAction(button: HTMLButtonElement, shown: boolean): void {
+  button.textContent = shown ? button.dataset.hideLabel ?? '' : button.dataset.showLabel ?? '';
+  button.setAttribute('aria-pressed', String(shown));
+}
+
+export function refreshTierMapActions(isShown: (eventId: string) => boolean): void {
+  for (const button of document.querySelectorAll<HTMLButtonElement>('button[data-launch-map-event]')) {
+    paintMapAction(button, isShown(button.dataset.launchMapEvent ?? ''));
+  }
+}
+
+export function renderTierCard(launch: TierLaunch, onShowMap?: (eventId: string) => void,
+  isShown: (eventId: string) => boolean = () => false): HTMLElement {
   const card = document.createElement('article');
   card.className = 'card launch launch-tier';
   card.dataset.launch = 'tier';
@@ -35,19 +88,83 @@ export function renderTierCard(launch: TierLaunch, onShowMap?: (eventId: string)
   for (const fact of tierScheduleFacts(launch)) row(summary, fact.label, fact.text);
   const why = document.createElement('p');
   why.textContent = launch.why;
-  card.append(name, summary, why);
+  card.append(name, summary, why, planBlock(shotPlan(launch), false));
+  const hazard = hazardNoteBlock(launch.eventId);
+  if (hazard) card.append(hazard);
   if (onShowMap) {
     const actions = document.createElement('div');
     actions.className = 'launch-brief-actions';
     const show = document.createElement('button');
     show.type = 'button';
     show.className = 'btn';
-    show.textContent = launch.corridor ? 'Show site and corridor' : 'Show launch site';
-    show.addEventListener('click', () => onShowMap(launch.eventId));
+    const areas = hazardNotesFor(launch.eventId).length > 0;
+    show.textContent = launch.corridor ? 'Show site and corridor' : launch.ascent?.grade === 'D' ? 'Show site and assumed sector' : launch.ascent ? 'Show site and modeled ascent' : areas ? 'Show published hazard areas' : 'Show launch site';
+    const toggleKind = launchMapToggleKind(launch);
+    if (toggleKind) {
+      show.dataset.launchMapEvent = launch.eventId;
+      show.dataset.showLabel = show.textContent;
+      show.dataset.hideLabel = toggleKind === 'sector' ? 'Hide assumed sector' : 'Hide modeled ascent';
+      paintMapAction(show, isShown(launch.eventId));
+    }
+    show.addEventListener('click', () => {
+      onShowMap(launch.eventId);
+      if (toggleKind) paintMapAction(show, isShown(launch.eventId));
+    });
     actions.append(show);
     card.append(actions);
   }
   return card;
+}
+
+function hazardNoteBlock(eventId: string): HTMLElement | null {
+  const notes = hazardNotesFor(eventId);
+  const listings = hazardListingsFor(eventId);
+  if (!notes.length && !listings.length) return null;
+  const block = document.createElement('div');
+  block.dataset.hazardNote = '1';
+  if (notes.length) {
+    const summary = document.createElement('p');
+    summary.textContent = `${HAZARD_LABEL}.`;
+    block.append(summary);
+    for (const note of notes) block.append(hazardFact(note));
+  }
+  if (listings.length) {
+    const lead = document.createElement('p');
+    lead.textContent = 'Published for this launch and not drawn on the map:';
+    block.append(lead);
+    for (const listing of listings) block.append(hazardListingLine(listing));
+  }
+  return block;
+}
+
+function hazardListingLine(listing: HazardListing): HTMLParagraphElement {
+  const line = document.createElement('p');
+  line.dataset.hazardListed = listing.reason;
+  line.textContent = `${hazardListingText(listing)} `;
+  const link = document.createElement('a');
+  link.href = listing.sourceUrl;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.textContent = listing.sourceUrl;
+  line.append(link);
+  return line;
+}
+
+function hazardFact(note: HazardNote): HTMLParagraphElement {
+  const line = document.createElement('p');
+  const start = Date.parse(note.windowStart);
+  const end = Date.parse(note.windowEnd);
+  const when = Number.isFinite(start) && Number.isFinite(end)
+    ? tierWindowText(start, end)
+    : `${note.windowStart} to ${note.windowEnd}`;
+  line.textContent = `${hazardFactText(note, when)} `;
+  const link = document.createElement('a');
+  link.href = note.sourceUrl;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.textContent = note.sourceUrl;
+  line.append(link);
+  return line;
 }
 
 function evidenceNote(kind: 'expired' | 'missing'): HTMLParagraphElement {
@@ -94,14 +211,32 @@ export function openTierDetails(launch: TierLaunch): void {
     why.textContent = current.why;
     const track = document.createElement('p');
     track.dataset.tierTrack = '1';
+    const note = hazardNoteBlock(current.eventId);
     track.textContent = current.corridor
       ? current.corridor.points.map((point) => `${point.lat.toFixed(2)}, ${point.lon.toFixed(2)}`).join(' → ')
-      : 'Pad only';
-    content.append(why, track);
+      : hazardNotesFor(current.eventId).length
+        ? `${HAZARD_LABEL}.`
+        : current.ascent?.grade === 'D' ? 'UNVERIFIED assumed site sector. See the launch direction above.' : current.ascent ? 'Modeled ascent estimate. See the launch direction above.' : 'Pad only';
+    content.append(why, planBlock(shotPlan(current), true), track);
+    if (note) content.append(note);
   };
-  const unsubscribe = launchCatalog.subscribe(paint);
+  const unsubscribe = launchCatalog.subscribe(() => {
+    if (!dialog.isConnected) {
+      unsubscribe();
+      return;
+    }
+    paint();
+  });
+  const unsubscribeNotes = subscribeHazardNotes(() => {
+    if (!dialog.isConnected) {
+      unsubscribeNotes();
+      return;
+    }
+    paint();
+  });
   dialog.addEventListener('close', () => {
     unsubscribe();
+    unsubscribeNotes();
     dialog.remove();
   }, { once: true });
   dialog.append(heading, content, close);

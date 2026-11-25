@@ -1,0 +1,449 @@
+[ {
+  "notam_id" : "6/7507",
+  "type" : "SECURITY",
+  "facility" : "ZJX",
+  "state" : "FL",
+  "description" : "SANTA ROSA ISLAND, FL, Wednesday, November 18, 2026 through Friday, November 20, 2026 Local",
+  "creation_date" : "11/13/2026"
+}, {
+  "notam_id" : "6/7503",
+  "type" : "VIP",
+  "facility" : "ZDC",
+  "state" : "VA",
+  "description" : "Sterling, VA, Sunday, November 15, 2026 Local",
+  "creation_date" : "11/13/2026"
+}, {
+  "notam_id" : "6/7498",
+  "type" : "VIP",
+  "facility" : "ZDC",
+  "state" : "VA",
+  "description" : "Sterling, VA, Saturday, November 14, 2026 Local",
+  "creation_date" : "11/13/2026"
+}, {
+  "notam_id" : "6/7462",
+  "type" : "HAZARDS",
+  "facility" : "ZMP",
+  "state" : "MN",
+  "description" : "KEEWATIN, MN, Monday, November 16, 2026 UTC",
+  "creation_date" : "11/13/2026"
+}, {
+  "notam_id" : "6/7421",
+  "type" : "SECURITY",
+  "facility" : "ZHU",
+  "state" : "TX",
+  "description" : "U.S MEXICO BORDER, TX, Friday, November 13, 2026 UTC",
+  "creation_date" : "11/13/2026"
+}, {
+  "notam_id" : "6/7422",
+  "type" : "SECURITY",
+  "facility" : "ZAB",
+  "state" : "TX",
+  "description" : "U.S. MEXICO BORDER, TX, Friday, November 13, 2026 UTC",
+  "creation_date" : "11/13/2026"
+}, {
+  "notam_id" : "6/7420",
+  "type" : "SECURITY",
+  "facility" : "ZLA",
+  "state" : "AZ",
+  "description" : "U.S. MEXICO BORDER, AZ, Friday, November 13, 2026 UTC",
+  "creation_date" : "11/13/2026"
+}, {
+  "notam_id" : "6/7332",
+  "type" : "VIP",
+  "facility" : "ZDC",
+  "state" : "MD",
+  "description" : "THURMONT, MD, Friday, November 13, 2026 through Sunday, November 15, 2026 Local",
+  "creation_date" : "11/13/2026"
+}, {
+  "notam_id" : "6/7276",
+  "type" : "SECURITY",
+  "facility" : "ZSU",
+  "state" : "PR",
+  "description" : "Ceiba, PR, Saturday, November 14, 2026 Local",
+  "creation_date" : "11/12/2026"
+}, {
+  "notam_id" : "6/7271",
+  "type" : "HAZARDS",
+  "facility" : "ZKC",
+  "state" : "IL",
+  "description" : "GRANITE CITY, IL, Monday, November 16, 2026 UTC",
+  "creation_date" : "11/12/2026"
+}, {
+  "notam_id" : "6/7206",
+  "type" : "HAZARDS",
+  "facility" : "ZBW",
+  "state" : "NH",
+  "description" : "10NM SE BERLIN, NH, Thursday, November 12, 2026 through Sunday, November 15, 2026 UTC",
+  "creation_date" : "11/12/2026"
+}, {
+  "notam_id" : "6/7165",
+  "type" : "HAZARDS",
+  "facility" : "ZHU",
+  "state" : "TX",
+  "description" : "BROWNSVILLE, TX, Thursday, November 19, 2026 through Sunday, November 29, 2026 UTC",
+  "creation_date" : "11/12/2026"
+}, {
+  "notam_id" : "6/7150",
+  "type" : "SECURITY",
+  "facility" : "ZUA",
+  "state" : "GU",
+  "description" : "NORTHWEST FIELD, GU, Friday, November 13, 2026 through Sunday, December 20, 2026 Local",
+  "creation_date" : "11/12/2026"
+}, {
+  "notam_id" : "6/7136",
+  "type" : "HAZARDS",
+  "facility" : "ZDV",
+  "state" : "CO",
+  "description" : "10NM NW COLORADO SPRINGS, CO, Thursday, November 12, 2026 through Saturday, November 14, 2026 UTC",
+  "creation_date" : "11/11/2026"
+}, {
+  "notam_id" : "6/7132",
+  "type" : "SPACE OPERATIONS",
+  "facility" : "ZHU",
+  "state" : "TX",
+  "description" : "STARBASE, TX, Sunday, November 15, 2026 through Sunday, November 15, 2026 Local",
+  "creation_date" : "11/11/2026"
+}, {
+  "notam_id" : "6/7129",
+  "type" : "SPACE OPERATIONS",
+  "facility" : "ZHU",
+  "state" : "TX",
+  "description" : "STARBASE, TX, Friday, November 13, 2026 through Friday, November 13, 2026 Local",
+  "creation_date" : "11/11/2026"
+}, {
+  "notam_id" : "6/7131",
+  "type" : "SPACE OPERATIONS",
+  "facility" : "ZHU",
+  "state" : "TX",
+  "description" : "STARBASE, TX, Saturday, November 14, 2026 through Saturday, November 14, 2026 Local",
+  "creation_date" : "11/11/2026"
+}, {
+  "notam_id" : "6/7130",
+  "type" : "SPACE OPERATIONS",
+  "facility" : "ZHU",
+  "state" : "TX",
+  "description" : "STARBASE, TX, Saturday, November 14, 2026 through Saturday, November 14, 2026 Local",
+  "creation_date" : "11/11/2026"
+}, {
+  "notam_id" : "6/7114",
+  "type" : "SPACE OPERATIONS",
+  "facility" : "ZJX",
+  "state" : "FL",
+  "description" : "Cape Canaveral, FL, Sunday, November 15, 2026 Local",
+  "creation_date" : "11/11/2026"
+}, {
+  "notam_id" : "6/7113",
+  "type" : "SPACE OPERATIONS",
+  "facility" : "ZMA",
+  "state" : "FL",
+  "description" : "Cape Canaveral, FL, Sunday, November 15, 2026 Local",
+  "creation_date" : "11/11/2026"
+}, {
+  "notam_id" : "6/7112",
+  "type" : "SPACE OPERATIONS",
+  "facility" : "ZJX",
+  "state" : "FL",
+  "description" : "Cape Canaveral, FL, Saturday, November 14, 2026 Local",
+  "creation_date" : "11/11/2026"
+}, {
+  "notam_id" : "6/7111",
+  "type" : "SPACE OPERATIONS",
+  "facility" : "ZMA",
+  "state" : "FL",
+  "description" : "Cape Canaveral, FL, Saturday, November 14, 2026 Local",
+  "creation_date" : "11/11/2026"
+}, {
+  "notam_id" : "6/7108",
+  "type" : "HAZARDS",
+  "facility" : "ZME",
+  "state" : "MS",
+  "description" : "7NM E OF OXFORD, MS, Thursday, November 12, 2026 through Saturday, November 14, 2026 UTC",
+  "creation_date" : "11/11/2026"
+}, {
+  "notam_id" : "6/7107",
+  "type" : "HAZARDS",
+  "facility" : "ZME",
+  "state" : "MS",
+  "description" : "8NM NE OF OXFORD, MS, Thursday, November 12, 2026 through Saturday, November 14, 2026 UTC",
+  "creation_date" : "11/11/2026"
+}, {
+  "notam_id" : "6/7083",
+  "type" : "SECURITY",
+  "facility" : "ZME",
+  "state" : "AL",
+  "description" : "HUNTSVILLE, AL, Tuesday, November 17, 2026 through Thursday, November 19, 2026 Local",
+  "creation_date" : "11/10/2026"
+}, {
+  "notam_id" : "6/6928",
+  "type" : "HAZARDS",
+  "facility" : "ZHU",
+  "state" : "TX",
+  "description" : "BROWNSVILLE, TX, Thursday, November 12, 2026 through Friday, December 4, 2026 UTC",
+  "creation_date" : "11/10/2026"
+}, {
+  "notam_id" : "6/6925",
+  "type" : "SECURITY",
+  "facility" : "ZLA",
+  "state" : "CA",
+  "description" : "disneyland theme park anaheim, CA",
+  "creation_date" : "11/10/2026"
+}, {
+  "notam_id" : "6/6924",
+  "type" : "SECURITY",
+  "facility" : "ZJX",
+  "state" : "FL",
+  "description" : "DISNEY WORLD THEME PARK, ORLANDO, FL",
+  "creation_date" : "11/10/2026"
+}, {
+  "notam_id" : "6/6537",
+  "type" : "UAS PUBLIC GATHERING",
+  "facility" : "ZJX",
+  "state" : "FL",
+  "description" : "Orlando, FL, Saturday, November 14, 2026 through Monday, November 16, 2026 UTC",
+  "creation_date" : "11/09/2026"
+}, {
+  "notam_id" : "6/6536",
+  "type" : "UAS PUBLIC GATHERING",
+  "facility" : "ZDC",
+  "state" : "NC",
+  "description" : "Raleigh, NC, Saturday, November 14, 2026 UTC",
+  "creation_date" : "11/09/2026"
+}, {
+  "notam_id" : "6/6283",
+  "type" : "AIR SHOWS/SPORTS",
+  "facility" : "ZMA",
+  "state" : "FL",
+  "description" : "Stuart, FL, Friday, November 13, 2026 through Sunday, November 15, 2026 UTC",
+  "creation_date" : "11/07/2026"
+}, {
+  "notam_id" : "6/4116",
+  "type" : "SECURITY",
+  "facility" : "ZMP",
+  "state" : "ND",
+  "description" : "GRAND FORKS AFB, ND, Sunday, November 1, 2026 through Sunday, March 14, 2027 Local",
+  "creation_date" : "10/30/2026"
+}, {
+  "notam_id" : "6/2670",
+  "type" : "SECURITY",
+  "facility" : "ZSU",
+  "state" : "PR",
+  "description" : "CEIBA, PR, Saturday, October 31, 2026 through Saturday, March 13, 2027 Local",
+  "creation_date" : "10/27/2026"
+}, {
+  "notam_id" : "6/2547",
+  "type" : "SECURITY",
+  "facility" : "ZOA",
+  "state" : "CA",
+  "description" : "Beale AFB, CA, Sunday, November 1, 2026 through Sunday, March 14, 2027 Local",
+  "creation_date" : "10/26/2026"
+}, {
+  "notam_id" : "6/2481",
+  "type" : "SECURITY",
+  "facility" : "ZAN",
+  "state" : "AK",
+  "description" : "Clear, AK, Sunday, November 1, 2026 through Sunday, March 14, 2027 Local",
+  "creation_date" : "10/26/2026"
+}, {
+  "notam_id" : "6/2478",
+  "type" : "SECURITY",
+  "facility" : "ZFW",
+  "state" : "TX",
+  "description" : "SAN ANGELO, TX, Sunday, November 1, 2026 through Sunday, March 14, 2027 Local",
+  "creation_date" : "10/26/2026"
+}, {
+  "notam_id" : "6/0100",
+  "type" : "SECURITY",
+  "facility" : "ZMA",
+  "state" : "FL",
+  "description" : "Palm Beach, FL, Tuesday, October 20, 2026 through Wednesday, October 20, 2027 Local",
+  "creation_date" : "10/18/2026"
+}, {
+  "notam_id" : "6/5945",
+  "type" : "SECURITY",
+  "facility" : "ZMA",
+  "state" : "FL",
+  "description" : "Key West, FL",
+  "creation_date" : "09/28/2026"
+}, {
+  "notam_id" : "6/0708",
+  "type" : "SECURITY",
+  "facility" : "ZME",
+  "state" : "TN",
+  "description" : "Goodlettsville, TN, Saturday, August 1, 2026 through Sunday, August 1, 2027 UTC",
+  "creation_date" : "07/31/2026"
+}, {
+  "notam_id" : "6/4812",
+  "type" : "SECURITY",
+  "facility" : "ZLA",
+  "state" : "CA",
+  "description" : "El Centro, CA, Wednesday, July 15, 2026 through Tuesday, July 13, 2027 Local",
+  "creation_date" : "07/10/2026"
+}, {
+  "notam_id" : "6/2657",
+  "type" : "SECURITY",
+  "facility" : "ZLA",
+  "state" : "CA",
+  "description" : "Calexico, CA, Saturday, July 4, 2026 through Saturday, January 2, 2027 Local",
+  "creation_date" : "07/02/2026"
+}, {
+  "notam_id" : "6/2656",
+  "type" : "SECURITY",
+  "facility" : "ZLA",
+  "state" : "CA",
+  "description" : "Coyote Wells, CA, Saturday, July 4, 2026 through Saturday, January 2, 2027 Local",
+  "creation_date" : "07/02/2026"
+}, {
+  "notam_id" : "6/2652",
+  "type" : "SECURITY",
+  "facility" : "ZLA",
+  "state" : "CA",
+  "description" : "Coyote Wells, CA, Saturday, July 4, 2026 through Saturday, January 2, 2027 Local",
+  "creation_date" : "07/02/2026"
+}, {
+  "notam_id" : "6/2520",
+  "type" : "SECURITY",
+  "facility" : "ZUA",
+  "state" : "GU",
+  "description" : "S. FINEGAYAN, GU",
+  "creation_date" : "05/22/2026"
+}, {
+  "notam_id" : "6/3366",
+  "type" : "SECURITY",
+  "facility" : "FDC",
+  "state" : "USA",
+  "description" : "  USA, Thursday, April 16, 2026 through Sunday, April 16, 2028 UTC",
+  "creation_date" : "04/16/2026"
+}, {
+  "notam_id" : "6/4143",
+  "type" : "SECURITY",
+  "facility" : "ZUA",
+  "state" : "GU",
+  "description" : "ANDERSEN AFB, GU, Monday, March 9, 2026 through Tuesday, March 9, 2027 Local",
+  "creation_date" : "03/05/2026"
+}, {
+  "notam_id" : "6/2698",
+  "type" : "HAZARDS",
+  "facility" : "ZSU",
+  "state" : "PR",
+  "description" : "VIEQUES, PR, Monday, January 19, 2026 through Friday, December 18, 2026 UTC",
+  "creation_date" : "01/13/2026"
+}, {
+  "notam_id" : "6/0543",
+  "type" : "SECURITY",
+  "facility" : "ZFW",
+  "state" : "TX",
+  "description" : "MCGREGOR, TX",
+  "creation_date" : "01/05/2026"
+}, {
+  "notam_id" : "5/3679",
+  "type" : "SECURITY",
+  "facility" : "ZHU",
+  "state" : "TX",
+  "description" : "Brownsville, TX, Thursday, January 1, 2026 through Friday, January 1, 2027 Local",
+  "creation_date" : "12/30/2025"
+}, {
+  "notam_id" : "5/3678",
+  "type" : "SECURITY",
+  "facility" : "ZHU",
+  "state" : "TX",
+  "description" : "Brownsville, TX, Thursday, January 1, 2026 through Friday, January 1, 2027 Local",
+  "creation_date" : "12/30/2025"
+}, {
+  "notam_id" : "5/3402",
+  "type" : "SECURITY",
+  "facility" : "FDC",
+  "state" : "USA",
+  "description" : "  USA, Thursday, November 6, 2025 UTC",
+  "creation_date" : "11/06/2025"
+}, {
+  "notam_id" : "5/6379",
+  "type" : "SECURITY",
+  "facility" : "FDC",
+  "state" : "USA",
+  "description" : "  USA, Wednesday, October 29, 2025 through Friday, October 29, 2027 UTC",
+  "creation_date" : "10/25/2025"
+}, {
+  "notam_id" : "5/7224",
+  "type" : "SECURITY",
+  "facility" : "ZDC",
+  "state" : "DC",
+  "description" : "WASHINGTON, DC, Wednesday, September 3, 2025 UTC",
+  "creation_date" : "09/03/2025"
+}, {
+  "notam_id" : "5/6914",
+  "type" : "SECURITY",
+  "facility" : "ZHU",
+  "state" : "TX",
+  "description" : "South Padre Island, TX, Tuesday, May 6, 2025 Local",
+  "creation_date" : "05/06/2025"
+}, {
+  "notam_id" : "5/6874",
+  "type" : "SECURITY",
+  "facility" : "FDC",
+  "state" : "USA",
+  "description" : "  USA, Saturday, March 1, 2025 through Wednesday, March 31, 2027 UTC",
+  "creation_date" : "02/26/2025"
+}, {
+  "notam_id" : "4/9433",
+  "type" : "SECURITY",
+  "facility" : "ZDC",
+  "state" : "USA",
+  "description" : "  USA, Tuesday, September 3, 2024 UTC",
+  "creation_date" : "09/03/2024"
+}, {
+  "notam_id" : "4/9383",
+  "type" : "SECURITY",
+  "facility" : "ZDC",
+  "state" : "USA",
+  "description" : "WASHINGTON, DC., USA",
+  "creation_date" : "09/03/2024"
+}, {
+  "notam_id" : "4/2565",
+  "type" : "SECURITY",
+  "facility" : "ZDC",
+  "state" : "USA",
+  "description" : "  USA, Monday, June 24, 2024 UTC",
+  "creation_date" : "06/24/2024"
+}, {
+  "notam_id" : "4/1789",
+  "type" : "SECURITY",
+  "facility" : "ZDC",
+  "state" : "USA",
+  "description" : "  USA, Friday, June 21, 2024 UTC",
+  "creation_date" : "06/21/2024"
+}, {
+  "notam_id" : "2/8783",
+  "type" : "SECURITY",
+  "facility" : "FDC",
+  "state" : "USA",
+  "description" : "  USA, Monday, February 28, 2022 UTC",
+  "creation_date" : "01/27/2024"
+}, {
+  "notam_id" : "1/5060",
+  "type" : "SPECIAL",
+  "facility" : "FDC",
+  "state" : "USA",
+  "description" : "  USA, Wednesday, September 29, 2021 UTC",
+  "creation_date" : "01/27/2024"
+}, {
+  "notam_id" : "0/0367",
+  "type" : "SECURITY",
+  "facility" : "FDC",
+  "state" : "USA",
+  "description" : "  USA, Wednesday, January 15, 2020 UTC",
+  "creation_date" : "01/02/2020"
+}, {
+  "notam_id" : "6/8818",
+  "type" : "SECURITY",
+  "facility" : "FDC",
+  "state" : "USA",
+  "description" : "Special Notice, USA",
+  "creation_date" : "03/23/2016"
+}, {
+  "notam_id" : "9/2934",
+  "type" : "VIP",
+  "facility" : "ZFW",
+  "state" : "TX",
+  "description" : "DALLAS, TX",
+  "creation_date" : "10/08/2015"
+} ]

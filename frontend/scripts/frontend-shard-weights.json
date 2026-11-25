@@ -13,7 +13,6 @@
   "src/map/features/targets/targets.test.ts": 0.567,
   "src/map/features/terminator/terminator.test.ts": 0.465,
   "src/map/features/time-scrub/time-scrub.test.ts": 0.436,
-  "src/map/features/tracked/tracked.test.ts": 0.496,
   "test/access-reauth.test.ts": 0.424,
   "test/account-session.test.ts": 1.435,
   "test/account-storage.test.ts": 0.456,
@@ -83,9 +82,12 @@
   "test/launch-catalog.test.ts": 0.476,
   "test/launch-census.test.ts": 0.493,
   "test/launch-map-brief.test.ts": 0.66,
+  "test/launch-hazards-instruction-inventory.test.ts": 0.43,
+  "test/launch-hazards.test.ts": 1.5,
   "test/launch-map-schedule.test.ts": 0.035,
   "test/launch-review-regressions.test.ts": 0.444,
   "test/launch-selectors.test.ts": 0.468,
+  "test/launch-shot-plan.test.ts": 0.4,
   "test/launch-store.test.ts": 0.53,
   "test/launch-tier-card.test.ts": 0.659,
   "test/launch-tiers.test.ts": 0.5,
@@ -157,6 +159,7 @@
   "test/profile-crud-edit.test.ts": 0.607,
   "test/profile-crud.test.ts": 2.392,
   "test/profile-csv-import.test.ts": 0.548,
+  "test/profile-device-hydration.test.ts": 1.5,
   "test/profile-events.test.ts": 0.44,
   "test/profile-geocode.test.ts": 0.48,
   "test/profile-hydration.test.ts": 0.755,
@@ -192,5 +195,7 @@
   "test/viirs-alpha.test.ts": 0.476,
   "test/webkit-floor.test.ts": 1.864,
   "test/webkit-gate.test.ts": 0.792,
-  "test/wx.test.ts": 0.441
+  "test/wx.test.ts": 0.441,
+  "test/orbit-sight.test.ts": 0.4,
+  "test/launch-planner-selection.test.ts": 0.4
 }

@@ -358,7 +358,9 @@ describe('optimistic add flow', () => {
   it('persists the target locally BEFORE the API call resolves', async () => {
     let resolveFetch: (r: Response) => void = () => {};
     const pending = new Promise<Response>((resolve) => { resolveFetch = resolve; });
-    vi.stubGlobal('fetch', vi.fn(() => pending));
+    vi.stubGlobal('fetch', vi.fn((_url: string, init?: RequestInit) => init?.method === 'POST'
+      ? pending
+      : Promise.resolve(new Response('{"targets":[],"entries":[]}'))));
 
     const t = makeTarget({ name: 'Optimistic' });
     const promise = _test.handleAdd(PROFILE, t);
@@ -411,15 +413,17 @@ describe('optimistic delete flow', () => {
   });
 
   it('removes locally then calls DELETE', async () => {
-    const fetchMock = vi.fn(async () =>
-      new Response(JSON.stringify({ ok: true, removed: true, count: 0 }), { status: 200 }),
+    const fetchMock = vi.fn(async (url: string) =>
+      new Response(JSON.stringify(url.startsWith('/api/log?')
+        ? { entries: [] } : { ok: true, removed: true, count: 0 }), { status: 200 }),
     );
     vi.stubGlobal('fetch', fetchMock);
     await _test.handleDelete(PROFILE, existing);
     expect(loadProfile(PROFILE)!.additions).toHaveLength(0);
-    expect(fetchMock).toHaveBeenCalledOnce();
     const calls = fetchMock.mock.calls as unknown[][];
-    expect((calls[0]![1] as RequestInit).method).toBe('DELETE');
+    const deletions = calls.filter((call) => (call[1] as RequestInit | undefined)?.method === 'DELETE');
+    expect(deletions).toHaveLength(1);
+    expect(deletions[0]![0]).toBe(`/api/browser/profiles/${PROFILE}/targets/${encodeURIComponent(existing.id)}`);
   });
 
   it('rolls back the deletion when API errors', async () => {
@@ -902,8 +906,8 @@ describe('Add Target form — search by name (v3)', () => {
   });
 
   it('pressing Enter in the search input triggers the search', async () => {
-    const fetchMock = vi.fn(async () =>
-      new Response(JSON.stringify([]), { status: 200 }),
+    const fetchMock = vi.fn(async (url: string) =>
+      new Response(JSON.stringify(url.startsWith('/api/') ? { targets: [], entries: [] } : []), { status: 200 }),
     );
     vi.stubGlobal('fetch', fetchMock);
     const section = mountSection(PROFILE);
@@ -912,7 +916,9 @@ describe('Add Target form — search by name (v3)', () => {
     input.value = 'Etna';
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     await new Promise((r) => setTimeout(r, 30));
-    expect(fetchMock).toHaveBeenCalledOnce();
+    const searches = fetchMock.mock.calls.filter(([url]) => url.includes('nominatim.openstreetmap.org/search'));
+    expect(searches).toHaveLength(1);
+    expect(new URL(searches[0]![0]).searchParams.get('q')).toBe('Etna');
   });
 });
 

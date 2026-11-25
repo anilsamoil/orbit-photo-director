@@ -15,13 +15,16 @@ const CATALOG = 'src/map/map-core/catalog.ts';
 const CAMERA = 'src/map/map-core/camera.ts';
 const PIN_DROP = 'src/map/features/pin-drop/index.ts';
 const SATELLITES = 'src/map/features/satellites/index.ts';
-const TRACKED = 'src/map/features/tracked/index.ts';
+const SATELLITE_LAYERS = 'src/map/features/satellites/layers.ts';
+const ORBIT_LOOKUP = 'src/satellites.ts';
 const TARGETS = 'src/map/features/targets/index.ts';
 const LABELS = 'src/map/features/labels/index.ts';
 const NIGHT_LIGHTS = 'src/map/features/night-lights/layers.ts';
 const GLOBAL_DIM = 'src/map/overlays/global-dim.ts';
 const GROUND_TRACK = 'src/map/features/ground-track/layers.ts';
 const LAUNCH_CORRIDOR = 'src/map/features/launch-corridor/geometry.ts';
+const LAUNCH_FOCUS = 'src/map/features/launch-corridor/index.ts';
+const LAUNCH_HAZARDS = 'src/launch-hazards.ts';
 
 const PIN_FILES = [
   'test/map-render-contract.test.ts',
@@ -36,14 +39,31 @@ const PIN_FILES = [
   'test/map-pin-drop-contract.test.ts',
   'test/map-satellites-contract.test.ts',
   'test/map-ground-track-contract.test.ts',
-  'src/map/features/tracked/tracked.test.ts',
+  'src/map/features/satellites/satellites.test.ts',
+  'test/satellites.test.ts',
+  'test/tracked.test.ts',
+  'test/orbit-sight.test.ts',
   'src/map/features/lightning/lightning.test.ts',
   'src/map/features/targets/targets.test.ts',
   'src/map/features/launch-corridor/launch-corridor.test.ts',
   'test/launch-map-schedule.test.ts',
+  'test/launch-hazards.test.ts',
+  'test/launch-map-brief.test.ts',
 ];
 
 const MUTATIONS = [
+  {
+    contract: 'showing a launch collapses its expanded brief before refresh',
+    file: 'src/launch-map-brief.ts',
+    find: '    collapseMapLaunchBrief(container);',
+    replace: '    void container;',
+  },
+  {
+    contract: 'hiding a selected ascent clears its geometry and caption',
+    file: 'src/map/features/launch-corridor/index.ts',
+    find: '  state.selectedEventId = null;\n  state.pendingFocusId = null;\n  state.hazardArmed = false;',
+    replace: '  state.pendingFocusId = null;\n  state.hazardArmed = false;',
+  },
   {
     contract: 'lightning polling survives wall clock correction',
     file: 'src/map/features/lightning/index.ts',
@@ -177,22 +197,142 @@ const MUTATIONS = [
     replace: '      const atMs = core.clock.now();',
   },
   {
-    contract: 'a tracked vehicle orbit starts at the view instant, not the wall clock',
-    file: TRACKED,
-    find: '  const fromMs = core.clock.viewMs();',
-    replace: '  const fromMs = core.clock.now();',
+    contract: 'an orbit is sampled over that satellite\'s own period, not the ISS period',
+    file: SATELLITE_LAYERS,
+    find: '  for (let t = 0; t <= period; t += SAMPLE_SECONDS) {',
+    replace: '  for (let t = 0; t <= 5568; t += SAMPLE_SECONDS) {',
   },
   {
-    contract: 'a tracked vehicle marker sits at its sub-point for the view instant',
-    file: TRACKED,
-    find: '  const atMs = core.clock.viewMs();',
-    replace: '  const atMs = core.clock.now();',
+    contract: 'a published vehicle is drawn on the render that carries it in tracked.json',
+    file: MAP,
+    find: '  applyPublishedOrbits(trackedRecords);',
+    replace: '',
+  },
+  {
+    contract: 'a CelesTrak request that fails is a failed lookup, not a miss',
+    file: ORBIT_LOOKUP,
+    find: "  return cached ? fromCache(cached, true) : { state: 'failed', cause: reply.cause };",
+    replace: "  return cached ? fromCache(cached, true) : { state: 'not_found' };",
+  },
+  {
+    contract: 'one failed feed among empty ones is a failed lookup for a published vehicle',
+    file: ORBIT_LOOKUP,
+    find: "  if (cause === null) return { state: 'not_found' };\n  return publisherSays.state === 'failed' ? failed(cause, lookup, cached, nowMs) : publisherSays;",
+    replace: "  return publisherSays.state === 'failed' ? { state: 'not_found' } : publisherSays;",
+  },
+  {
+    contract: 'a timeout is told apart from an unreachable host',
+    file: ORBIT_LOOKUP,
+    find: "    return { kind: 'error', cause: controller.signal.aborted ? 'timeout' : 'network' };",
+    replace: "    return { kind: 'error', cause: 'network' };",
+  },
+  {
+    contract: 'Starship is looked up in Supplemental GP as well as GP',
+    file: ORBIT_LOOKUP,
+    find: "    out.push(query('supgp', param, value), query('gp', param, value));",
+    replace: "    out.push(query('gp', param, value));",
+  },
+  {
+    contract: 'only an element set whose name, number or designator matches is taken for the vehicle',
+    file: ORBIT_LOOKUP,
+    find: '      ? reply.sets.filter((tle) => matchesLookup(lookup, tle)).map((tle) => ({ tle, feed: reply.feed }))',
+    replace: '      ? reply.sets.map((tle) => ({ tle, feed: reply.feed }))',
+  },
+  {
+    contract: 'an element set older than the publisher grace is never drawn',
+    file: ORBIT_LOOKUP,
+    find: '      nowMs - epochMs <= lookup.grace_hours * HOUR_MS && !reentered(set.tle.line2, epochMs, nowMs))',
+    replace: '      !reentered(set.tle.line2, epochMs, nowMs))',
+  },
+  {
+    contract: 'the last good element set is dropped once it passes the publisher grace',
+    file: ORBIT_LOOKUP,
+    find: '  const lastGood = lookup ? liveObjects(lookup, cached, nowMs) : [];',
+    replace: '  const lastGood = lookup ? cached : [];',
+  },
+  {
+    contract: 'the map never asks CelesTrak for a published vehicle on its own',
+    file: ORBIT_LOOKUP,
+    find: "  if (mode === 'published') return lastGood.length > 0 ? drawn(lookup, lastGood, 'cache', true, nowMs) : verdict;",
+    replace: '',
+  },
+  {
+    contract: 'the newest element set for each object wins',
+    file: ORBIT_LOOKUP,
+    find: "    const wins = !held || epochMs > held.epochMs || (epochMs === held.epochMs && set.feed === 'supgp' && held.set.feed !== 'supgp');",
+    replace: "    const wins = !held || epochMs < held.epochMs || (epochMs === held.epochMs && set.feed === 'supgp' && held.set.feed !== 'supgp');",
+  },
+  {
+    contract: 'an unread tracked.json is a failed lookup, never a confirmed absence',
+    file: 'src/tracked.ts',
+    find: "    reason: 'lookup_failed',\n    lookup: {",
+    replace: "    reason: 'no_public_orbit',\n    lookup: {",
+  },
+  {
+    contract: 'a publisher element set past its grace is not drawn',
+    file: ORBIT_LOOKUP,
+    find: '  const live = row ? liveObjects(row.lookup, publishedSets(meta, row), nowMs) : [];',
+    replace: '  const live = row ? publishedSets(meta, row) : [];',
+  },
+  {
+    contract: 'a background lookup does not override a tap that is still asking CelesTrak',
+    file: SATELLITES,
+    find: "      if (mode === 'published' && sat.asking) return null;\n",
+    replace: '',
+  },
+  {
+    contract: 'a published orbit is age-checked every minute in an open map',
+    file: SATELLITES,
+    find: '      recheckPublished();\n',
+    replace: '',
+  },
+  {
+    contract: 'an answer to an earlier lookup never replaces a later one',
+    file: SATELLITES,
+    find: '      if (wanted.get(key) !== sat || sat.asked !== turn) return null;',
+    replace: '      if (wanted.get(key) !== sat) return null;',
+  },
+  {
+    contract: 'a wanted satellite with no element set draws nothing',
+    file: SATELLITES,
+    find: '      for (const [key, sat] of wanted) if (!elementsOf(sat)) erase(key, sat);',
+    replace: '',
+  },
+  {
+    contract: 'an unchecked published vehicle stays off through later publisher runs',
+    file: SATELLITES,
+    find: '      if (isPublished(sat.meta)) setPublishedHidden(key, true);',
+    replace: '',
+  },
+  {
+    contract: 'a typed satellite that cannot be looked up is not kept',
+    file: SATELLITES,
+    find: '      if (!result.ok && !known) remove(key);',
+    replace: '',
+  },
+  {
+    contract: 'a checked row keeps its place in the list',
+    file: 'src/map/features/satellites/picker.ts',
+    find: '  return [...curated, ...port.metas().filter((meta) => !curatedKeys.has(metaKey(meta)))];',
+    replace: '  return [...curated, ...port.metas()];',
+  },
+  {
+    contract: 'the picker says why a wanted satellite has no orbit',
+    file: 'src/map/features/satellites/picker.ts',
+    find: '    if (note) notes.appendChild(note);',
+    replace: '',
+  },
+  {
+    contract: 'line of sight ends where the Earth is in the way',
+    file: 'src/orbit-sight.ts',
+    find: '  return nearest >= EARTH_RADIUS_KM ? Math.sqrt(dd) : null;',
+    replace: '  return nearest >= 0 ? Math.sqrt(dd) : null;',
   },
   {
     contract: 'unchecking a satellite forgets it for the next visit',
     file: SATELLITES,
-    find: '      tracked.delete(key);\n      publish();\n      persistSelectedKeys(tracked.keys());',
-    replace: '      tracked.delete(key);\n      publish();',
+    find: '      publish();\n      persist();\n    };\n\n    const addTyped',
+    replace: '      publish();\n    };\n\n    const addTyped',
   },
   {
     contract: 'a crew roster site popup has no Edit button',
@@ -209,8 +349,74 @@ const MUTATIONS = [
   {
     contract: 'a tier pin with no corridor draws no line',
     file: LAUNCH_CORRIDOR,
-    find: '    if (pin.corridor) lines.push(...antimeridianSegments(pin.corridor.points, properties));',
-    replace: '    lines.push(...antimeridianSegments(pin.corridor ? pin.corridor.points : [pin.site, pin.site], properties));',
+    find: "    if (pin.corridor && (pin.direction.kind !== 'modeled' || pin.eventId === selectedEventId)) {",
+    replace: "    lines.push(...antimeridianSegments([pin.site, pin.site], properties));\n    if (pin.corridor && (pin.direction.kind !== 'modeled' || pin.eventId === selectedEventId)) {",
+  },
+  {
+    contract: 'the selected modeled launch draws its fan',
+    file: LAUNCH_CORRIDOR,
+    find: '    if (pin.eventId !== selectedEventId || !pin.ascent) continue;',
+    replace: '    continue;',
+  },
+  {
+    contract: 'a selected launch hides the hazard areas of every other launch',
+    file: LAUNCH_FOCUS,
+    find: '  return selected.length ? selected : pins;',
+    replace: '  return pins;',
+  },
+  {
+    contract: 'leaving launch mode clears the launch selection',
+    file: LAUNCH_FOCUS,
+    find: '        state.selectedEventId = null;\n      }',
+    replace: '      }',
+  },
+  {
+    contract: 'a late hazard reply cannot replace a newer one',
+    file: LAUNCH_FOCUS,
+    find: '    if (epoch !== state.hazardEpoch) return;\n    applyHazardLoad(result);',
+    replace: '    applyHazardLoad(result);',
+  },
+  {
+    contract: 'a hazard popup names the launch each polygon belongs to',
+    file: LAUNCH_FOCUS,
+    find: '    if (launchName && !named.has(launchName)) {',
+    replace: '    if (named.has(launchName)) {',
+  },
+  {
+    contract: 'the hazard file is fetched again after every catalog refresh',
+    file: LAUNCH_FOCUS,
+    find: '      void onHazardCatalogRefresh();',
+    replace: '',
+  },
+  {
+    contract: 'a hazard polygon paints only for its own launch',
+    file: LAUNCH_HAZARDS,
+    find: '  const launch = bundle.launches.find((entry) => entry.event_id === eventId);',
+    replace: '  const launch = bundle.launches[0];',
+  },
+  {
+    contract: 'a notice checked more than two days ago stops painting on its own',
+    file: LAUNCH_HAZARDS,
+    find: '    if (nowMs >= notice.validUntilMs || nowMs >= notice.checkedMs + REVIEW_MAX_MS) continue;',
+    replace: '    if (nowMs >= notice.validUntilMs) continue;',
+  },
+  {
+    contract: 'a launch card shows only its own hazard notices',
+    file: LAUNCH_HAZARDS,
+    find: '  return shownNotes.notes.filter((note) => note.eventId === eventId);',
+    replace: '  return shownNotes.notes;',
+  },
+  {
+    contract: 'a launch card lists only its own undrawn notices',
+    file: LAUNCH_HAZARDS,
+    find: '  return shownNotes.listings.filter((listing) => listing.eventId === eventId);',
+    replace: '  return shownNotes.listings;',
+  },
+  {
+    contract: 'an undrawn notice leaves the card two days after its review or at its cancel time',
+    file: LAUNCH_HAZARDS,
+    find: '    .filter((item) => nowMs < item.validUntilMs && nowMs < item.checkedMs + REVIEW_MAX_MS)',
+    replace: '',
   },
 ];
 

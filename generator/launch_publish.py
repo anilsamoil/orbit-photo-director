@@ -150,7 +150,10 @@ def _validate_catalog(artifact: dict, *, require_pad: bool = True) -> None:
 def _validate_catalog_item(
     item: dict, seen: set[str], keys: Callable, number: Callable, *, require_pad: bool = True,
 ) -> None:
-    keys(item, "event_id revision name rocket site schedule direction tier why reasons shots")
+    keys(
+        item, "event_id revision name rocket site schedule direction tier why reasons shots"
+        + (" ascent" if "ascent" in item else ""),
+    )
     if (
         not isinstance(item["event_id"], str) or item["event_id"] in seen
         or not isinstance(item["name"], str) or not item["name"]
@@ -195,6 +198,10 @@ def _validate_catalog_item(
         raise ValueError("INVALID_LAUNCH_SCHEMA")
     for shot in item["shots"]:
         _validate_shot(shot, kind, keys, number)
+        if shot["direction"]["kind"] == "modeled" and "ascent" not in item:
+            raise ValueError("INVALID_LAUNCH_SCHEMA")
+    if "ascent" in item:
+        _validate_ascent(item, keys, number)
 
 
 def _validate_direction(direction: object, keys: Callable, number: Callable) -> str:
@@ -206,8 +213,10 @@ def _validate_direction(direction: object, keys: Callable, number: Callable) -> 
         empty = ("azimuth_deg", "source", "off_plane_deg")
         if any(direction[field] is not None for field in empty):
             raise ValueError("INVALID_LAUNCH_SCHEMA")
-    elif kind in {"published", "iss_plane", "hazard_area"}:
+    elif kind in {"published", "iss_plane", "hazard_area", "modeled"}:
         if not number(direction["azimuth_deg"], 0, 360) or not isinstance(direction["source"], str):
+            raise ValueError("INVALID_LAUNCH_SCHEMA")
+        if kind == "modeled" and not 1 <= len(direction["source"]) <= 2048:
             raise ValueError("INVALID_LAUNCH_SCHEMA")
         if kind == "iss_plane":
             if not number(direction["off_plane_deg"], -180, 180):
@@ -217,6 +226,60 @@ def _validate_direction(direction: object, keys: Callable, number: Callable) -> 
     else:
         raise ValueError("INVALID_LAUNCH_SCHEMA")
     return kind
+
+
+def _validate_track(track: object, keys: Callable, number: Callable, limit: int) -> None:
+    if not isinstance(track, list) or len(track) > limit:
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    previous = -math.inf
+    for point in track:
+        keys(point, "t_offset_s lat lon alt_km")
+        if (
+            not number(point["t_offset_s"], -86400, 1e7) or point["t_offset_s"] <= previous
+            or not number(point["lat"], -90, 90) or not number(point["lon"], -180, 180)
+            or not number(point["alt_km"], 0, 100000)
+        ):
+            raise ValueError("INVALID_LAUNCH_SCHEMA")
+        previous = point["t_offset_s"]
+
+
+def _validate_ascent(item: dict, keys: Callable, number: Callable) -> None:
+    ascent = item["ascent"]
+    keys(ascent, "grade source fans")
+    kind = item["direction"]["kind"]
+    grade, fans = ascent["grade"], ascent["fans"]
+    if (
+        grade not in ("A", "B", "C", "D")
+        or not isinstance(ascent["source"], str) or not ascent["source"].strip()
+        or len(ascent["source"]) > 2048
+        or not isinstance(fans, list) or not 1 <= len(fans) <= 2
+        or (grade == "D") != (kind == "none") or kind == "iss_plane"
+        or (kind == "modeled" and grade not in ("B", "C"))
+    ):
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
+    for fan in fans:
+        keys(fan, "branch azimuth_deg low_deg high_deg track low_track high_track")
+        if (
+            fan["branch"] not in ("northbound", "southbound", "east", None)
+            or not number(fan["low_deg"], 0, 360) or not number(fan["high_deg"], 0, 360)
+            or (fan["azimuth_deg"] is not None and not number(fan["azimuth_deg"], 0, 360))
+        ):
+            raise ValueError("INVALID_LAUNCH_SCHEMA")
+        for name in ("track", "low_track", "high_track"):
+            _validate_track(fan[name], keys, number, 200)
+        if grade == "D" and (fan["azimuth_deg"] is not None or fan["track"]):
+            raise ValueError("INVALID_LAUNCH_SCHEMA")
+    if kind == "modeled":
+        headings = [fan["azimuth_deg"] for fan in fans]
+        if item["direction"]["azimuth_deg"] not in headings:
+            raise ValueError("INVALID_LAUNCH_SCHEMA")
+    headings = [fan["azimuth_deg"] for fan in fans]
+    for shot in item["shots"]:
+        if (
+            shot["direction"]["kind"] == "modeled"
+            and shot["direction"]["azimuth_deg"] not in headings
+        ):
+            raise ValueError("INVALID_LAUNCH_SCHEMA")
 
 
 def _validate_shot(shot: dict, kind: str, keys: Callable, number: Callable) -> None:
@@ -231,6 +294,8 @@ def _validate_shot(shot: dict, kind: str, keys: Callable, number: Callable) -> N
         raise ValueError("INVALID_LAUNCH_SCHEMA")
     _parse_iso8601_z(shot["evaluated_at"])
     _validate_direction(shot["direction"], keys, number)
+    if shot["subject"] == "ascent" and kind == "modeled" and shot["direction"]["kind"] != "modeled":
+        raise ValueError("INVALID_LAUNCH_SCHEMA")
     if shot["subject"] == "ascent" and shot["direction"]["kind"] == "none":
         raise ValueError("INVALID_LAUNCH_SCHEMA")
     for field in ("liftoff", "start", "best", "end"):
@@ -260,18 +325,9 @@ def _validate_shot(shot: dict, kind: str, keys: Callable, number: Callable) -> N
         raise ValueError("INVALID_LAUNCH_SCHEMA")
     if shot["lens"] not in {"telephoto", "wide"} or not isinstance(shot["lens_reason"], str):
         raise ValueError("INVALID_LAUNCH_SCHEMA")
-    if not isinstance(shot["track"], list) or (shot["subject"] == "pad" and shot["track"]):
+    if shot["subject"] == "pad" and shot["track"]:
         raise ValueError("INVALID_LAUNCH_SCHEMA")
-    previous = -math.inf
-    for point in shot["track"]:
-        keys(point, "t_offset_s lat lon alt_km")
-        if (
-            not number(point["t_offset_s"], -86400, 1e7) or point["t_offset_s"] <= previous
-            or not number(point["lat"], -90, 90) or not number(point["lon"], -180, 180)
-            or not number(point["alt_km"], 0, 100000)
-        ):
-            raise ValueError("INVALID_LAUNCH_SCHEMA")
-        previous = point["t_offset_s"]
+    _validate_track(shot["track"], keys, number, 10000)
     keys(shot["score"], "low high terms")
     if (
         not number(shot["score"]["low"], 0, 100) or not number(shot["score"]["high"], 0, 100)
@@ -429,9 +485,16 @@ def _write_bytes_atomic(path: Path, data: bytes) -> None:
 
 
 def _rclone_stderr(raw: bytes | str | None) -> str:
-    if isinstance(raw, str):
-        return raw.strip()
-    return (raw or b"").decode("utf-8", "replace").strip()
+    detail = (
+        raw.strip() if isinstance(raw, str) else (raw or b"").decode("utf-8", "replace").strip()
+    )
+    safe = {
+        "": "",
+        "auth failed": "auth failed",
+        "disk full": "disk full",
+        "i/o timeout": "i/o timeout",
+    }
+    return safe.get(detail, "diagnostic withheld")
 
 
 def _rclone(command: list[str], timeout: int) -> subprocess.CompletedProcess[bytes]:
@@ -443,7 +506,9 @@ def _rclone(command: list[str], timeout: int) -> subprocess.CompletedProcess[byt
             timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
-        raise ValueError(f"RCLONE_TIMEOUT: {_rclone_stderr(exc.stderr)}") from exc
+        raise ValueError(f"RCLONE_TIMEOUT: {_rclone_stderr(exc.stderr)}") from None
+    except (OSError, subprocess.SubprocessError):
+        raise ValueError("RCLONE_EXECUTION_FAILED") from None
     code = getattr(result, "returncode", 0)
     if not isinstance(code, int):
         code = 0

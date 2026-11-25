@@ -1,4 +1,4 @@
-import type { CaptureInterval, LaunchArtifact, LaunchAssessment, LaunchCatalog, LaunchCatalogItem, LaunchOpportunity, LaunchPointer, ShotEnvelope } from '../src/launch-schema';
+import type { CaptureInterval, LaunchArtifact, LaunchAssessment, LaunchAscent, LaunchCatalog, LaunchCatalogItem, LaunchOpportunity, LaunchPointer, ShotEnvelope } from '../src/launch-schema';
 import type { LaunchState } from '../src/launch-store';
 
 export const NOW = Date.parse('2026-09-07T12:00:00Z');
@@ -68,6 +68,40 @@ export function catalogItem(over: Partial<LaunchCatalogItem> = {}): LaunchCatalo
       { t_offset_s: 15, lat: 28.6, lon: -80.5, alt_km: 10 },
     ] })], ...over,
   };
+}
+export function plannerFan(over: Partial<LaunchAscent['fans'][number]> = {}): LaunchAscent['fans'][number] {
+  const start = { t_offset_s: 0, lat: 28.5, lon: -80.6, alt_km: 0 };
+  return {
+    branch: 'northbound', azimuth_deg: 42.4, low_deg: 37.4, high_deg: 47.4,
+    track: [start, { t_offset_s: 60, lat: 30, lon: -79, alt_km: 50 }],
+    low_track: [start, { t_offset_s: 60, lat: 30.2, lon: -79.2, alt_km: 50 }],
+    high_track: [start, { t_offset_s: 60, lat: 29.8, lon: -78.8, alt_km: 50 }],
+    ...over,
+  };
+}
+export function plannerItem(over: Partial<LaunchCatalogItem> = {}): LaunchCatalogItem {
+  return catalogItem({
+    event_id: 'vulcan', name: 'Vulcan VC6L | Amazon Leo', tier: 'watch', shots: [],
+    direction: { kind: 'modeled', azimuth_deg: 42.4, source: 'Amazon Leo shell estimate', off_plane_deg: null },
+    ascent: { grade: 'B', source: 'Amazon Leo shell estimate', fans: [plannerFan()] },
+    ...over,
+  });
+}
+export function plannerCases(): LaunchCatalogItem[] {
+  const modeled = (event_id: string, name: string, azimuth: number, grade: 'B' | 'C', fan: Partial<LaunchAscent['fans'][number]>) => plannerItem({
+    event_id, name,
+    direction: { kind: 'modeled', azimuth_deg: azimuth, source: `${name} estimate`, off_plane_deg: null },
+    ascent: { grade, source: `${name} estimate`, fans: [plannerFan({ azimuth_deg: azimuth, ...fan })] },
+  });
+  return [
+    modeled('cape-iss', 'Cape ISS', 42.8, 'B', { low_deg: 37.8, high_deg: 47.8 }),
+    plannerItem(),
+    modeled('vandenberg-sso', 'Vandenberg SSO', 192, 'C', { branch: 'southbound', low_deg: 187, high_deg: 197 }),
+    modeled('cape-gto', 'Cape GTO', 90, 'C', { branch: 'east', low_deg: 85, high_deg: 95 }),
+    catalogItem({ event_id: 'starbase', name: 'Starbase unknown', shots: [], direction: { kind: 'none', azimuth_deg: null, source: null, off_plane_deg: null }, ascent: { grade: 'D', source: 'UNVERIFIED assumed Starbase sector', fans: [plannerFan({ branch: null, azimuth_deg: null, low_deg: 70, high_deg: 110, track: [] })] } }),
+    modeled('baikonur', 'Baikonur Progress', 62.2, 'B', { low_deg: 57.2, high_deg: 67.2 }),
+    catalogItem({ event_id: 'taiyuan', name: 'Taiyuan unknown', shots: [], direction: { kind: 'none', azimuth_deg: null, source: null, off_plane_deg: null }, ascent: { grade: 'D', source: 'UNVERIFIED assumed Taiyuan sectors', fans: [plannerFan({ branch: null, azimuth_deg: null, low_deg: 150, high_deg: 210, track: [] })] } }),
+  ];
 }
 export function catalog(items: LaunchCatalogItem[] = [catalogItem()], over: Partial<LaunchCatalog> = {}): LaunchCatalog {
   return {

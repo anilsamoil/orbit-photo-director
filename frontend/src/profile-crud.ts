@@ -47,7 +47,7 @@ import {
   readProfileImportFile,
   type ImportResult,
 } from './profile-json-io';
-import { fetchLog } from './log';
+import { fetchLogResult } from './log';
 import { aggregateShootCounts, publishShotCounts } from './shot-counts';
 import { fetchCuratedTargets } from './manifest';
 import type { CuratedTarget, Manifest } from './types';
@@ -141,25 +141,10 @@ export function buildCrudSection(profileName: string): HTMLElement {
   section.appendChild(buildCsvImportSection(profileName));
   section.appendChild(buildJsonIoSection(profileName));
 
-  // Slot 6b — fire-and-forget hydration from the server on the FIRST
-  // mount per profile per session. Closes the "first open on a fresh
-  // device shows 0 targets even though server has N" UX gap.
-  // Intentionally not awaited: render must not block on the network,
-  // and a failed hydrate is silent (see hydratePersonalTargets).
-  // Re-renders after mutations (via rerenderCrudSection) reuse this
-  // same code path but the once-per-session guard suppresses redundant
-  // GETs — the operator's local state IS the truth after slot 6's
-  // optimistic mutations land.
   if (!hydratedProfiles.has(profileName)) {
-    hydratedProfiles.add(profileName);
     void hydratePersonalTargets(profileName);
   }
 
-  // Slot 8b — independent fire-and-forget log fetch for shot-count
-  // badges. Independent from the targets hydrate above so a log-fetch
-  // failure (sign-in expired, 4xx, network) can never kill target
-  // rendering. Once-per-session per profile; re-renders consult the
-  // module-scope cache rather than refetching.
   if (!shotCountsFetched.has(profileName)) {
     shotCountsFetched.add(profileName);
     void hydrateShotCounts(profileName);
@@ -199,9 +184,6 @@ function buildRosterSection(profileName: RosterName): HTMLElement {
   return section;
 }
 
-/** Per-session record of which profiles we've already hydrated. Reset
- *  only on full page reload — that's the operator behaviour we care
- *  about (open the URL on a fresh device → hydrate once). */
 const hydratedProfiles = new Set<string>();
 const hydrationInFlight = new Map<string, Promise<void>>();
 
@@ -248,8 +230,7 @@ async function hydrateUnchangedProfile(profileName: string): Promise<void> {
   if (profileTargetsChanged(profileName)) return;
   const current = safeLoadProfile(profileName);
   if (!current) return;
-  hydratedProfiles.add(profileName);
-  const before = JSON.stringify(current);
+  const before = JSON.stringify([current.additions, current.removedCuratedIds, current.removedCuratedUpdatedAt]);
   const revision = profileTargetRevision(profileName);
 
   const apiResult = await getProfileTargets(profileName);
@@ -262,13 +243,11 @@ async function hydrateUnchangedProfile(profileName: string): Promise<void> {
     return;
   }
 
-  // Reject an obsolete response after sign-in changes or any intervening
-  // local edit/delete. Re-reading also catches saves from another tab.
   const freshAccount = getAccountProfile();
   if (freshAccount?.name !== account?.name || freshAccount?.isVerified === false
     || profileTargetsChanged(profileName) || profileTargetRevision(profileName) !== revision) return;
   const fresh = safeLoadProfile(profileName);
-  if (!fresh || JSON.stringify(fresh) !== before) return;
+  if (!fresh || JSON.stringify([fresh.additions, fresh.removedCuratedIds, fresh.removedCuratedUpdatedAt]) !== before) return;
 
   const ids = new Set(fresh.additions.map((t) => t.id));
   const missing: PersonalTarget[] = [];
@@ -305,7 +284,10 @@ async function hydrateUnchangedProfile(profileName: string): Promise<void> {
       };
     }
   }
-  if (merged === fresh) return;
+  if (merged === fresh) {
+    hydratedProfiles.add(profileName);
+    return;
+  }
   try {
     saveProfile(merged);
   } catch (e) {
@@ -316,6 +298,7 @@ async function hydrateUnchangedProfile(profileName: string): Promise<void> {
     );
     return;
   }
+  hydratedProfiles.add(profileName);
   if (editingTargetId === null) rerenderCrudSection(profileName);
 }
 
@@ -325,27 +308,20 @@ function sameIds(left: readonly string[], right: readonly string[]): boolean {
   return true;
 }
 
-/** Slot 8b — one-shot GET against `/api/log` filtered to the active
- *  profile. Aggregates `action === 'shoot'` entries by `target_id` and
- *  caches the resulting count map in `shotCountsByProfile`. Re-renders
- *  the CRUD section so the personal-target rows pick up the badge.
- *
- *  Independent from `hydratePersonalTargets`: a log fetch failure is
- *  silent (the underlying `fetchLog` already swallows network + 4xx and
- *  returns `[]`), and a return of `[]` simply means "no badges to show"
- *  — never a crash. The shot-count cache stays empty for that profile
- *  for the remainder of the session. */
+/** Cache successful shot-count reads; failed reads remain retryable. */
 export async function hydrateShotCounts(profileName: string): Promise<void> {
-  let entries: Awaited<ReturnType<typeof fetchLog>>;
+  let result: Awaited<ReturnType<typeof fetchLogResult>>;
   try {
-    entries = await fetchLog('', 500, profileName);
+    result = await fetchLogResult('', 500, profileName);
   } catch {
-    // Defensive: fetchLog already catches its own throws but a future
-    // refactor (or a test stub that throws) shouldn't blow up the CRUD
-    // mount. Treat as "no data" rather than letting the error escape.
+    shotCountsFetched.delete(profileName);
     return;
   }
-  const counts = aggregateShootCounts(entries);
+  if (!result.ok) {
+    shotCountsFetched.delete(profileName);
+    return;
+  }
+  const counts = aggregateShootCounts(result.entries);
   shotCountsByProfile.set(profileName, counts);
   // Publish to the shared store so the map popup can show "✓ shot N×" without
   // its own /api/log fetch on tap (review R12, Jack's "have I shot it yet").

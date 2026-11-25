@@ -44,7 +44,9 @@ export type CameraMove = {
   duration: number;
 };
 
-export type FitOptions = { padding: number; maxZoom: number; duration: number };
+export type FitPadding = number | { readonly top: number; readonly right: number; readonly bottom: number; readonly left: number };
+
+export type FitOptions = { padding: FitPadding; maxZoom: number; duration: number; bearing?: number };
 
 export type InitialCamera = { center: LngLat; zoom: number };
 
