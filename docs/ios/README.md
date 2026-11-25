@@ -1,6 +1,6 @@
 # SNAP for iPhone and iPad
 
-SNAP is becoming an app for the NASA-managed iPad and iPhone in orbit so that it keeps working when the station link drops. Release 1 uses a native shell around the existing screens. Native code handles storage, sync, map tiles, alerts and sign-in.
+SNAP is becoming an offline-first Earth viewer for the NASA-managed iPad and iPhone in orbit, with the ISS track, targets and passes available for hours to days without the station's Ku-band link. Release 1 uses a native shell around the existing screens. Native code handles storage, sync, map tiles and the offline Earth imagery, alerts and sign-in. The flat map uses the bundled baseline, the W-43 Earth pack and W-45 detail packs. W-44 is scheduled after G2 as the first update after release 1 and opens Map on a globe. Read the [product goal](../designs/ios-app.md#product-goal).
 
 Planned on 2026-11-15. No app code exists yet.
 
@@ -36,4 +36,4 @@ Planned on 2026-11-15. No app code exists yet.
 
 ## The one line that defines done for release 1
 
-Cold-launch offline; Earth draws; the ISS prediction moves; a target remains usable; an alert appears while locked; a recorded shot survives restart and uploads once.
+The bundled baseline and W-43 Earth pack together cover the Web Mercator grid at zoom 0 to 8, reaching about ±85.05° latitude. The poles beyond that limit are not covered. The W-43 build checks the full tile inventory and payload integrity. Cold-launch the release candidate offline on the flat map with the packs installed. Check rendering at zoom 8 from the Earth pack at ten locations across continents and oceans, and at zoom 12 from a W-45 detail pack at a covered verified public target. The ISS prediction moves, a target remains usable, an alert appears while locked and a recorded shot survives restart and uploads once.
