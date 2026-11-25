@@ -170,11 +170,13 @@ UIKit uses its own scene snapshot in the app switcher and during foreground entr
 | Policy | Meaning | Layers in release 1 |
 | --- | --- | --- |
 | `baseline` | Bundle separate raster MBTiles at zoom 0 to 5 and a GeoJSON lines and labels asset. Include attribution for each asset. | Blue Marble, Black Marble 2016, Natural Earth lines and labels |
+| `earth-pack` | Downloaded once after install (W-43), kept permanently, outside every cap, carried across updates. Zoom 6 to 8, the products' source resolution. | Blue Marble, Black Marble 2016 |
+| `detail` | Downloaded per place when online (W-45), zoom 9 to 12, inside a 20 GB detail budget by default; least recently used places evicted first. Only sources whose terms permit offline storage. | NASA HLS (first candidate), others after a recorded licence check |
 | `durable` | Kept on disk after fetch, inside the tile-store cap | GIBS daily true colour (latest two days), SNAP forecast cloud frames |
 | `session` | Kept briefly within the permitted retention window | GIBS geostationary IR |
 | `online` | Fetch on demand where the source terms permit. Prefetch and disk retention are disabled by default. Enable offline use only under [confirmed permission for the exact sources and use](../designs/ios-app.md#esri-rights). | Esri imagery, Esri dark grey, Esri reference labels |
 
-The gateway answers in this order: baseline pack, tile store, network. A miss with no network returns nothing and the map overzooms the baseline. The baseline sits under the online layers in the map style, so a missing Esri tile shows Earth, not black.
+The gateway answers in this order: baseline pack, Earth pack, detail packs, tile store, network. A miss with no network returns nothing and the map overzooms the deepest local tier that covers the place. The baseline sits under the online layers in the map style, so a missing Esri tile shows Earth, not black.
 
 Keep the RealEarth Meteosat layer disabled on iOS until W-41 records terms covering app display and the intended session cache for the exact enhanced product `Met11-SEVIRI-FD-BAND09-enh`. Record the permitted retention window and credit wording in `app/tiles/SOURCES.md`. The product's availability through the tile API does not establish those rights. With the layer disabled, omit its source and legend credit and deny its tile requests. With it enabled, display both SSEC RealEarth and the EUMETSAT Meteosat product credit required by Article 6(3), including the year and modification wording when applicable. Show both credits whenever the imagery is visible, including from any permitted cache. [Exact RealEarth product](https://realearth.ssec.wisc.edu/products/Met11-SEVIRI-FD-BAND09-enh) · [RealEarth data access](https://realearth.ssec.wisc.edu/doc/dataaccess.php) · [EUMETSAT Data Policy, Article 6(3)](https://www-cdn.eumetsat.int/files/2026-02/44253%20-%20Basic%20Documents.pdf#page=211)
 
@@ -186,12 +188,15 @@ On iOS, Map's Night Lights `viirs-alpha` handler requests raw Black Marble 2016 
 
 The ISS Plan inset in the iPad split layout has its own MapLibre style. On iOS, put bundled Blue Marble beneath the inset's track and night shading. Route the raster through `host.tileUrl` and the baseline gateway at zoom 0 to 5, with MapLibre overzoom above 5. When Esri is disabled, omit both Esri inset sources. When permitted online tiles are unavailable, the bundled raster remains visible underneath. Suppress a duplicate country label only when the matching Esri reference tile is actually drawn. Display the bundled raster's attribution in the Plan column even offline, clear of the clock and edition overlay. The `browser` host keeps the existing inset style. [Current inset adapter](../../frontend/src/map/adapters/maplibre/track-inset.ts#L198) · [W-42 offline proof](WORK_PLAN.md#w-42-the-map-with-no-network-s)
 
-The tile store has a 512 MiB cap (536,870,912 bytes), measured as the sum of downloaded tile payload bytes across all layers. The bundled baseline pack, installed plans and outbox are outside this cap. Before storing a tile, remove expired tiles, then evict least-recently-used tiles until the new tile fits. Do not store a tile larger than the cap. Layer retention rules are upper limits within this cap. A fill-and-evict test checks the byte total, eviction order and preservation of the baseline, plans and outbox.
+The tile store has a 512 MiB cap (536,870,912 bytes), measured as the sum of downloaded tile payload bytes across the transient `durable` and `session` layers. The bundled baseline pack, the Earth pack, detail packs, installed plans and outbox are outside this cap. Before storing a tile, remove expired tiles, then evict least-recently-used tiles until the new tile fits. Do not store a tile larger than the cap. Layer retention rules are upper limits within this cap. A fill-and-evict test checks the byte total, eviction order and preservation of the baseline, plans and outbox.
 
 The iOS host disables Esri world-view and per-target prefetch by default. After each new plan, `frontend/src/tile-precache.ts` routes permitted GIBS prefetch through `host.tileUrl` to the gateway. Up to three eligible public targets get one tile per source zoom at 6, 8, and 9. Requested zoom 10 clamps to source zoom 9. The browser host keeps its world-view prefetch and applies the same public-target eligibility rule to each source's existing per-target prefetch. W-42 verifies offline baseline rendering and attribution with Esri disabled.
 
 Release 1 disables external place search in the iOS build. Users add personal targets by coordinates or map pin and can name them locally. The iOS build omits the geocoder and its controls. Its outbound policy denies geocoder requests. Entered names and coordinates go to SNAP only as saved target data when authenticated sync runs. The privacy policy discloses that transfer.
 
+### Globe view
+
+W-44. In the iOS host, Map opens on MapLibre GL JS's globe projection and switches to the flat map as it zooms in, using the same sources, the same gateway and the same layer catalogue. The ISS track, marker, terminator, night lights, targets, passes and launch corridors draw on the globe from local data. Features that assume a flat map (antimeridian splits, the follow-ISS bearing, the inset maps) are checked on the globe and fixed or kept on the flat map. The browser host keeps the flat map, and its contract tests stay unchanged.
 ### Browser place search
 
 Both website hosts keep explicit place search. On submit, first resolve the existing exact, normalized Tuvalu and Funafuti aliases in the browser. Return the curated land point from `targets.json` (`tuvalu-funafuti`) and credit the Geoscience Australia TUVA station. This lookup works with the external provider disabled. [Current aliases and land point](../../frontend/src/profile-geocode.ts#L42)
@@ -690,4 +695,4 @@ These extend the rules in `AGENTS.md`. Each gets a test that fails with the file
 
 ## Not in release 1
 
-Swift orbit math. Widgets and the Lock Screen countdown. Native screens. Notification buttons for Shoot and Skip. Server push. Device-to-device plan sharing. Updating the web bundle without a new build. A longer plan from the generator. Android.
+The globe view (W-44), unless the owner pulls it into release 1. Swift orbit math. Widgets and the Lock Screen countdown. Native screens. Notification buttons for Shoot and Skip. Server push. Device-to-device plan sharing. Updating the web bundle without a new build. A longer plan from the generator. Android.

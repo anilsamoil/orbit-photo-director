@@ -1,6 +1,6 @@
 # SNAP for iPhone and iPad
 
-SNAP is becoming an app for the NASA-managed iPad and iPhone in orbit so that it keeps working when the station link drops. Release 1 uses a native shell around the existing screens. Native code handles storage, sync, map tiles, alerts and sign-in.
+SNAP is becoming an app for the NASA-managed iPad and iPhone in orbit: an offline-first Earth viewer, like Google Earth with the ISS track, targets and passes on it, that works well for hours to days without the station's Ku-band link. Read the [product goal](../designs/ios-app.md#product-goal) first; every work package is checked against it. Release 1 uses a native shell around the existing screens. Native code handles storage, sync, map tiles and the offline Earth imagery, alerts and sign-in.
 
 Planned on 2026-11-15. No app code exists yet.
 
@@ -36,4 +36,4 @@ Planned on 2026-11-15. No app code exists yet.
 
 ## The one line that defines done for release 1
 
-Cold-launch offline; Earth draws; the ISS prediction moves; a target remains usable; an alert appears while locked; a recorded shot survives restart and uploads once.
+Cold-launch offline; Earth draws, and zooms to zoom 8 anywhere from the Earth pack; the ISS prediction moves; a target remains usable; an alert appears while locked; a recorded shot survives restart and uploads once.
