@@ -382,5 +382,138 @@ for (const engine of [
       expect.soft(containers.some((width) => width <= 260), `${engine.name} containers ${containers.join(',')}`).toBe(true);
       expect.soft(containers.some((width) => width > 260), `${engine.name} containers ${containers.join(',')}`).toBe(true);
     }, 120_000);
+
+    it('keeps a 60-character heading clear of a fully reachable Close at and above 260px', async () => {
+      if (!browser) throw new Error(`${engine.name} was not opened`);
+      const body = buildPassList(40, -90, 1, [{ name: 'ISS', color: '#5cd0ff', passes }], now);
+      body.querySelector('.pin-pass-heading')!.textContent = heading60;
+      const markup = body.outerHTML;
+      const layouts = [
+        { width: 402, height: 874, deviceScaleFactor: 3, shown: false },
+        { width: 1210, height: 834, deviceScaleFactor: 2, shown: true },
+        { width: 1210, height: 834, deviceScaleFactor: 2, shown: true, maxInspectorWidth: 260 },
+        { width: 1210, height: 834, deviceScaleFactor: 2, shown: true, maxInspectorWidth: 260.5 },
+      ];
+      for (const { width, height, deviceScaleFactor, shown, maxInspectorWidth } of layouts) {
+        const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor, isMobile: true, hasTouch: true });
+        try {
+          const page = await context.newPage();
+          await page.route('**/*', (route) => route.abort());
+          await page.setContent(html, { waitUntil: 'domcontentloaded' });
+          await page.evaluate(() => document.fonts.ready);
+          await page.evaluate((shown) => {
+            document.body.classList.toggle('map-chrome-hidden', !shown);
+            document.querySelector('#view')!.classList.add('view-map');
+            const pane = document.querySelector('#map-pane')!;
+            pane.classList.add('active');
+            pane.classList.toggle('map-chrome-hidden', !shown);
+            document.querySelector('#map')!.innerHTML = '<div class="maplibregl-control-container"><div class="maplibregl-ctrl-top-left"><div class="maplibregl-ctrl maplibregl-ctrl-group"><button></button><button></button><button></button></div></div></div>';
+            const toggle = document.querySelector('#map-chrome-toggle')!;
+            toggle.textContent = shown ? 'Hide' : 'Controls';
+            toggle.setAttribute('aria-expanded', String(shown));
+          }, shown);
+          await page.addScriptTag({ content: `${placementScript}\nwindow.placeInspector = inspectorSync({ getContainer: () => document.querySelector('#map'), resize() {} });` });
+          await page.evaluate(({ markup, maxInspectorWidth }) => {
+            const inspector = document.querySelector<HTMLElement>('#map-inspector')!;
+            if (maxInspectorWidth !== undefined) inspector.style.maxWidth = `${maxInspectorWidth}px`;
+            inspector.innerHTML = `<div class="maplibregl-popup"><div class="maplibregl-popup-content">${markup}<button class="maplibregl-popup-close-button" type="button">×</button></div></div>`;
+            (window as unknown as { placeInspector: () => void }).placeInspector();
+          }, { markup, maxInspectorWidth });
+          await page.evaluate(() => document.fonts.ready);
+          await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+          const label = `${engine.name} ${width}×${height} controls ${shown ? 'shown' : 'hidden'}${maxInspectorWidth === undefined ? '' : ` at ${maxInspectorWidth}px`}`;
+          expectReadable(await measure(page), label);
+          const measured = await page.evaluate(() => {
+            const heading = document.querySelector<HTMLElement>('.pin-pass-heading')!;
+            const content = document.querySelector<HTMLElement>('.maplibregl-popup-content')!;
+            const inspectorBox = document.querySelector('#map-inspector')!.getBoundingClientRect();
+            const close = document.querySelector<HTMLElement>('.maplibregl-popup-close-button')!;
+            const closeBox = close.getBoundingClientRect();
+            const glyphRange = document.createRange();
+            glyphRange.selectNodeContents(close);
+            const glyph = glyphRange.getBoundingClientRect();
+            const contentBox = content.getBoundingClientRect();
+            const closeFullyVisible = closeBox.left >= Math.max(0, inspectorBox.left, contentBox.left)
+              && closeBox.right <= Math.min(innerWidth, inspectorBox.right, contentBox.right)
+              && closeBox.top >= Math.max(0, inspectorBox.top, contentBox.top)
+              && closeBox.bottom <= Math.min(innerHeight, inspectorBox.bottom, contentBox.bottom);
+            const missedHits = [closeBox.left + 2, closeBox.left + closeBox.width / 2, closeBox.right - 2].flatMap((x) =>
+              [closeBox.top + 2, closeBox.top + closeBox.height / 2, closeBox.bottom - 2].flatMap((y) =>
+                close.contains(document.elementFromPoint(x, y)) ? [] : [{ x, y }]));
+            const node = heading.firstChild!;
+            const text = node.textContent ?? '';
+            const hidden: string[] = [];
+            const clipped: string[] = [];
+            for (let index = 0; index < text.length; index += 1) {
+              const range = document.createRange();
+              range.setStart(node, index);
+              range.setEnd(node, index + 1);
+              const rect = range.getBoundingClientRect();
+              const overlapW = Math.min(rect.right, glyph.right) - Math.max(rect.left, glyph.left);
+              const overlapH = Math.min(rect.bottom, glyph.bottom) - Math.max(rect.top, glyph.top);
+              const outside = rect.width <= 0 || rect.height <= 0
+                || rect.left < contentBox.left - 0.5
+                || rect.right > contentBox.right + 0.5;
+              if (overlapW > 0.5 && overlapH > 0.5) hidden.push(text[index]!);
+              if (outside) clipped.push(text[index]!);
+            }
+            const lines = (() => {
+              const range = document.createRange();
+              range.selectNodeContents(heading);
+              return [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0).length;
+            })();
+            const scrollWidth = heading.scrollWidth;
+            const clientWidth = heading.clientWidth;
+            const contentScroll = content.scrollWidth;
+            const contentClient = content.clientWidth;
+            heading.textContent = 'ISS — next 5 passes';
+            const normalRange = document.createRange();
+            normalRange.selectNodeContents(heading);
+            const normalLines = [...normalRange.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0).length;
+            return {
+              inspectorWidth: inspectorBox.width,
+              text,
+              scrollWidth,
+              clientWidth,
+              contentScroll,
+              contentClient,
+              lines,
+              normalLines,
+              normalScroll: heading.scrollWidth,
+              normalClient: heading.clientWidth,
+              hidden: hidden.join(''),
+              clipped: clipped.join(''),
+              closeWidth: closeBox.width,
+              closeHeight: closeBox.height,
+              closeFullyVisible,
+              missedHits,
+              glyphWidth: glyph.width,
+              glyphRightInset: closeBox.right - glyph.right,
+            };
+          });
+          if (maxInspectorWidth === undefined) expect(measured.inspectorWidth, label).toBeGreaterThan(260);
+          else expect(measured.inspectorWidth, label).toBe(maxInspectorWidth);
+          expect.soft(measured.text, label).toBe(heading60);
+          expect.soft(measured.text, label).toHaveLength(60);
+          expect.soft(measured.scrollWidth, `${label} heading scrollWidth`).toBeLessThanOrEqual(measured.clientWidth);
+          expect.soft(measured.contentScroll, `${label} content scrollWidth`).toBeLessThanOrEqual(measured.contentClient);
+          expect.soft(measured.lines, `${label} wraps`).toBeGreaterThan(1);
+          expect.soft(measured.hidden, `${label} hidden ${measured.hidden}`).toBe('');
+          expect.soft(measured.clipped, `${label} clipped ${measured.clipped}`).toBe('');
+          expect.soft(measured.closeWidth, `${label} close width`).toBe(44);
+          expect.soft(measured.closeHeight, `${label} close height`).toBe(44);
+          expect.soft(measured.closeFullyVisible, `${label} close is fully visible`).toBe(true);
+          expect.soft(measured.missedHits, `${label} close edge hit tests`).toEqual([]);
+          expect.soft(measured.glyphWidth, `${label} close glyph is present`).toBeGreaterThan(0);
+          if (measured.inspectorWidth > 260) {
+            expect.soft(measured.glyphRightInset, `${label} close glyph is right-aligned`).toBeLessThanOrEqual(5);
+            expect.soft(measured.normalLines, `${label} normal heading lines`).toBe(1);
+            expect.soft(measured.normalScroll, `${label} normal heading scrollWidth`).toBeLessThanOrEqual(measured.normalClient);
+          }
+        } finally {
+          await context.close();
+        }
+      }
+    }, 120_000);
   });
 }
