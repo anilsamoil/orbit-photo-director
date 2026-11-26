@@ -312,7 +312,7 @@ for (const engine of [
       }
     }, 120_000);
 
-    it('keeps a 60-character unbroken heading inside the inspector', async () => {
+    it('wraps a 60-character unbroken heading inside the inspector', async () => {
       if (!browser) throw new Error(`${engine.name} was not opened`);
       const layouts = [
         { width: 402, height: 874 },
