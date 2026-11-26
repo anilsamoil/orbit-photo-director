@@ -12,7 +12,7 @@ EXPORTER = Path(__file__).with_name("export-host-proof.py")
 MAP_MARKER = (0, 255, 0)
 ISS_MARKER = (196, 90, 40)
 BLOCKED_HOSTS = ["g1-fetch.invalid", "g1-websocket.invalid", "g1-xhr.invalid"]
-DEVICE_REQUIRED = {"reason": "Requires on-device proof; hosted simulator GPU unsupported", "gate": "G1-device"}
+DEVICE_REQUIRED = {"reason": "Requires on-device proof before W-03 can be called done", "gate": "G1-device"}
 
 
 def fixture_png(marker):
@@ -33,7 +33,7 @@ def fixture_png(marker):
 
 class HostProofExportTests(unittest.TestCase):
     def export(self, outcome, screenshots, *, failed_checks=(), checks=None,
-               performed_checks=range(1, 11), checks_without_details=()):
+               performed_checks=range(1, 11), checks_without_details=(), evidence_overrides=None, extra_rows=()):
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp)
             directory = output / "attachments"
@@ -63,6 +63,9 @@ class HostProofExportTests(unittest.TestCase):
                     actualDurationMs=600_000,
                     memory={"observedDurationMs": 600_000, "peakBytes": 123_456},
                 )
+            for number, evidence in (evidence_overrides or {}).items():
+                results[number - 1]["evidence"] = evidence
+            results.extend(extra_rows)
             (directory / "report.json").write_text(json.dumps({"results": results}), encoding="utf-8")
             attachments = [{"suggestedHumanReadableName": "G1-proof-results", "exportedFileName": "report.json"}]
             for name, png in screenshots.items():
@@ -122,14 +125,23 @@ class HostProofExportTests(unittest.TestCase):
         self.assertEqual([row["status"] for row in report["results"]], ["pass"] * 10)
 
     def test_full_mode_still_requires_egress_and_stress_evidence(self):
-        process, report, _ = self.export(
+        process, report, table = self.export(
             "success", {"G1-map": fixture_png(MAP_MARKER), "G1-iss": fixture_png(ISS_MARKER)},
             checks_without_details=(9, 10),
         )
         self.assertEqual(process.returncode, 1)
         self.assertEqual(len(report["evidenceExportErrors"]), 2)
-        self.assertIn("Check 9 is missing browser or native egress-denial evidence", process.stderr)
-        self.assertIn("missing full-duration stress or WebContent peak RSS evidence", process.stderr)
+        for number, expected in (
+            (9, "Check 9 is missing browser or native egress-denial evidence"),
+            (10, "missing full-duration stress or WebContent peak RSS evidence"),
+        ):
+            row = report["results"][number - 1]
+            self.assertEqual(row["status"], "fail")
+            self.assertIn(expected, row["evidence"]["evidenceError"])
+            self.assertIn(expected, process.stderr)
+            self.assertIn(expected, table)
+        self.assertIn("| 9 | WebContent termination and same-tab recovery | fail |", table)
+        self.assertIn("| 10 | Scripted pan and zoom, peak memory | fail |", table)
 
     def test_scoped_success_requires_only_selected_checks(self):
         process, report, table = self.export("success", {}, checks="8, 6, 1, 8", performed_checks=(1, 6, 8))
@@ -145,9 +157,95 @@ class HostProofExportTests(unittest.TestCase):
         self.assertEqual(table.count("| not-run (on-device required) |"), 7)
 
     def test_scoped_success_requires_check_1_egress_evidence(self):
-        process, _, _ = self.export("success", {}, checks="1", performed_checks=(1,), checks_without_details=(1,))
+        process, report, table = self.export(
+            "success", {}, checks="1", performed_checks=(1,), checks_without_details=(1,),
+        )
         self.assertEqual(process.returncode, 1)
-        self.assertIn("Check 1 is missing browser or native egress-denial evidence", process.stderr)
+        expected = "Check 1 is missing browser or native egress-denial evidence"
+        self.assertEqual(report["results"][0]["status"], "fail")
+        self.assertIn(expected, report["results"][0]["evidence"]["evidenceError"])
+        self.assertIn("| 1 | Secure context and matching SHA-256 | fail |", table)
+        self.assertIn(expected, process.stderr)
+
+    def test_scoped_check_1_is_validated_when_another_check_failed(self):
+        for outcome, returncode in (("success", 1), ("failure", 0)):
+            with self.subTest(outcome=outcome):
+                process, report, table = self.export(
+                    outcome, {}, checks="1,6,8", performed_checks=(1, 6, 8),
+                    checks_without_details=(1,), failed_checks=(6,),
+                )
+                self.assertEqual(process.returncode, returncode, process.stderr)
+                check1, check6, check8 = (report["results"][index] for index in (0, 5, 7))
+                self.assertEqual([check1["status"], check6["status"], check8["status"]], ["fail", "fail", "pass"])
+                expected = "Check 1 is missing browser or native egress-denial evidence"
+                self.assertIn(expected, check1["evidence"]["evidenceError"])
+                self.assertIn("| 1 | Secure context and matching SHA-256 | fail |", table)
+                self.assertIn(expected, table)
+                self.assertEqual("missing passing check evidence" in table, outcome == "success")
+
+    def test_incorrect_egress_and_stress_evidence_on_failed_xctest(self):
+        evidence = {
+            1: {"egress": {
+                "connectSrcBlockedHosts": BLOCKED_HOSTS[:-1],
+                "capacitorHttp": "G1_BRIDGE_DENIED",
+                "capacitorHttpNativeClass": "G1_BRIDGE_DENIED",
+            }},
+            9: {"egress": {
+                "connectSrcBlockedHosts": BLOCKED_HOSTS,
+                "capacitorHttp": "G1_BRIDGE_DENIED",
+                "capacitorHttpNativeClass": "unexpected",
+            }},
+            10: {
+                "requestedDurationMs": 600_000,
+                "actualDurationMs": 600_000,
+                "memory": {"observedDurationMs": 599_999, "peakBytes": 123_456},
+            },
+        }
+        process, report, table = self.export(
+            "failure", {}, checks="1,9,10", performed_checks=(1, 9, 10), evidence_overrides=evidence,
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        for number in (1, 9, 10):
+            row = report["results"][number - 1]
+            self.assertEqual(row["status"], "fail")
+            self.assertIn(row["evidence"]["evidenceError"], table)
+
+    def test_duplicate_check_discards_first_row_and_reports_contract_error(self):
+        process, report, table = self.export(
+            "success", {}, checks="1,6,8", performed_checks=(1, 6, 8),
+            extra_rows=({"id": 1, "status": "fail", "evidence": {"reason": "duplicate evidence"}},),
+        )
+        self.assertEqual(process.returncode, 1, process.stderr)
+        self.assertEqual(report["results"][0]["status"], "fail")
+        self.assertEqual(report["results"][5]["status"], "pass")
+        self.assertEqual(report["results"][7]["status"], "pass")
+        self.assertNotIn("egress", report["results"][0]["evidence"])
+        self.assertNotIn("duplicate evidence", table)
+        self.assertIn("Duplicate result for check 1", process.stderr)
+        self.assertIn("Duplicate result for check 1", report["evidenceExportErrors"][0])
+        self.assertIn("Duplicate result for check 1", table.split("## Proof evidence export errors")[1])
+
+    def test_excluded_evidence_is_canonical(self):
+        for evidence in ({"waived": True}, None):
+            with self.subTest(evidence=evidence):
+                process, report, table = self.export(
+                    "success", {}, checks="1", performed_checks=(1,), evidence_overrides={2: evidence},
+                )
+                self.assertEqual(process.returncode, 0, process.stderr)
+                self.assertEqual(report["results"][1], {"id": 2, "status": "not-run", "evidence": DEVICE_REQUIRED})
+                self.assertNotIn("waived", table)
+                self.assertEqual(table.count("| not-run (on-device required) |"), 9)
+
+    def test_passing_selected_row_with_invalid_evidence_fails(self):
+        process, report, table = self.export(
+            "success", {}, checks="6,8", performed_checks=(6, 8), evidence_overrides={6: []},
+        )
+        self.assertEqual(process.returncode, 1, process.stderr)
+        row = report["results"][5]
+        self.assertEqual(row["status"], "fail")
+        self.assertIn("Missing or invalid evidence for check 6", row["evidence"]["evidenceError"])
+        self.assertIn("| 6 | GET, DELETE, POST and PUT bridge fidelity | fail |", table)
+        self.assertEqual(report["results"][7]["status"], "pass")
 
     def test_successful_xctest_with_failed_selected_check_fails_export(self):
         process, report, table = self.export(

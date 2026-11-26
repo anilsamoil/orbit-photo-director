@@ -54,15 +54,32 @@ Each `ios-host-proof-<device>-<run>-<attempt>` artifact retains `proof-results.j
 
 ## On-device proof (required)
 
-W-03 must run all ten checks on each of these targets and record the results here before W-03 can be called done or ship anything.
+This proposed matrix defines the evidence for each target. The [OPEN G1 gate](DECISIONS.md#g1-on-device-gate) still requires on-device proof, including Safari on iPad, before W-03 can be called done or ship anything.
 
-- iPhone 17 Pro
-- iPad M4 (11-inch)
-- 3rd-gen iPad
-- Safari on iPad
+| Target | Required proof | Device note |
+| --- | --- | --- |
+| iPhone 17 Pro | All ten checks in the signed app | |
+| iPad M4 (11-inch) | All ten checks in the signed app | |
+| 3rd-gen iPad | All ten checks in the signed app | 3rd-gen iPad: owner to confirm exact model, hardware identifier and iPadOS version (must run the iPadOS 26 build) |
+| Safari on iPad | Web-only evidence below | Record the actual iPad model, iPadOS version and Safari version. |
+
+All three signed app runs include the CryptoKit digest comparison (1), Capacitor bridge (6), native asset handler throughput (7), `localStorage` across app exit and relaunch (8), and WebContent termination and recovery via Capacitor reload (9).
+
+| Check | Safari on iPad evidence |
+| --- | --- |
+| 1 | Confirm secure context and match the WebCrypto SHA-256 digest against the expected fixture digest. Record browser egress denial for the offline fixture. CryptoKit comparison and Capacitor HTTP denial are n/a (native only). |
+| 2 | Load the Map chunk and MapLibre worker and verify the worker-processed fixture query. |
+| 3 | Verify WebGL2 on the Map canvas. |
+| 4 | Verify the Map fixture tile, hidden-layer control and screenshot. |
+| 5 | Verify the ISS fixture tile, hidden-layer control, geometry assertions and screenshot. |
+| 6 | n/a (native only) |
+| 7 | n/a (native only) |
+| 8 | Verify the same `localStorage` token across tab reload and Safari relaunch. Signed app exit and relaunch evidence is n/a (native only). |
+| 9 | n/a (native only) |
+| 10 | Run the full ten minutes of verified Map and ISS pan and zoom. Record peak observed browser memory and confirm the run finishes without a page or process termination. |
 
 ## W-03 ground-device proof
 
-Before distributing the signed ground proof through TestFlight or W-74, W-03 must provide an in-app launch trigger that works without XCTest launch arguments. W-03 must also provide the evidence procedure for the required app and Safari runs. It must verify exit and relaunch with the storage token intact, WebContent termination and recovery, and peak WebContent memory and termination count during the full ten-minute run, all without the Mac-side `simctl` observer.
+Before distributing the signed ground proof through TestFlight or W-74, W-03 must provide an in-app launch trigger that works without XCTest launch arguments. W-03 must also provide the evidence procedure for the required app and Safari runs. The app procedure must verify exit and relaunch with the storage token intact, WebContent termination and recovery, and peak WebContent memory and termination count during the full ten-minute run, all without the Mac-side `simctl` observer.
 
-Run the full proof on the installed signed build on the three devices and in Safari on iPad. Record the build, delivery channel or browser version, device model, OS version, each check result and its evidence here. [W-03 work package](WORK_PLAN.md#w-03-signed-host-proof-on-a-ground-device-s)
+Run the full proof on the installed signed build on all three devices and collect the web-only evidence in Safari on iPad. Record the build, delivery channel or browser version, device model, OS version, each check result and its evidence here. [W-03 work package](WORK_PLAN.md#w-03-signed-host-proof-on-a-ground-device-s)

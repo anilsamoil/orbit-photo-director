@@ -30,15 +30,10 @@ final class HostProofTests: XCTestCase {
         ]
         app.launch()
 
-        let status = app.staticTexts["g1-status"]
-        if app.webViews.firstMatch.staticTexts["SNAP placeholder ready"].waitForExistence(timeout: 3) {
-            throw XCTSkip("The W-01 placeholder assets are bundled")
-        }
-
         var results: [ProofJSON] = allChecks.map { id in
             if selected.contains(id) { return row(id, "not-run", "The proof driver did not reach this check") }
             return ["id": id, "status": "not-run", "evidence": [
-                "reason": "Requires on-device proof; hosted simulator GPU unsupported",
+                "reason": "Requires on-device proof before W-03 can be called done",
                 "gate": "G1-device"
             ]]
         }
@@ -55,6 +50,15 @@ final class HostProofTests: XCTestCase {
             }
         }
 
+        if app.webViews.firstMatch.staticTexts["SNAP placeholder ready"].waitForExistence(timeout: 3) {
+            let error = "The W-01 placeholder assets are bundled"
+            for id in selected {
+                results[id - 1] = row(id, "fail", error)
+            }
+            return XCTFail(error)
+        }
+
+        let status = app.staticTexts["g1-status"]
         let initialChecks = selected.intersection(1...7)
         guard app.wait(for: .runningForeground, timeout: 30),
               app.webViews.firstMatch.waitForExistence(timeout: 30),

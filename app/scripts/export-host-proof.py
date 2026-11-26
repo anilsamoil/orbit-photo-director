@@ -23,10 +23,11 @@ CHECKS = (
     "Scripted pan and zoom, peak memory",
 )
 CHECK_IDS = tuple(range(1, len(CHECKS) + 1))
-DEVICE_REQUIRED = {"reason": "Requires on-device proof; hosted simulator GPU unsupported", "gate": "G1-device"}
+DEVICE_REQUIRED = {"reason": "Requires on-device proof before W-03 can be called done", "gate": "G1-device"}
 TEST = "HostProofTests/testOfflineHostProof()"
 FULL_STRESS_MS = 600_000
 BLOCKED_HOSTS = ["g1-fetch.invalid", "g1-websocket.invalid", "g1-xhr.invalid"]
+SCREENSHOT_TABS = {4: "map", 5: "iss"}
 
 
 def parse_checks(value):
@@ -57,6 +58,45 @@ def exported_attachment(directory, attachments, name, suffix):
     return matches[0]
 
 
+def validate_passing_evidence(number, evidence, directory, attachments):
+    if number in (1, 9):
+        egress = evidence.get("egress")
+        if (
+            not isinstance(egress, dict)
+            or egress.get("connectSrcBlockedHosts") != BLOCKED_HOSTS
+            or egress.get("capacitorHttp") != "G1_BRIDGE_DENIED"
+            or egress.get("capacitorHttpNativeClass") != "G1_BRIDGE_DENIED"
+        ):
+            raise ValueError(f"Check {number} is missing browser or native egress-denial evidence")
+    elif number == 10:
+        elapsed = evidence.get("actualDurationMs")
+        memory = evidence.get("memory")
+        if not isinstance(memory, dict):
+            memory = {}
+        rss = memory.get("peakBytes")
+        observed = memory.get("observedDurationMs")
+        if (
+            evidence.get("requestedDurationMs") != FULL_STRESS_MS
+            or type(elapsed) not in (int, float)
+            or (type(elapsed) is float and not math.isfinite(elapsed))
+            or elapsed < FULL_STRESS_MS
+            or type(observed) is not int or observed < FULL_STRESS_MS
+            or type(rss) is not int or rss <= 0
+        ):
+            raise ValueError("Check 10 is missing full-duration stress or WebContent peak RSS evidence")
+    elif number in SCREENSHOT_TABS:
+        tab = SCREENSHOT_TABS[number]
+        png = exported_attachment(directory, attachments, f"G1-{tab}", ".png")
+        validate_screenshot(png, proof_tab=tab)
+
+
+def escape_markdown(value):
+    return (
+        value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        .replace("|", "&#124;").replace("`", "&#96;")
+    )
+
+
 def main(output, outcome):
     try:
         selected_checks = parse_checks(os.environ.get("G1_CHECKS"))
@@ -77,6 +117,7 @@ def main(output, outcome):
     attachments = []
     report = {}
     errors = []
+    rows = {number: [] for number in CHECK_IDS}
     try:
         manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
         attachments = [
@@ -85,65 +126,61 @@ def main(output, outcome):
         ]
         report_path = exported_attachment(directory, attachments, "G1-proof-results", ".json")
         native_report = json.loads(report_path.read_text(encoding="utf-8"))
-        seen = set()
-        for result in native_report["results"]:
-            number = result["id"]
-            allowed = {"pass", "fail", "blocked", "not-run"}
-            if type(number) is not int or number not in CHECK_IDS or number in seen:
-                raise ValueError(f"Unexpected check number: {number}")
-            if result["status"] not in allowed or not isinstance(result["evidence"], dict) or not result["evidence"]:
-                raise ValueError(f"Invalid status or missing evidence for check {number}")
-            if number not in selected_checks and result["status"] != "not-run":
-                raise ValueError(f"Unselected check {number} must have status not-run")
-            results[number - 1] = result
-            seen.add(number)
+        native_rows = native_report["results"]
+        if not isinstance(native_rows, list):
+            raise ValueError("Expected a list of proof results")
+        for row in native_rows:
+            number = row.get("id") if isinstance(row, dict) else None
+            if type(number) is not int or number not in rows:
+                errors.append(f"Proof evidence export: Unexpected check number: {number!r}")
+                continue
+            rows[number].append(row)
         report = native_report
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
         errors.append(f"Proof evidence export: {error}")
 
-    if outcome == "success":
-        if any(results[number - 1]["status"] != "pass" for number in selected_checks):
-            errors.append("Successful XCTest run is missing passing check evidence")
-        else:
-            for number in (1, 9):
-                if number not in selected_checks:
-                    continue
-                egress = results[number - 1]["evidence"].get("egress")
-                if (
-                    not isinstance(egress, dict)
-                    or egress.get("connectSrcBlockedHosts") != BLOCKED_HOSTS
-                    or egress.get("capacitorHttp") != "G1_BRIDGE_DENIED"
-                    or egress.get("capacitorHttpNativeClass") != "G1_BRIDGE_DENIED"
-                ):
-                    errors.append(f"Check {number} is missing browser or native egress-denial evidence")
-            if 10 in selected_checks:
-                evidence = results[9]["evidence"]
-                elapsed = evidence.get("actualDurationMs")
-                memory = evidence.get("memory")
-                if not isinstance(memory, dict):
-                    memory = {}
-                rss = memory.get("peakBytes")
-                observed = memory.get("observedDurationMs")
-                if (
-                    evidence.get("requestedDurationMs") != FULL_STRESS_MS
-                    or type(elapsed) not in (int, float) or not math.isfinite(elapsed) or elapsed < FULL_STRESS_MS
-                    or type(observed) is not int or observed < FULL_STRESS_MS
-                    or type(rss) is not int or rss <= 0
-                ):
-                    errors.append("Successful XCTest run is missing full-duration stress or WebContent peak RSS evidence")
-
-    for number, tab in ((4, "map"), (5, "iss")):
-        result = results[number - 1]
-        if result["status"] != "pass":
+    for number, matches in rows.items():
+        if not matches:
             continue
-        name = f"G1-{tab}"
-        try:
-            png = exported_attachment(directory, attachments, name, ".png")
-            validate_screenshot(png, proof_tab=tab)
-        except (OSError, ValueError, TypeError, AttributeError) as error:
-            result["status"] = "fail"
-            result["evidence"]["screenshotError"] = str(error)
-            errors.append(f"Proof evidence export ({name}): {error}")
+        if len(matches) > 1:
+            error = f"Duplicate result for check {number}"
+            errors.append(f"Proof evidence export: {error}")
+            if number in selected_checks:
+                results[number - 1].update(status="fail", evidence={"evidenceError": error})
+            continue
+        result = matches[0]
+        status = result.get("status")
+        if number not in selected_checks:
+            if status != "not-run":
+                errors.append(f"Proof evidence export: Unselected check {number} must have status not-run")
+            continue
+        if status not in ("pass", "fail", "blocked", "not-run"):
+            errors.append(f"Proof evidence export: Invalid status for check {number}")
+            continue
+        evidence = result.get("evidence")
+        if not isinstance(evidence, dict) or not evidence:
+            error = f"Missing or invalid evidence for check {number}"
+            errors.append(f"Proof evidence export: {error}")
+            if status == "pass":
+                results[number - 1].update(status="fail", evidence={"evidenceError": error})
+            continue
+        if status == "pass":
+            try:
+                validate_passing_evidence(number, evidence, directory, attachments)
+            except (OSError, ValueError, TypeError, AttributeError) as error:
+                status = "fail"
+                if number in SCREENSHOT_TABS:
+                    evidence["screenshotError"] = str(error)
+                    errors.append(f"Proof evidence export (G1-{SCREENSHOT_TABS[number]}): {error}")
+                else:
+                    evidence["evidenceError"] = str(error)
+                    errors.append(f"Proof evidence export: {error}")
+        results[number - 1] = {**result, "status": status}
+
+    if outcome == "success" and any(
+        len(rows[number]) != 1 or rows[number][0].get("status") != "pass" for number in selected_checks
+    ):
+        errors.append("Successful XCTest run is missing passing check evidence")
 
     report.update(
         results=results,
@@ -163,13 +200,12 @@ def main(output, outcome):
     table = ["# SNAP iOS host proof", "", f"XCTest step reported `{outcome}`.", ""]
     table.extend(["| # | Check | Result | Evidence |", "| - | - | - | - |"])
     for result, name in zip(results, CHECKS, strict=True):
-        evidence = json.dumps(result["evidence"], ensure_ascii=False, sort_keys=True)
-        evidence = (
-            evidence.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            .replace("|", "&#124;").replace("`", "&#96;")
-        )
+        evidence = escape_markdown(json.dumps(result["evidence"], ensure_ascii=False, sort_keys=True))
         status = result["status"] if result["id"] in selected_checks else "not-run (on-device required)"
         table.append(f'| {result["id"]} | {name} | {status} | {evidence} |')
+    if errors:
+        table.extend(["", "## Proof evidence export errors", ""])
+        table.extend(f"- {escape_markdown(error)}" for error in errors)
     (output / "checks.md").write_text("\n".join(table) + "\n", encoding="utf-8")
     for error in errors:
         print(error, file=sys.stderr)
