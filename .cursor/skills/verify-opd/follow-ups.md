@@ -64,6 +64,24 @@ A clear-point tap or click on a published hazard polygon is recorded and is not 
 
 Recorded after #370 (`d9516ca`).
 
+## Deferred: hosted verification wording still says pending (W-02)
+
+`docs/ios/STATUS.md` line 9 says W-01 hosted verification is pending. `docs/ios/W-01-VERIFICATION.md` line 3 says the hosted workflow, simulator launches, and downloadable artifacts are pending CI. #381 (`26746c9e51b523c0dca4efb25ad7cf5c71429ee2`) is the commit those sentences describe. Updating the sentences is W-02. This skill does not edit `docs/ios/`.
+
+Recorded after #381 (`26746c9e51b523c0dca4efb25ad7cf5c71429ee2`).
+
+## Verification gap: the merge-SHA iPad launch PNG is white
+
+`iOS unsigned` run `45877212976` on `26746c9e51b523c0dca4efb25ad7cf5c71429ee2` succeeded for `SNAP simulator launch (iPad Pro 11-inch (M5))`. The log ends with `** TEST SUCCEEDED **`, and the export step accepts the nonempty file `4DDD39AA-3505-497C-A09C-3B882C0BF88D.png`. That PNG is 1668 by 2420 and the center pixel is white. The heading is absent. The iPhone PNG from the same run shows `SNAP placeholder ready` on the dark page. The pull-request run `45870433702` attached an iPad PNG that shows the placeholder. The workflow does not read the pixels. This skill does not rerun the job and does not edit the test.
+
+Recorded after #381 (`26746c9e51b523c0dca4efb25ad7cf5c71429ee2`).
+
+## Deferred: template code-sign identity in the Xcode project (W-02)
+
+`app/ios/App/App.xcodeproj/project.pbxproj` line 248 sets `CODE_SIGN_IDENTITY = "iPhone Developer"` on the Debug project configuration. The Release project configuration carries the same template string. The hosted test passes `CODE_SIGNING_ALLOWED=NO`, `CODE_SIGNING_REQUIRED=NO`, and `CODE_SIGN_IDENTITY=''`. The project has no `DEVELOPMENT_TEAM`. Replacing the template identity is W-02. This skill does not edit the project.
+
+Recorded after #381 (`26746c9e51b523c0dca4efb25ad7cf5c71429ee2`).
+
 ## Resolved
 
 ### Product gap: the wrap case still uses the old 60-character title
