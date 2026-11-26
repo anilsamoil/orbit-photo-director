@@ -5,11 +5,29 @@ on:
     branches: [main]
     paths:
       - 'app/**'
+      - 'frontend/src/**'
+      - 'frontend/index.html'
+      - 'frontend/bun.lock'
+      - 'frontend/package.json'
+      - 'frontend/public/fonts/**'
+      - 'frontend/public/glyphs/**'
+      - 'frontend/public/ne_110m_coastline.geojson'
+      - 'tests/fixtures/iss-2026-11-10.txt'
+      - 'VERSION'
       - '.github/workflows/ios.yml'
   push:
     branches: [main]
     paths:
       - 'app/**'
+      - 'frontend/src/**'
+      - 'frontend/index.html'
+      - 'frontend/bun.lock'
+      - 'frontend/package.json'
+      - 'frontend/public/fonts/**'
+      - 'frontend/public/glyphs/**'
+      - 'frontend/public/ne_110m_coastline.geojson'
+      - 'tests/fixtures/iss-2026-11-10.txt'
+      - 'VERSION'
       - '.github/workflows/ios.yml'
 
 permissions:
@@ -101,6 +119,7 @@ jobs:
             -onlyUsePackageVersionsFromResolvedFile \
             -destination "$DESTINATION" \
             -destination-timeout 60 \
+            -only-testing:AppUITests/LaunchTests \
             -parallel-testing-enabled NO \
             -maximum-concurrent-test-simulator-destinations 1 \
             -resultBundlePath "$RUNNER_TEMP/SNAP-launch.xcresult" \
@@ -125,11 +144,13 @@ jobs:
             exit 0
           fi
           if [[ "$LAUNCH_OUTCOME" == success ]]; then
-            python3 - "$attachments" <<'PY'
+            PYTHONPATH=app/scripts python3 -B - "$attachments" <<'PY'
           import json
           from pathlib import Path
           import re
           import sys
+
+          from check_ios_screenshot import validate_screenshot
 
           export_dir = Path(sys.argv[1])
           manifest_path = export_dir / "manifest.json"
@@ -162,6 +183,10 @@ jobs:
                       continue
                   png = export_dir / filename
                   if png.suffix.lower() == ".png" and png.is_file() and png.stat().st_size > 0:
+                      try:
+                          validate_screenshot(png, launch=True)
+                      except (OSError, ValueError) as error:
+                          raise SystemExit(f"Invalid SNAP-launch screenshot {filename} for {test_id}: {error}")
                       print(f"Verified SNAP-launch screenshot for {test_id}: {filename}")
                       sys.exit(0)
 
@@ -188,4 +213,120 @@ jobs:
           name: ios-launch-screenshots-${{ matrix.id }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/SNAP-launch-attachments
           if-no-files-found: warn
+          retention-days: 14
+
+  host-proof:
+    name: SNAP host proof (${{ matrix.device }})
+    runs-on: macos-26
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: ipad-pro-m5
+            device: iPad Pro 11-inch (M5)
+          - id: iphone-17-pro
+            device: iPhone 17 Pro
+    env:
+      SIMULATOR_NAME: ${{ matrix.device }}
+      SIMULATOR_RUNTIME: com.apple.CoreSimulator.SimRuntime.iOS-26-5
+      TEST_RUNNER_G1_STRESS_MS: '600000'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Select Xcode and simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROOF_OUTPUT="$RUNNER_TEMP/host-proof"
+          mkdir -p "$PROOF_OUTPUT"
+          printf 'PROOF_OUTPUT=%s\n' "$PROOF_OUTPUT" >> "$GITHUB_ENV"
+          {
+            printf 'ImageOS=%s\nImageVersion=%s\n' "$ImageOS" "$ImageVersion"
+            sudo xcode-select -s /Applications/Xcode_26.6.app/Contents/Developer
+            version=$(xcodebuild -version)
+            printf '%s\n' "$version"
+            test "$version" = $'Xcode 26.6\nBuild version 17F113'
+            swift --version
+            xcrun simctl list runtimes
+            xcrun simctl list devices available
+          } 2>&1 | tee "$PROOF_OUTPUT/ios-environment.txt"
+          simulator=$(xcrun simctl list devices available --json | python3 -c '
+          import json, os, sys
+          devices = json.load(sys.stdin)["devices"].get(os.environ["SIMULATOR_RUNTIME"], [])
+          matching = [d["udid"] for d in devices if d["name"] == os.environ["SIMULATOR_NAME"]]
+          if len(matching) != 1:
+              sys.exit(f"Expected exactly one matching simulator, got {len(matching)}")
+          print(matching[0])
+          ')
+          printf 'Simulator=%s (%s)\nRuntime=%s\n' "$SIMULATOR_NAME" "$simulator" "$SIMULATOR_RUNTIME" | tee -a "$PROOF_OUTPUT/ios-environment.txt"
+          printf 'SIMULATOR_UDID=%s\n' "$simulator" >> "$GITHUB_ENV"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.3'
+      - name: Install locked frontend dependencies
+        working-directory: frontend
+        run: bun install --frozen-lockfile
+      - name: Test, build and prepare proof assets
+        run: |
+          set -euo pipefail
+          node --test app/host-proof/proof.test.mjs
+          python3 -B app/scripts/test_export_host_proof.py
+          node app/host-proof/build.mjs
+          cp app/host-proof/dist/__g1/build.json "$PROOF_OUTPUT/build.json"
+          python3 app/scripts/prepare-ios.py --host-proof
+      - name: Run unsigned offline proof
+        id: proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+          python3 -u app/scripts/observe-host-proof.py "$SIMULATOR_UDID" > "$PROOF_OUTPUT/observer.log" 2>&1 &
+          observer=$!
+          stop_observer() {
+            kill "$observer" 2>/dev/null || true
+            wait "$observer" 2>/dev/null || true
+          }
+          trap stop_observer EXIT
+          xcodebuild test \
+            -project app/ios/App/App.xcodeproj \
+            -scheme HostProof \
+            -configuration HostProof \
+            -onlyUsePackageVersionsFromResolvedFile \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination-timeout 60 \
+            -only-testing:AppUITests/HostProofTests \
+            -test-timeouts-enabled YES -default-test-execution-time-allowance 1800 \
+            -parallel-testing-enabled NO \
+            -maximum-concurrent-test-simulator-destinations 1 \
+            -resultBundlePath "$PROOF_OUTPUT/SNAP-host-proof.xcresult" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            2>&1 | tee "$PROOF_OUTPUT/ios-build.log"
+      - name: Export and validate host proof evidence
+        if: always()
+        shell: bash
+        env:
+          PROOF_OUTCOME: ${{ steps.proof.outcome }}
+        run: |
+          set -euo pipefail
+          PROOF_OUTPUT="$RUNNER_TEMP/host-proof"
+          mkdir -p "$PROOF_OUTPUT"
+          if [[ -d "$PROOF_OUTPUT/SNAP-host-proof.xcresult" ]]; then
+            xcrun xcresulttool export attachments \
+              --path "$PROOF_OUTPUT/SNAP-host-proof.xcresult" \
+              --output-path "$PROOF_OUTPUT/attachments" || echo 'Attachment export failed' >&2
+          fi
+          # Validate screenshots for passing probes even when the overall XCTest run failed.
+          export_status=0
+          python3 -B app/scripts/export-host-proof.py "$PROOF_OUTPUT" "${PROOF_OUTCOME:-skipped}" || export_status=$?
+          cat "$PROOF_OUTPUT/checks.md" >> "$GITHUB_STEP_SUMMARY"
+          exit "$export_status"
+      - name: Upload host proof evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-host-proof-${{ matrix.id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/host-proof
+          if-no-files-found: error
           retention-days: 14

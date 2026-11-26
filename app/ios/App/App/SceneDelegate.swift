@@ -8,7 +8,11 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         guard let windowScene = scene as? UIWindowScene else { return }
 
         window = UIWindow(windowScene: windowScene)
+        #if HOST_PROOF
+        window?.rootViewController = HostProofViewController()
+        #else
         window?.rootViewController = CAPBridgeViewController()
+        #endif
         window?.makeKeyAndVisible()
 
         SceneDelegateProxy.shared.scene(scene, willConnectTo: session, options: connectionOptions)
