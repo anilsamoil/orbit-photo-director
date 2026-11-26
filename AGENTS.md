@@ -61,4 +61,4 @@ Generator: `pip install -e ".[dev]"`, then `ruff check generator/ tests/` and `p
 
 ## iOS app
 
-SNAP is becoming an iPhone and iPad app: a native shell around this frontend, so it keeps working when the link drops. No app code exists yet. Start at `docs/ios/README.md`. The work packages, their order and the rules for every pull request are in `docs/ios/WORK_PLAN.md`. The website's behaviour does not change, and every rule above still holds.
+SNAP is becoming an iPhone and iPad app: a native shell around this frontend, so it keeps working when the link drops. The unsigned W-01 skeleton lives under `app/`. Start at `docs/ios/README.md`. The work packages, their order and the rules for every pull request are in `docs/ios/WORK_PLAN.md`. The website's behaviour does not change, and every rule above still holds.

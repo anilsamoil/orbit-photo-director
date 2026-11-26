@@ -18,7 +18,7 @@ Who does what, in what order, and how each piece is shown to work. Read [the des
 3. Preserve the website's existing behavior within the W-20 authorization, revision, deletion and [target request privacy](ARCHITECTURE.md#target-request-privacy) contracts on both map hosts. `bun run typecheck`, `bun run test` and `node scripts/verify-map-pins.mjs` stay green, and every rule in `AGENTS.md` still holds.
 4. Nothing in `generator/` changes in release 1.
 5. A package is done when its "Done when" list is true and its proof is attached to the pull request. "It compiles" is not done. A check that could not be run is written down as not run.
-6. The main generator Mac has Swift and no Xcode. `OPDKit` must build and test there with `swift test`, using Swift Testing. Run Xcode builds and simulator checks on the hosted workflow. W-33 uses the designated ground Mac for the physical-device debugger run.
+6. The main generator Mac has Swift and no Xcode. `OPDKit` must build and test there with `swift test`, using Swift Testing. Swift 6.4 Command Line Tools may require the [local Testing macro plugin path](../../app/README.md). Run Xcode builds and simulator checks on the hosted workflow. W-33 uses the designated ground Mac for the physical-device debugger run.
 7. No secret in the repository, in a log or in a pull request. This repository is public. Agents never create, read or move Apple credentials; the owner places them.
 8. A new dependency needs a line in `DECISIONS.md` with the reason. The host template and its core packages, chosen at gate G1, are the one set approved in advance.
 9. A real bug found in existing code goes into `docs/ios/FOLLOWUPS.md` with a failing test or a clear reproduction, not into the package's pull request.

@@ -2,7 +2,7 @@
 
 SNAP is becoming an offline-first Earth viewer for the NASA-managed iPad and iPhone in orbit, with the ISS track, targets and passes available for hours to days without the station's Ku-band link. Release 1 uses a native shell around the existing screens. Native code handles storage, sync, map tiles and the offline Earth imagery, alerts and sign-in. The flat map uses the bundled baseline, the W-43 Earth pack and W-45 detail packs. W-44 is scheduled after G2 as the first update after release 1 and opens Map on a globe. Read the [product goal](../designs/ios-app.md#product-goal).
 
-Planned on 2026-11-15. No app code exists yet.
+Planned on 2026-11-15. The unsigned [W-01 skeleton](../../app/README.md) lives under `app/` and loads a bundled placeholder.
 
 ## The documents
 
