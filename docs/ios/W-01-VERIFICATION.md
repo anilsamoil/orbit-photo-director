@@ -1,6 +1,6 @@
 # W-01 verification
 
-The unsigned W-01 skeleton is in the implementation commit on `ios/w01-app-skeleton`, based on `86184b7` (#376). Astra round 1 reviewed `a6d2145`. The hosted workflow, simulator launches and downloadable artifacts are **pending CI**. W-01 remains in flight.
+The unsigned W-01 skeleton merged as #381 (`26746c9`). Hosted run 45870433702 passed OPDKit Swift Testing and both iOS 26.5 launches. Both xcresults reported Success and the SNAP-launch screenshots were checked. [Hosted iOS run](https://github.com/anilsamoil/orbit-photo-director/actions/runs/45870433702)
 
 ## Worktree contents
 
@@ -47,10 +47,10 @@ swift test --scratch-path "$opd_check_dir/build" \
 - `git ls-remote` confirmed the release SHAs for checkout v7.0.1 and upload-artifact v7.0.2. The `action.yml` at each SHA declares Node 24.
 - actionlint 1.7.12, PyYAML, `bash -n` and `git diff --check` passed. Mocked attachment exports accepted the launch test's named PNG, including Xcode's generated filename suffix, and rejected unrelated PNGs, missing or empty referenced files, and invalid manifests.
 
-## Pending CI
+## Hosted verification
 
-- Confirm plain `swift test` with full Xcode on `macos-26`. Inspect `opdkit-results-<run>-<attempt>` for the package log and `ios-environment.txt`.
-- Confirm unsigned dependency resolution, app build and launch on both `platform=iOS Simulator,name=iPad Pro 11-inch (M5),OS=26.5` and `platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5`. The orbit devices use iPadOS 26.6.2 and iOS 26.6.1. The orbit iPad has M4.
-- Open `SNAP-launch.xcresult` from each `ios-launch-results-<device-id>-<run>-<attempt>` artifact. Check the build log and runner image, Xcode 26.6 (17F113), Swift and runtime metadata. In each `ios-launch-screenshots-<device-id>-<run>-<attempt>` artifact, open the `SNAP-launch` PNG referenced by the attachment manifest for `LaunchTests/testBundledPlaceholderLaunch()`. The device IDs are `ipad-pro-m5` and `iphone-17-pro`.
+- Plain `swift test` passed with full Xcode on `macos-26`. The package log and runner metadata are in `opdkit-results-<run>-<attempt>`.
+- The unsigned app built and launched on iPad Pro 11-inch (M5) and iPhone 17 Pro using the iOS 26.5 Simulator runtime. The orbit devices use iPadOS 26.6.2 and iOS 26.6.1. The orbit iPad has M4.
+- The `ios-launch-results-<device-id>-<run>-<attempt>` artifacts contain both `SNAP-launch.xcresult` bundles and runner metadata. Each `ios-launch-screenshots-<device-id>-<run>-<attempt>` artifact has the `SNAP-launch` PNG named in the attachment manifest for `LaunchTests/testBundledPlaceholderLaunch()`. The device IDs are `ipad-pro-m5` and `iphone-17-pro`.
 
-The local Mac has Command Line Tools only. The iOS SDK build, XCUI assertions, `xcresulttool` export and artifact readback remain pending CI. The SDK-origin check on a selected signed archive belongs to W-03. G1 host proof, offline acceptance and physical-device testing have their own gates.
+The SDK-origin check on a selected signed archive belongs to W-03. G1 host proof, offline acceptance and physical-device testing have their own gates.

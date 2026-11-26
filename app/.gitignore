@@ -2,6 +2,8 @@
 OPDKit/.build/
 OPDKit/.swiftpm/
 ios/App/App/public/
+ios/App/App/public-proof/
+ios/App/App/HostProof-Info.plist
 ios/App/App/capacitor.config.json
 ios/App/App/config.xml
 ios/**/xcuserdata/
