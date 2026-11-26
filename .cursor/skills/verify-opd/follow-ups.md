@@ -64,25 +64,45 @@ A clear-point tap or click on a published hazard polygon is recorded and is not 
 
 Recorded after #370 (`d9516ca`).
 
-## Deferred: hosted verification wording still says pending (W-02)
+## P2: passing checks 6 and 8 skip evidence content (W-03)
 
-`docs/ios/STATUS.md` line 9 says W-01 hosted verification is pending. `docs/ios/W-01-VERIFICATION.md` line 3 says the hosted workflow, simulator launches, and downloadable artifacts are pending CI. #381 (`26746c9e51b523c0dca4efb25ad7cf5c71429ee2`) is the commit those sentences describe. Updating the sentences is W-02. This skill does not edit `docs/ios/`.
+`validate_passing_evidence` in `app/scripts/export-host-proof.py` checks content for checks 1 and 9 (egress denial), check 10 (full stress duration and peak RSS), and checks 4 and 5 (screenshot pixels). A row whose status is `pass` and whose evidence is a nonempty dict is kept for checks 6 and 8 with no further read. Check 6 is the bridge receipts. Check 8 is the relaunch token. `test_passing_selected_row_with_invalid_evidence_fails` rejects a non-dict for check 6 and leaves check 8 passing on `{"probe": "check 8"}`. A product test should require the bridge bytes for 6 and the relaunch comparison for 8. Check 7 has the same fall-through. This skill does not edit the exporter.
 
-Recorded after #381 (`26746c9e51b523c0dca4efb25ad7cf5c71429ee2`).
+Recorded after #383 (`cb0bbd2b35a829e13ac8923e49ef0d3624a3169d`).
 
-## Verification gap: the merge-SHA iPad launch PNG is white
+## P3: D-1 still describes a full simulator proof (W-03)
 
-`iOS unsigned` run `45877212976` on `26746c9e51b523c0dca4efb25ad7cf5c71429ee2` succeeded for `SNAP simulator launch (iPad Pro 11-inch (M5))`. The log ends with `** TEST SUCCEEDED **`, and the export step accepts the nonempty file `4DDD39AA-3505-497C-A09C-3B882C0BF88D.png`. That PNG is 1668 by 2420 and the center pixel is white. The heading is absent. The iPhone PNG from the same run shows `SNAP placeholder ready` on the dark page. The pull-request run `45870433702` attached an iPad PNG that shows the placeholder. The workflow does not read the pixels. This skill does not rerun the job and does not edit the test.
+`docs/designs/ios-app.md` line 91 says G1 is a simulator proof in W-02, then the same proof signed on a ground device in W-03, and that host-dependent packages start after the simulator step. `docs/ios/DECISIONS.md` line 41 keeps checks 2, 3, 4, 5, 9 and 10, and check 7 on iPad, as an open on-device gate before W-03 can be called done or anything ships. Updating that sentence is W-03. This skill does not edit the design doc.
 
-Recorded after #381 (`26746c9e51b523c0dca4efb25ad7cf5c71429ee2`).
-
-## Deferred: template code-sign identity in the Xcode project (W-02)
-
-`app/ios/App/App.xcodeproj/project.pbxproj` line 248 sets `CODE_SIGN_IDENTITY = "iPhone Developer"` on the Debug project configuration. The Release project configuration carries the same template string. The hosted test passes `CODE_SIGNING_ALLOWED=NO`, `CODE_SIGNING_REQUIRED=NO`, and `CODE_SIGN_IDENTITY=''`. The project has no `DEVELOPMENT_TEAM`. Replacing the template identity is W-02. This skill does not edit the project.
-
-Recorded after #381 (`26746c9e51b523c0dca4efb25ad7cf5c71429ee2`).
+Recorded after #383 (`cb0bbd2b35a829e13ac8923e49ef0d3624a3169d`).
 
 ## Resolved
+
+### Verification gap: the merge-SHA iPad launch PNG is white
+
+`iOS unsigned` run `45877212976` on `26746c9e51b523c0dca4efb25ad7cf5c71429ee2` attached a 1668 by 2420 white iPad PNG while the job stayed green. The export step only required a nonempty file.
+
+#383 calls `validate_screenshot(png, launch=True)` in `.github/workflows/ios.yml`. A frame with luminance standard deviation under 6, or only one color cluster, raises `uniform or near-blank frame`. A 64 by 64 white PNG exits 1 with `luminance std-dev 0.00, color clusters 1`. That white frame now fails the launch job.
+
+Recorded after #381 (`26746c9e51b523c0dca4efb25ad7cf5c71429ee2`).
+
+Resolved by #383 (`cb0bbd2b35a829e13ac8923e49ef0d3624a3169d`).
+
+### Deferred: hosted verification wording still says pending
+
+`docs/ios/STATUS.md` and `docs/ios/W-01-VERIFICATION.md` no longer say hosted verification is pending. STATUS records the W-01 launches and the scoped G1 runs. W-01-VERIFICATION records hosted run `45870433702` as passed.
+
+Recorded after #381 (`26746c9e51b523c0dca4efb25ad7cf5c71429ee2`).
+
+Resolved by #383 (`cb0bbd2b35a829e13ac8923e49ef0d3624a3169d`).
+
+### Deferred: template code-sign identity in the Xcode project
+
+`project.pbxproj` no longer sets `CODE_SIGN_IDENTITY = "iPhone Developer"`. The configurations use `CODE_SIGN_STYLE = Automatic`. `docs/ios/DECISIONS.md` leaves the resolved signing identity to W-03. The hosted test still passes `CODE_SIGNING_ALLOWED=NO`.
+
+Recorded after #381 (`26746c9e51b523c0dca4efb25ad7cf5c71429ee2`).
+
+Resolved by #383 (`cb0bbd2b35a829e13ac8923e49ef0d3624a3169d`).
 
 ### Product gap: the wrap case still uses the old 60-character title
 
