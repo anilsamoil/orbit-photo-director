@@ -5,14 +5,13 @@ const rawFetch = globalThis.fetch.bind(globalThis);
 const tile = Uint8Array.from(atob(fixture.tile), (character) => character.charCodeAt(0));
 const workers = [];
 const localTiles = { map: 0, iss: 0 };
-const rendererErrors = new WeakMap();
 const offline = {
   policy: document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.content ?? null,
   serviceWorkerControlled: null,
   fixtureResponses: 0, deniedFetches: 0, blockedResources: 0,
 };
 const local = new URL(location.href);
-const proof = createProof({ rawFetch, tile, workers, localTiles, offline, fixture, rendererErrors });
+const proof = createProof({ rawFetch, tile, workers, localTiles, offline, fixture });
 window.__opdG1 = proof;
 
 async function fixtureFetch(input, init) {
@@ -64,14 +63,6 @@ const frontend = withDeadline(async () => {
       }
     },
   });
-  const recordContextError = (event) => {
-    const message = event.statusMessage ? `${event.type}: ${event.statusMessage}` : event.type;
-    rendererErrors.set(event.target, message);
-    console.error('[G1]', message);
-  };
-  document.addEventListener('webglcontextcreationerror', recordContextError, true);
-  document.addEventListener('webglcontextlost', recordContextError, true);
-  document.addEventListener('webglcontextrestored', (event) => rendererErrors.delete(event.target), true);
   document.addEventListener('securitypolicyviolation', () => { offline.blockedResources++; });
 
   local.searchParams.set('e2e', '');

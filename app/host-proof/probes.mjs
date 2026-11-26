@@ -232,16 +232,38 @@ export async function measureTiles({ fetchTile, tileURL, tileRequests, localURL,
   return evidence;
 }
 
-async function check(id, operation, milliseconds) {
-  try { return { id, status: 'pass', evidence: await withDeadline(operation, milliseconds) }; }
-  catch (error) {
-    const stack = typeof error?.stack === 'string' ? error.stack : undefined;
-    return { id, status: 'fail', evidence: { ...error?.evidence, error: String(error), ...(stack ? { stack } : {}) } };
-  }
-}
-
-export function createProof({ rawFetch, tile, workers, localTiles, offline, fixture, rendererErrors = new WeakMap() }) {
+export function createProof({ rawFetch, tile, workers, localTiles, offline, fixture }) {
   const documentId = `${performance.timeOrigin}-${Math.random().toString(36).slice(2)}`;
+  const rendererErrors = new WeakMap();
+  const contextEventsByTab = { map: [], iss: [] };
+  const recordContextEvent = (event) => {
+    const canvas = event.target;
+    const container = canvas?.closest?.('#map, #iss-host');
+    if (!container) return;
+    const tab = container.id === 'map' ? 'map' : 'iss';
+    const { type, statusMessage = '' } = event;
+    contextEventsByTab[tab].push({ documentId, tab, type, statusMessage, atMs: performance.now() });
+    if (type === 'webglcontextrestored') {
+      rendererErrors.delete(canvas);
+    } else {
+      const message = statusMessage ? `${type}: ${statusMessage}` : type;
+      rendererErrors.set(canvas, message);
+      console.error('[G1]', message);
+    }
+  };
+  for (const type of ['webglcontextcreationerror', 'webglcontextlost', 'webglcontextrestored']) {
+    document.addEventListener(type, recordContextEvent, true);
+  }
+  const check = async (id, operation, { timeoutMs, tabs = [] } = {}) => {
+    try { return { id, status: 'pass', evidence: await withDeadline(operation, timeoutMs) }; }
+    catch (error) {
+      const stack = typeof error?.stack === 'string' ? error.stack : undefined;
+      const evidence = { ...error?.evidence, error: String(error), ...(stack ? { stack } : {}) };
+      const webglContextEvents = tabs.flatMap((tab) => contextEventsByTab[tab]).sort((a, b) => a.atMs - b.atMs);
+      if (webglContextEvents.length) evidence.webglContextEvents = webglContextEvents;
+      return { id, status: 'fail', evidence };
+    }
+  };
   const localOrigin = () => location.protocol + '//' + location.host;
   const state = () => ({
     documentId, tab: document.querySelector('.tabs .active')?.id ?? null, token: localStorage.getItem(storageKey),
@@ -389,11 +411,11 @@ export function createProof({ rawFetch, tile, workers, localTiles, offline, fixt
       const egress = await verifyOfflineEgress(rawFetch);
       const tiles = await tileProbe('iss', map);
       return { ...witness, egress, tiles };
-    }),
+    }, { tabs: ['iss'] }),
     runCheck(id) {
       const definition = initialChecks[id];
       requireValue(Number.isInteger(id) && definition, 'Unknown initial proof check ' + id);
-      return check(id, definition.run, definition.timeoutMs);
+      return check(id, definition.run, definition);
     },
     summary() {
       return { fixtureSHA256: proof.fixtureSHA256, fixture: proof.fixtureEvidence ?? null, documentId, localOrigin: localOrigin(), offline: { ...offline } };
@@ -438,7 +460,7 @@ export function createProof({ rawFetch, tile, workers, localTiles, offline, fixt
           const actualDurationMs = sessions.reduce((sum, item) => sum + item.elapsedMs, 0);
           throw Object.assign(error, { evidence: { sessions, actualDurationMs } });
         }
-      }, FULL_STRESS_MS + 60_000);
+      }, { timeoutMs: FULL_STRESS_MS + 60_000, tabs: ['map', 'iss'] });
     },
   };
   const native = () => {
@@ -459,6 +481,7 @@ export function createProof({ rawFetch, tile, workers, localTiles, offline, fixt
       },
     },
     2: {
+      tabs: ['map'],
       async run() {
         const id = 'g1-worker';
         let map;
@@ -484,6 +507,7 @@ export function createProof({ rawFetch, tile, workers, localTiles, offline, fixt
       },
     },
     3: {
+      tabs: ['map'],
       async run() {
         const gl = webGL(await selectRenderer('map'));
         const version = gl.getParameter(gl.VERSION);
@@ -491,9 +515,10 @@ export function createProof({ rawFetch, tile, workers, localTiles, offline, fixt
         return { version, width: gl.drawingBufferWidth, height: gl.drawingBufferHeight };
       },
     },
-    4: { run: async () => tileProbe('map', await selectRenderer('map')) },
+    4: { tabs: ['map'], run: async () => tileProbe('map', await selectRenderer('map')) },
     5: {
       timeoutMs: 90_000,
+      tabs: ['iss'],
       async run() {
         const map = await selectRenderer('iss');
         const { measureGeometry } = await import('./geometry.mjs');

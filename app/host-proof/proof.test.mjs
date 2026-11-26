@@ -73,30 +73,37 @@ test('a stalled native operation produces a timeout instead of hanging the proof
   await assert.rejects(withDeadline(() => new Promise(() => {}), 5, 'Proof frontend startup'), /Proof frontend startup timed out/);
 });
 
-test('independent checks return the full report and the native-driven phases reach checks 8–10', async (t) => {
+function createProofHarness(t) {
   const fixture = makeFixture(['synthetic line 1', 'synthetic line 2']);
   const tile = Buffer.from(fixture.tile, 'base64');
   const location = new URL('capacitor://localhost/');
-  const document = new EventTarget();
   const storage = new Map();
-  const rendererErrors = new WeakMap();
   let activeTab = 'map';
   let now = 0;
   const realSetTimeout = globalThis.setTimeout;
   t.mock.method(performance, 'now', () => now);
   t.mock.method(globalThis, 'setTimeout', (callback, delay, ...args) => {
-    if (delay === 200) {
-      now += 10_000;
+    if (delay === 50 || delay === 200) {
+      now += delay === 50 ? 50 : 10_000;
       queueMicrotask(callback);
       return;
     }
     return realSetTimeout(callback, delay, ...args);
   });
-  document.querySelector = (selector) => selector.startsWith('[data-iss-preset=')
-    ? { click() {}, getAttribute: () => 'true' } : { id: 'tab-' + activeTab };
-  document.getElementById = (id) => ({
-    id, classList: { contains: () => id === 'tab-' + activeTab }, click: () => { activeTab = id.slice(4); },
-  });
+  function makeDocument() {
+    const document = new EventTarget();
+    document.querySelector = (selector) => selector.startsWith('[data-iss-preset=')
+      ? { click() {}, getAttribute: () => 'true' } : { id: 'tab-' + activeTab };
+    document.getElementById = (id) => ({
+      id, classList: { contains: () => id === 'tab-' + activeTab }, click: () => { activeTab = id.slice(4); },
+    });
+    return document;
+  }
+  const contextEvent = (canvas, type, statusMessage = '') => {
+    const event = Object.assign(new Event(type), { statusMessage });
+    Object.defineProperty(event, 'target', { value: canvas });
+    document.dispatchEvent(event);
+  };
 
   class FakeWebGL2 {
     drawingBufferWidth = 8;
@@ -123,6 +130,8 @@ test('independent checks return the full report and the native-driven phases rea
       for (let offset = 0; offset < bytes.length; offset += 4) bytes.set(pixel, offset);
     };
     const canvas = {
+      closest: (selectors) => selectors.includes(tab === 'map' ? '#map' : '#iss-host')
+        ? { id: tab === 'map' ? 'map' : 'iss-host' } : null,
       getContext: () => gl,
       getBoundingClientRect: () => ({ width: 8, height: 8, right: 8, bottom: 8, left: 0, top: 0 }),
     };
@@ -137,7 +146,7 @@ test('independent checks return the full report and the native-driven phases rea
       loseOnRepaint: () => { loseOnRepaint = true; },
       triggerRepaint: () => {
         if (loseOnRepaint) {
-          rendererErrors.set(canvas, 'webglcontextlost: GPU disconnected');
+          contextEvent(canvas, 'webglcontextlost', 'GPU disconnected');
           paint.dispatchEvent(new Event('webglcontextlost'));
         } else paint.dispatchEvent(new Event('render'));
       },
@@ -155,7 +164,7 @@ test('independent checks return the full report and the native-driven phases rea
   const denied = async () => { throw Object.assign(new Error('Native ingress denied'), { code: 'G1_BRIDGE_DENIED' }); };
   const paths = [];
   const globals = {
-    document, location, innerWidth: 8, innerHeight: 8, isSecureContext: true, WebGL2RenderingContext: FakeWebGL2,
+    document: makeDocument(), location, innerWidth: 8, innerHeight: 8, isSecureContext: true, WebGL2RenderingContext: FakeWebGL2,
     window: { __opdMap: renderer('map', 'carto-dark-layer', 'carto-dark'), __opdIss: renderer('iss', 'iss-lit', 'iss-lit') },
     localStorage: { getItem: (key) => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) },
     Capacitor: {
@@ -205,17 +214,25 @@ test('independent checks return the full report and the native-driven phases rea
     fixtureResponses: 6, deniedFetches: 0, blockedResources: 3,
   };
   const workers = [{ type: 'module', url: '/assets/maplibre-gl-worker-fixture.js' }];
-  const makeProof = () => createProof({
-    fixture, offline, tile, workers, rendererErrors,
-    localTiles: { map: 1, iss: 1 },
-    rawFetch: async (url) => {
-      const request = new URL(url);
-      if (request.protocol === 'https:') { block(url); throw new TypeError('Blocked by CSP'); }
-      paths.push(request.pathname);
-      now++;
-      return new Response(tile);
-    },
-  });
+  const makeProof = () => {
+    globalThis.document = makeDocument();
+    return createProof({
+      fixture, offline, tile, workers,
+      localTiles: { map: 1, iss: 1 },
+      rawFetch: async (url) => {
+        const request = new URL(url);
+        if (request.protocol === 'https:') { block(url); throw new TypeError('Blocked by CSP'); }
+        paths.push(request.pathname);
+        now++;
+        return new Response(tile);
+      },
+    });
+  };
+  return { fixture, offline, workers, makeProof, contextEvent };
+}
+
+test('independent checks return the full report and the native-driven phases reach checks 8–10', async (t) => {
+  const { fixture, offline, workers, makeProof } = createProofHarness(t);
   const proof = makeProof();
   const failedStartup = makeProof();
   failedStartup.fixtureReady = Promise.reject(new Error('Unable to import the frontend'));
@@ -257,7 +274,7 @@ test('independent checks return the full report and the native-driven phases rea
     beforeLaunchId: 'first-launch', afterLaunchId: 'second-launch', appQuitObserved: true,
   });
   const beforeRecovery = await relaunched.select('iss');
-  assert.equal(storage.get(TAB_STORAGE_KEY), 'tab-iss');
+  assert.equal(localStorage.getItem(TAB_STORAGE_KEY), 'tab-iss');
   const recovered = makeProof();
   const recovery = await recovered.verifyRecovery(beforeRecovery, { terminationCallbacks: 1, reloads: 1 });
   const stress = await recovered.stress(600_000);
@@ -273,18 +290,76 @@ test('independent checks return the full report and the native-driven phases rea
   assert.deepEqual(stress.evidence.sessions.map(({ verifiedMoveTimesMs }) => verifiedMoveTimesMs),
     Array.from({ length: 2 }, () => Array.from({ length: 30 }, (_, i) => i * 10_000)));
 
+  const lostProof = makeProof();
   window.__opdMap.loseOnRepaint();
-  const lostFrame = await proof.runCheck(4);
+  const lostFrame = await lostProof.runCheck(4);
   assert.equal(lostFrame.status, 'fail');
   assert.match(lostFrame.evidence.error, /webglcontextlost: GPU disconnected/);
-  const lostRenderer = await proof.runCheck(3);
+  const lostRenderer = await lostProof.runCheck(3);
   assert.equal(lostRenderer.status, 'fail');
   assert.match(lostRenderer.evidence.error, /webglcontextlost: GPU disconnected/);
 });
 
+test('failed renderer checks retain creation events by canvas tab and document without published renderers', async (t) => {
+  const { makeProof, contextEvent } = createProofHarness(t);
+  const proof = makeProof();
+  await proof.select('iss');
+  const mapCanvas = window.__opdMap.getCanvas();
+  const issCanvas = window.__opdIss.getCanvas();
+  delete window.__opdMap;
+  delete window.__opdIss;
+  contextEvent(mapCanvas, 'webglcontextcreationerror', 'Map GPU unavailable');
+  contextEvent(issCanvas, 'webglcontextcreationerror', 'ISS GPU unavailable');
+
+  for (const [id, tab, statusMessage] of [
+    [2, 'map', 'Map GPU unavailable'], [3, 'map', 'Map GPU unavailable'],
+    [4, 'map', 'Map GPU unavailable'], [5, 'iss', 'ISS GPU unavailable'],
+  ]) {
+    const result = await proof.runCheck(id);
+    assert.equal(result.status, 'fail');
+    assert.match(result.evidence.error, new RegExp('Timed out waiting for ' + tab + ' renderer'));
+    assert.deepEqual(result.evidence.webglContextEvents, [
+      { documentId: proof.documentId, tab, type: 'webglcontextcreationerror', statusMessage, atMs: 0 },
+    ]);
+  }
+
+  const reloaded = makeProof();
+  assert.notEqual(reloaded.documentId, proof.documentId);
+  const noContextEvent = await reloaded.runCheck(3);
+  assert.equal(noContextEvent.status, 'fail');
+  assert.equal(noContextEvent.evidence.webglContextEvents, undefined);
+});
+
+test('a generic worker query TypeError preserves context events and worker evidence after restoration', async (t) => {
+  const { makeProof, workers, contextEvent } = createProofHarness(t);
+  const proof = makeProof();
+  const map = window.__opdMap;
+  let firstQuery = true;
+  map.querySourceFeatures = () => {
+    if (firstQuery) {
+      contextEvent(map.getCanvas(), 'webglcontextlost', 'GPU disconnected');
+      firstQuery = false;
+    }
+    throw new TypeError('Cannot read properties of null');
+  };
+  const loss = { documentId: proof.documentId, tab: 'map', type: 'webglcontextlost', statusMessage: 'GPU disconnected', atMs: 0 };
+  const failedQuery = await proof.runCheck(2);
+  assert.equal(failedQuery.status, 'fail');
+  assert.equal(failedQuery.evidence.error, 'TypeError: Cannot read properties of null');
+  assert.deepEqual(failedQuery.evidence.workers, workers);
+  assert.deepEqual(failedQuery.evidence.webglContextEvents, [loss]);
+
+  contextEvent(map.getCanvas(), 'webglcontextrestored');
+  assert.equal((await proof.runCheck(3)).status, 'pass');
+  const afterRestore = await proof.runCheck(2);
+  assert.equal(afterRestore.status, 'fail');
+  assert.deepEqual(afterRestore.evidence.webglContextEvents, [loss, { ...loss, type: 'webglcontextrestored', statusMessage: '' }]);
+  assert.deepEqual(failedQuery.evidence.webglContextEvents, [loss]);
+});
+
 test('stress reports a renderer failure', async () => {
   const original = globalThis.document;
-  globalThis.document = { getElementById() { throw new Error('renderer failed'); } };
+  globalThis.document = Object.assign(new EventTarget(), { getElementById() { throw new Error('renderer failed'); } });
   try {
     const proof = createProof({});
     const result = await proof.stress(600_000);
@@ -296,9 +371,11 @@ test('stress reports a renderer failure', async () => {
   }
 });
 
-test('stress rejects a shortened or increased duration', async () => {
+test('stress rejects a shortened or increased duration', async (t) => {
+  const { makeProof } = createProofHarness(t);
+  const proof = makeProof();
   for (const duration of [60_000, 599_999, 600_001]) {
-    const result = await createProof({}).stress(duration);
+    const result = await proof.stress(duration);
     assert.equal(result.status, 'fail');
     assert.match(result.evidence.error, /exactly 600000/);
   }
