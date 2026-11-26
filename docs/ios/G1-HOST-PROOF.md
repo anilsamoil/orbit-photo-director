@@ -17,26 +17,26 @@ Hosted simulators cannot sustain WebGL/Metal for G1. On both devices in both run
 
 In run 45890306629, checks 1, 6 and 8 passed on both devices. Check 7 passed on iPhone 17 Pro and failed on iPad with “Proof operation timed out”. Checks 2, 3, 4, 5, 9 and 10 failed on both. [Run 45890306629](https://github.com/anilsamoil/orbit-photo-director/actions/runs/45890306629)
 
-Hosted CI runs checks 1, 6 and 8 on both simulators, plus check 7 on iPhone 17 Pro. The scoped run results are pending. The remaining checks are not waived and require on-device evidence. G1 remains OPEN.
+Scoped hosted run 45896800677 passed both host-proof legs for revision `b3a4adb` (pull request merge SHA `40aaf58`). Run 45894450939 (`ccdb20b`) also passed both host-proof legs. The exact-HEAD result of the final commit is recorded in the PR checks. The remaining checks are not waived and require on-device evidence. G1 remains OPEN. [Run 45896800677](https://github.com/anilsamoil/orbit-photo-director/actions/runs/45896800677) · [Run 45894450939](https://github.com/anilsamoil/orbit-photo-director/actions/runs/45894450939)
 
 Offline evidence requires an egress precondition in check 1 and again in the recovered document when check 9 runs. The original WebKit fetch, XMLHttpRequest and WebSocket must each fail with an enforced `connect-src` violation. Calls through the CapacitorHttp alias and native plugin class must both return `G1_BRIDGE_DENIED`.
 
 ## Checks
 
-Passes below are from run 45890306629. “Hosted not run, on-device required” indicates exclusion from the scoped hosted run. The earlier hosted failures remain recorded above.
+Results are from scoped run 45896800677.
 
 | # | Check | iPad result | iPhone result | Evidence to record |
 | --- | --- | --- | --- | --- |
 | 1 | Secure context and SHA-256 | Hosted pass | Hosted pass | Local origin, `isSecureContext`, input byte count, both WebCrypto and CryptoKit digests, and the egress-denial results. |
-| 2 | Map chunk and MapLibre worker | Hosted not run, on-device required | Hosted not run, on-device required | Map tab renderer, bundled worker URL and a worker-processed GeoJSON feature query. |
-| 3 | WebGL2 | Hosted not run, on-device required | Hosted not run, on-device required | Actual Map canvas context, GL version and drawing buffer dimensions. |
-| 4 | Map local tile | Hosted not run, on-device required | Hosted not run, on-device required | Green tile pixel count, hidden-layer control, bundled route and `G1-map` screenshot. |
-| 5 | ISS local tile and geometry | Hosted not run, on-device required | Hosted not run, on-device required | Bundled orange raster pixels and hidden-layer control, applied horizon and nadir poses and zooms, and the visible renderer's globe shader, full projection transition and active `vertical-perspective` projection at each pose and applied zoom 12. Reuse the existing ISS geometry assertions, with a visible-frame horizon limb error below 1°. Keep the `G1-iss` screenshot. |
+| 2 | Map chunk and MapLibre worker | Hosted not-run (on-device required) | Hosted not-run (on-device required) | Map tab renderer, bundled worker URL and a worker-processed GeoJSON feature query. |
+| 3 | WebGL2 | Hosted not-run (on-device required) | Hosted not-run (on-device required) | Actual Map canvas context, GL version and drawing buffer dimensions. |
+| 4 | Map local tile | Hosted not-run (on-device required) | Hosted not-run (on-device required) | Green tile pixel count, hidden-layer control, bundled route and `G1-map` screenshot. |
+| 5 | ISS local tile and geometry | Hosted not-run (on-device required) | Hosted not-run (on-device required) | Bundled orange raster pixels and hidden-layer control, applied horizon and nadir poses and zooms, and the visible renderer's globe shader, full projection transition and active `vertical-perspective` projection at each pose and applied zoom 12. Reuse the existing ISS geometry assertions, with a visible-frame horizon limb error below 1°. Keep the `G1-iss` screenshot. |
 | 6 | Request bridge | Hosted pass | Hosted pass | Native receipts for plan GET, target DELETE, log POST and target PUT. Compare method, paths, headers and exact body bytes. Native rejects body fields on the bodyless routes. |
-| 7 | At least 50 tiles/s | Hosted fail in 45890306629. Hosted not run in scope, on-device required | Hosted pass | Count, elapsed time, bytes per tile, validated response bytes, native route observations and delivered tiles/s. |
+| 7 | At least 50 tiles/s | Hosted not-run (on-device required) | Hosted pass (100 tiles in 206 ms, 485 tiles/s) | Count, elapsed time, bytes per tile, validated response bytes, native route observations and delivered tiles/s. |
 | 8 | localStorage across app relaunch | Hosted pass | Hosted pass | Record app exit and a new launch. Compare storage token, native launch identities and WebView document identities. |
-| 9 | WebContent termination and recovery | Hosted not run, on-device required | Hosted not run, on-device required | WebContent process observation, WebKit termination callback, Capacitor reload, new document identity, same active tab, repeated egress denial and fresh ISS raster pixels with a hidden-layer control. |
-| 10 | Ten-minute pan and zoom, peak memory | Hosted not run, on-device required | Hosted not run, on-device required | Full proof requires 600000 ms, with at least 300000 ms per renderer. Every counted move must reach its requested pan and zoom and show bundled tile pixels in a fresh frame. Each renderer requires a verified move in the first and final 30 seconds of its five-minute half and no gap longer than 30 seconds between verified moves. Record actual duration, moves, verified frame timestamps, minimum tile pixel counts, RSS observation duration, peak WebContent resident bytes and termination count. |
+| 9 | WebContent termination and recovery | Hosted not-run (on-device required) | Hosted not-run (on-device required) | WebContent process observation, WebKit termination callback, Capacitor reload, new document identity, same active tab, repeated egress denial and fresh ISS raster pixels with a hidden-layer control. |
+| 10 | Ten-minute pan and zoom, peak memory | Hosted not-run (on-device required) | Hosted not-run (on-device required) | Full proof requires 600000 ms, with at least 300000 ms per renderer. Every counted move must reach its requested pan and zoom and show bundled tile pixels in a fresh frame. Each renderer requires a verified move in the first and final 30 seconds of its five-minute half and no gap longer than 30 seconds between verified moves. Record actual duration, moves, verified frame timestamps, minimum tile pixel counts, RSS observation duration, peak WebContent resident bytes and termination count. |
 
 ## Proof setup and evidence
 
@@ -50,7 +50,7 @@ With `G1_CHECKS` unset, the proof runs all ten checks. In a full simulator run, 
 
 XCTest and artifact export each check for the tab's raster color in the central canvas region of the screenshot, green for Map and orange for ISS. Whenever the corresponding probe passes, the exported row requires that screenshot even if XCTest fails overall. A missing or invalid screenshot fails the row. The placeholder launch test retains its dark-background and light-text check.
 
-Each `ios-host-proof-<device>-<run>-<attempt>` artifact retains `proof-results.json`, `checks.md`, build hashes, runner logs, the `.xcresult` and any observer logs and exported attachments. The JSON records the selection, and the report labels excluded checks “not-run (on-device required)”. Record the scoped hosted runs and their check results here when available. If a check fails with the default host, record its evidence before trying a custom WKWebView host under the same checks.
+Each `ios-host-proof-<device>-<run>-<attempt>` artifact retains `proof-results.json`, `checks.md`, build hashes, runner logs, the `.xcresult` and any observer logs and exported attachments. The JSON records the selection, and the report labels excluded checks “not-run (on-device required)”. If a check fails with the default host, record its evidence before trying a custom WKWebView host under the same checks.
 
 ## On-device proof (required)
 

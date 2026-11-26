@@ -34,7 +34,7 @@ def parse_checks(value):
     if value is None:
         return CHECK_IDS
     valid = {str(number) for number in CHECK_IDS}
-    tokens = [token.strip() for token in value.split(",")]
+    tokens = [token.strip(" \t\n\r") for token in value.split(",")]
     for token in tokens:
         if token not in valid:
             raise ValueError(f"Unknown G1_CHECKS id: {token!r}")
@@ -161,7 +161,7 @@ def main(output, outcome):
         if not isinstance(evidence, dict) or not evidence:
             error = f"Missing or invalid evidence for check {number}"
             errors.append(f"Proof evidence export: {error}")
-            if status == "pass":
+            if status in ("pass", "fail"):
                 results[number - 1].update(status="fail", evidence={"evidenceError": error})
             continue
         if status == "pass":

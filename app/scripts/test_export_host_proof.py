@@ -247,6 +247,22 @@ class HostProofExportTests(unittest.TestCase):
         self.assertIn("| 6 | GET, DELETE, POST and PUT bridge fidelity | fail |", table)
         self.assertEqual(report["results"][7]["status"], "pass")
 
+    def test_failed_selected_check_8_keeps_failure_with_unusable_evidence(self):
+        error = "Missing or invalid evidence for check 8"
+        expected_evidence = {"evidenceError": error}
+        for evidence in ({}, None, ["invalid"]):
+            with self.subTest(evidence=evidence):
+                process, report, table = self.export(
+                    "failure", {}, checks="8", performed_checks=(8,),
+                    failed_checks=(8,), evidence_overrides={8: evidence},
+                )
+                self.assertEqual(process.returncode, 0, process.stderr)
+                self.assertEqual(report["results"][7], {
+                    "id": 8, "status": "fail", "evidence": expected_evidence,
+                })
+                self.assertIn(f"| 8 | localStorage after app relaunch | fail | {json.dumps(expected_evidence)} |", table)
+                self.assertIn(error, process.stderr)
+
     def test_successful_xctest_with_failed_selected_check_fails_export(self):
         process, report, table = self.export(
             "success", {}, checks="1,6,7,8", performed_checks=(1, 6, 7, 8), failed_checks=(7,),
@@ -267,6 +283,21 @@ class HostProofExportTests(unittest.TestCase):
         for checks in ("1,11", "01", "", "1,"):
             with self.subTest(checks=checks):
                 process, report, _ = self.export("success", {}, checks=checks)
+                self.assertEqual(process.returncode, 1)
+                self.assertIn("Unknown G1_CHECKS id", process.stderr)
+                self.assertIsNone(report)
+
+    def test_selection_trims_only_space_tab_line_feed_and_carriage_return(self):
+        process, report, _ = self.export(
+            "success", {}, checks=" \t8\n\r,\r\n6\t ", performed_checks=(6, 8),
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertEqual(report["selectedChecks"], [6, 8])
+        for whitespace in ("\v", "\f", "\u00a0", "\u200b"):
+            with self.subTest(whitespace=whitespace):
+                process, report, _ = self.export(
+                    "success", {}, checks=f"{whitespace}8", performed_checks=(8,),
+                )
                 self.assertEqual(process.returncode, 1)
                 self.assertIn("Unknown G1_CHECKS id", process.stderr)
                 self.assertIsNone(report)

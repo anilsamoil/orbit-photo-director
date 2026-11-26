@@ -1,8 +1,10 @@
+import CoreFoundation
 import UIKit
 import XCTest
 
 final class HostProofTests: XCTestCase {
     private typealias ProofJSON = [String: Any]
+    private let invalidRowError = "duplicate or malformed proof rows"
 
     @MainActor
     func testOfflineHostProof() throws {
@@ -11,7 +13,8 @@ final class HostProofTests: XCTestCase {
         let environment = ProcessInfo.processInfo.environment
         let selected: Set<Int>
         if let input = environment["G1_CHECKS"] {
-            let values = input.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            let whitespace = CharacterSet(charactersIn: " \t\n\r")
+            let values = input.components(separatedBy: ",").map { $0.trimmingCharacters(in: whitespace) }
             let checks = allChecks.filter { values.contains(String($0)) }
             guard Set(values) == Set(checks.map { String($0) }) else {
                 return XCTFail("G1_CHECKS must contain comma-separated check IDs from 1 through 10")
@@ -42,7 +45,11 @@ final class HostProofTests: XCTestCase {
             "device": environment["SIMULATOR_DEVICE_NAME"] ?? UIDevice.current.model,
             "stressDurationMs": durationMs
         ]
+        var invalidIDs = Set<Int>()
         defer {
+            for id in selected.intersection(invalidIDs) {
+                results[id - 1] = row(id, "fail", invalidRowError)
+            }
             attachResults(results, metadata: metadata)
             for id in selected.sorted() {
                 let result = results[id - 1]
@@ -72,7 +79,7 @@ final class HostProofTests: XCTestCase {
         }
 
         if let web = initial["web"] as? ProofJSON {
-            merge(web["results"], into: &results, allowed: initialChecks)
+            invalidIDs.formUnion(merge(web["results"], into: &results, allowed: initialChecks))
             metadata["web"] = web.filter { $0.key != "results" }
         } else if let id = initialChecks.min() {
             results[id - 1] = row(id, "fail", "Missing initial WebView results")
@@ -112,7 +119,7 @@ final class HostProofTests: XCTestCase {
             results[firstRelaunchCheck - 1] = row(firstRelaunchCheck, "fail", "The relaunched proof did not produce a lifecycle result")
             return XCTFail("The relaunched proof did not produce a lifecycle result")
         }
-        merge(lifecycle["results"], into: &results, allowed: selected.intersection(8...9))
+        invalidIDs.formUnion(merge(lifecycle["results"], into: &results, allowed: selected.intersection(8...9)))
         metadata["native"] = lifecycle.filter { $0.key != "results" }
 
         guard selected.contains(10) else { return }
@@ -121,7 +128,7 @@ final class HostProofTests: XCTestCase {
             results[9] = row(10, "fail", "The WebView did not produce a completed stress result")
             return XCTFail("The WebView did not produce a completed stress result")
         }
-        merge(final["results"], into: &results, allowed: [10])
+        invalidIDs.formUnion(merge(final["results"], into: &results, allowed: [10]))
     }
 
     @MainActor
@@ -163,19 +170,41 @@ final class HostProofTests: XCTestCase {
         return object
     }
 
-    private func merge(_ value: Any?, into results: inout [ProofJSON], allowed: Set<Int>) {
-        var seen = Set<Int>()
-        guard let rows = value as? [ProofJSON] else {
-            return XCTFail("Missing G1 checks \(allowed)")
-        }
-        for row in rows {
-            guard let id = row["id"] as? Int, allowed.contains(id), seen.insert(id).inserted,
-                  row["status"] is String, row["evidence"] is ProofJSON else {
-                XCTFail("Unexpected G1 result \(row)")
+    private func merge(_ value: Any?, into results: inout [ProofJSON], allowed: Set<Int>) -> Set<Int> {
+        let rows = value as? [Any]
+        var hasUnidentifiedRow = rows == nil
+        var invalidIDs = Set<Int>()
+        var rowsByID: [Int: [ProofJSON]] = [:]
+        for item in rows ?? [] {
+            guard let result = item as? ProofJSON, let id = result["id"] as? Int,
+                  (1...10).contains(id) else {
+                hasUnidentifiedRow = true
                 continue
             }
-            results[id - 1] = row
+            guard allowed.contains(id) else {
+                invalidIDs.insert(id)
+                XCTFail("Unexpected G1 check \(id)")
+                continue
+            }
+            rowsByID[id, default: []].append(result)
         }
+        if hasUnidentifiedRow {
+            XCTFail(invalidRowError)
+            return invalidIDs.union(allowed)
+        }
+        for (id, matches) in rowsByID {
+            guard matches.count == 1, let result = matches.first,
+                  let number = result["id"] as? NSNumber,
+                  CFGetTypeID(number) != CFBooleanGetTypeID(), !CFNumberIsFloatType(number as CFNumber),
+                  let status = result["status"] as? String, ["pass", "fail", "blocked", "not-run"].contains(status),
+                  let evidence = result["evidence"] as? ProofJSON, !evidence.isEmpty else {
+                invalidIDs.insert(id)
+                XCTFail("G1 check \(id): \(invalidRowError)")
+                continue
+            }
+            results[id - 1] = result
+        }
+        return invalidIDs
     }
 
     private func row(_ id: Int, _ status: String, _ message: String) -> ProofJSON {
