@@ -8,6 +8,10 @@ private typealias ProofJSON = [String: Any]
 
 final class HostProofViewController: CAPBridgeViewController {
     private static let stressDurationMs = 600_000
+    // XCTest validates the input and forwards the canonical list of check IDs.
+    private let selectedChecks = Set(ProcessInfo.processInfo.environment["G1_CHECKS"].map {
+        $0.split(separator: ",").compactMap { Int($0) }
+    } ?? Array(1...10))
     private let proofRouter = HostProofRouter()
     private let launchID = UUID().uuidString
     private let proofStatus = UILabel()
@@ -42,6 +46,10 @@ final class HostProofViewController: CAPBridgeViewController {
         let content = webView.configuration.userContentController
         content.removeAllScriptMessageHandlers()
         content.add(HostProofBridgeIngress(downstream: downstream, localURL: localURL), contentWorld: .page, name: "bridge")
+        if selectedChecks.isDisjoint(with: [2, 3, 4, 5, 9, 10]) {
+            content.addUserScript(WKUserScript(source: "globalThis.__opdG1RenderersDisabled = true;",
+                                              injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        }
         bridge.registerPluginInstance(HostProofPlugin(router: proofRouter))
         let navigation = HostProofNavigation(downstream: downstream, localURL: localURL)
         proofNavigation = navigation
@@ -75,16 +83,16 @@ final class HostProofViewController: CAPBridgeViewController {
         lifecycleStatus.accessibilityIdentifier = "g1-lifecycle-status"
         lifecycleStatus.text = " "
 
-        let map = UIButton(type: .system, primaryAction: UIAction(title: "Proof Map") { [weak self] _ in
-            self?.showForScreenshot("map")
-        })
-        map.accessibilityIdentifier = "g1-map"
-        let iss = UIButton(type: .system, primaryAction: UIAction(title: "Proof ISS") { [weak self] _ in
-            self?.showForScreenshot("iss")
-        })
-        iss.accessibilityIdentifier = "g1-iss"
-
-        let controls = UIStackView(arrangedSubviews: [proofStatus, lifecycleStatus, screenshotStatus, map, iss])
+        var views: [UIView] = [proofStatus, lifecycleStatus]
+        if selectedChecks.contains(4) || selectedChecks.contains(5) { views.append(screenshotStatus) }
+        for (id, tab, title) in [(4, "map", "Proof Map"), (5, "iss", "Proof ISS")] where selectedChecks.contains(id) {
+            let button = UIButton(type: .system, primaryAction: UIAction(title: title) { [weak self] _ in
+                self?.showForScreenshot(tab)
+            })
+            button.accessibilityIdentifier = "g1-\(tab)"
+            views.append(button)
+        }
+        let controls = UIStackView(arrangedSubviews: views)
         controls.axis = .horizontal
         controls.alignment = .center
         controls.distribution = .equalSpacing
@@ -124,14 +132,16 @@ final class HostProofViewController: CAPBridgeViewController {
             await runAfterRelaunch(encoded, durationMs: Int(duration) ?? 0)
         } else {
             var output: ProofJSON = ["launchID": launchID, "appPID": Int(getpid())]
-            do {
-                output["before"] = try await web("prepareRelaunch")
-            } catch {
-                output["storageError"] = errorEvidence(error)
+            if selectedChecks.contains(8) {
+                do {
+                    output["before"] = try await web("prepareRelaunch")
+                } catch {
+                    output["storageError"] = errorEvidence(error)
+                }
             }
             // Collect bridge and storage evidence before starting a GPU-dependent renderer.
             var results: [ProofJSON] = []
-            for id in [1, 6, 7, 2, 3, 4, 5] {
+            for id in [1, 6, 7, 2, 3, 4, 5] where selectedChecks.contains(id) {
                 results.append(await checked(id) { try await web("runCheck", arguments: [id]) })
             }
             var webOutput: ProofJSON
@@ -148,27 +158,33 @@ final class HostProofViewController: CAPBridgeViewController {
     }
 
     private func runAfterRelaunch(_ encoded: String, durationMs: Int) async {
-        let relaunch = await checked(8) {
-            guard let data = Data(base64Encoded: encoded),
-                  let arguments = try JSONSerialization.jsonObject(with: data) as? ProofJSON,
-                  let before = arguments["before"] as? ProofJSON,
-                  let beforeLaunchID = arguments["launchID"] as? String,
-                  let beforeAppPID = arguments["appPID"] as? Int, beforeAppPID != Int(getpid()),
-                  arguments["appQuitObserved"] as? Bool == true
-            else { throw HostProofError("Missing XCUITest quit witness") }
-            let witness: ProofJSON = [
-                "beforeLaunchId": beforeLaunchID,
-                "afterLaunchId": launchID,
-                "beforeAppPID": beforeAppPID,
-                "afterAppPID": Int(getpid()),
-                "appQuitObserved": true
-            ]
-            return try await web("verifyRelaunch", arguments: [before, witness])
+        var results: [ProofJSON] = []
+        if selectedChecks.contains(8) {
+            let relaunch = await checked(8) {
+                guard let data = Data(base64Encoded: encoded),
+                      let arguments = try JSONSerialization.jsonObject(with: data) as? ProofJSON,
+                      let before = arguments["before"] as? ProofJSON,
+                      let beforeLaunchID = arguments["launchID"] as? String,
+                      let beforeAppPID = arguments["appPID"] as? Int, beforeAppPID != Int(getpid()),
+                      arguments["appQuitObserved"] as? Bool == true
+                else { throw HostProofError("Missing XCUITest quit witness") }
+                let witness: ProofJSON = [
+                    "beforeLaunchId": beforeLaunchID,
+                    "afterLaunchId": launchID,
+                    "beforeAppPID": beforeAppPID,
+                    "afterAppPID": Int(getpid()),
+                    "appQuitObserved": true
+                ]
+                return try await web("verifyRelaunch", arguments: [before, witness])
+            }
+            results.append(relaunch)
         }
         let observer = ProofObserver()
-        let recovery = await checked(9) { try await verifyRecovery(observer) }
+        if selectedChecks.contains(9) {
+            results.append(await checked(9) { try await verifyRecovery(observer) })
+        }
         publish("lifecycle-ready", [
-            "results": [relaunch, recovery],
+            "results": results,
             "launchID": launchID,
             "appPID": Int(getpid()),
             "offline": [
@@ -181,8 +197,10 @@ final class HostProofViewController: CAPBridgeViewController {
                 "tileHandler": "Capacitor WebViewAssetHandler"
             ]
         ], on: lifecycleStatus)
-        let stress = await checked(10) { try await verifyStress(observer, durationMs: durationMs) }
-        publish("complete", ["results": [stress]], on: proofStatus)
+        if selectedChecks.contains(10) {
+            let stress = await checked(10) { try await verifyStress(observer, durationMs: durationMs) }
+            publish("complete", ["results": [stress]], on: proofStatus)
+        }
     }
 
     private func verifyRecovery(_ observer: ProofObserver) async throws -> ProofJSON {

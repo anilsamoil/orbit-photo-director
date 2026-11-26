@@ -11,7 +11,8 @@ const offline = {
   fixtureResponses: 0, deniedFetches: 0, blockedResources: 0,
 };
 const local = new URL(location.href);
-const proof = createProof({ rawFetch, tile, workers, localTiles, offline, fixture });
+const renderersEnabled = globalThis.__opdG1RenderersDisabled !== true;
+const proof = createProof({ rawFetch, tile, workers, localTiles, offline, fixture, renderersEnabled });
 window.__opdG1 = proof;
 
 async function fixtureFetch(input, init) {
@@ -74,13 +75,25 @@ const frontend = withDeadline(async () => {
   Object.defineProperty(navigator, 'onLine', { value: true });
   globalThis.fetch = fixtureFetch;
 
-  const recoveredTab = localStorage.getItem(TAB_STORAGE_KEY);
-  if (recoveredTab === 'tab-iss') sessionStorage.setItem('opd-map-import-view', recoveredTab);
-  const tabs = document.querySelector('.tabs');
-  new MutationObserver(() => {
-    const active = tabs.querySelector('.tab.active')?.id;
-    if (active === 'tab-map' || active === 'tab-iss') localStorage.setItem(TAB_STORAGE_KEY, active);
-  }).observe(tabs, { subtree: true, attributes: true, attributeFilter: ['class'] });
+  let recoveredTab = null;
+  if (renderersEnabled) {
+    recoveredTab = localStorage.getItem(TAB_STORAGE_KEY);
+    if (recoveredTab === 'tab-iss') sessionStorage.setItem('opd-map-import-view', recoveredTab);
+    const tabs = document.querySelector('.tabs');
+    new MutationObserver(() => {
+      const active = tabs.querySelector('.tab.active')?.id;
+      if (active === 'tab-map' || active === 'tab-iss') localStorage.setItem(TAB_STORAGE_KEY, active);
+    }).observe(tabs, { subtree: true, attributes: true, attributeFilter: ['class'] });
+  } else {
+    // The frontend otherwise restores ISS or initializes its default Map tab at startup.
+    sessionStorage.removeItem('opd-map-import-view');
+    const mapTab = document.getElementById('tab-map');
+    mapTab.classList.remove('active');
+    mapTab.disabled = true;
+    document.getElementById('tab-iss').disabled = true;
+    document.getElementById('tab-queue').classList.add('active');
+    document.getElementById('view').className = 'view-queue';
+  }
 
   return { main: await import('/src/main.ts'), recoveredTab };
 }, 20_000, 'Proof frontend startup');

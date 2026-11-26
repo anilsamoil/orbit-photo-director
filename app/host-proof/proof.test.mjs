@@ -214,10 +214,10 @@ function createProofHarness(t) {
     fixtureResponses: 6, deniedFetches: 0, blockedResources: 3,
   };
   const workers = [{ type: 'module', url: '/assets/maplibre-gl-worker-fixture.js' }];
-  const makeProof = () => {
+  const makeProof = (renderersEnabled = true) => {
     globalThis.document = makeDocument();
     return createProof({
-      fixture, offline, tile, workers,
+      fixture, offline, tile, workers, renderersEnabled,
       localTiles: { map: 1, iss: 1 },
       rawFetch: async (url) => {
         const request = new URL(url);
@@ -230,6 +230,26 @@ function createProofHarness(t) {
   };
   return { fixture, offline, workers, makeProof, contextEvent };
 }
+
+test('GPU-free proof keeps native checks and relaunch available with no renderer', async (t) => {
+  const { makeProof } = createProofHarness(t);
+  const proof = makeProof(false);
+  document.getElementById = () => assert.fail('A scoped proof attempted to open a renderer');
+  for (const id of [1, 6, 7]) {
+    const result = await proof.runCheck(id);
+    assert.equal(result.status, 'pass', JSON.stringify(result.evidence));
+  }
+  const before = proof.prepareRelaunch();
+  const relaunched = makeProof(false);
+  const result = await relaunched.verifyRelaunch(before, {
+    beforeLaunchId: 'first-launch', afterLaunchId: 'second-launch', appQuitObserved: true,
+  });
+  assert.equal(result.status, 'pass', JSON.stringify(result.evidence));
+  assert.equal(result.evidence.after.token, before.token);
+  for (const tab of ['map', 'iss']) {
+    await assert.rejects(relaunched.capture(tab), /Renderers are disabled/);
+  }
+});
 
 test('independent checks return the full report and the native-driven phases reach checks 8–10', async (t) => {
   const { fixture, offline, workers, makeProof } = createProofHarness(t);

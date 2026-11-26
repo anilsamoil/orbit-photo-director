@@ -22,9 +22,22 @@ CHECKS = (
     "WebContent termination and same-tab recovery",
     "Scripted pan and zoom, peak memory",
 )
+CHECK_IDS = tuple(range(1, len(CHECKS) + 1))
+DEVICE_REQUIRED = {"reason": "Requires on-device proof; hosted simulator GPU unsupported", "gate": "G1-device"}
 TEST = "HostProofTests/testOfflineHostProof()"
 FULL_STRESS_MS = 600_000
 BLOCKED_HOSTS = ["g1-fetch.invalid", "g1-websocket.invalid", "g1-xhr.invalid"]
+
+
+def parse_checks(value):
+    if value is None:
+        return CHECK_IDS
+    valid = {str(number) for number in CHECK_IDS}
+    tokens = [token.strip() for token in value.split(",")]
+    for token in tokens:
+        if token not in valid:
+            raise ValueError(f"Unknown G1_CHECKS id: {token!r}")
+    return tuple(sorted({int(token) for token in tokens}))
 
 
 def exported_attachment(directory, attachments, name, suffix):
@@ -45,10 +58,21 @@ def exported_attachment(directory, attachments, name, suffix):
 
 
 def main(output, outcome):
+    try:
+        selected_checks = parse_checks(os.environ.get("G1_CHECKS"))
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 1
+
     directory = output / "attachments"
     results = [
-        {"id": i, "status": "not-run", "evidence": {"reason": "No result was captured from the UI test"}}
-        for i in range(1, 11)
+        {
+            "id": number,
+            "status": "not-run",
+            "evidence": {"reason": "No result was captured from the UI test"}
+            if number in selected_checks else DEVICE_REQUIRED.copy(),
+        }
+        for number in CHECK_IDS
     ]
     attachments = []
     report = {}
@@ -65,10 +89,12 @@ def main(output, outcome):
         for result in native_report["results"]:
             number = result["id"]
             allowed = {"pass", "fail", "blocked", "not-run"}
-            if type(number) is not int or number not in range(1, 11) or number in seen:
+            if type(number) is not int or number not in CHECK_IDS or number in seen:
                 raise ValueError(f"Unexpected check number: {number}")
             if result["status"] not in allowed or not isinstance(result["evidence"], dict) or not result["evidence"]:
                 raise ValueError(f"Invalid status or missing evidence for check {number}")
+            if number not in selected_checks and result["status"] != "not-run":
+                raise ValueError(f"Unselected check {number} must have status not-run")
             results[number - 1] = result
             seen.add(number)
         report = native_report
@@ -76,32 +102,35 @@ def main(output, outcome):
         errors.append(f"Proof evidence export: {error}")
 
     if outcome == "success":
-        if any(result["status"] != "pass" for result in results):
+        if any(results[number - 1]["status"] != "pass" for number in selected_checks):
             errors.append("Successful XCTest run is missing passing check evidence")
         else:
-            for index in (0, 8):
-                egress = results[index]["evidence"].get("egress")
+            for number in (1, 9):
+                if number not in selected_checks:
+                    continue
+                egress = results[number - 1]["evidence"].get("egress")
                 if (
                     not isinstance(egress, dict)
                     or egress.get("connectSrcBlockedHosts") != BLOCKED_HOSTS
                     or egress.get("capacitorHttp") != "G1_BRIDGE_DENIED"
                     or egress.get("capacitorHttpNativeClass") != "G1_BRIDGE_DENIED"
                 ):
-                    errors.append(f"Check {index + 1} is missing browser or native egress-denial evidence")
-            evidence = results[9]["evidence"]
-            elapsed = evidence.get("actualDurationMs")
-            memory = evidence.get("memory")
-            if not isinstance(memory, dict):
-                memory = {}
-            rss = memory.get("peakBytes")
-            observed = memory.get("observedDurationMs")
-            if (
-                evidence.get("requestedDurationMs") != FULL_STRESS_MS
-                or type(elapsed) not in (int, float) or not math.isfinite(elapsed) or elapsed < FULL_STRESS_MS
-                or type(observed) is not int or observed < FULL_STRESS_MS
-                or type(rss) is not int or rss <= 0
-            ):
-                errors.append("Successful XCTest run is missing full-duration stress or WebContent peak RSS evidence")
+                    errors.append(f"Check {number} is missing browser or native egress-denial evidence")
+            if 10 in selected_checks:
+                evidence = results[9]["evidence"]
+                elapsed = evidence.get("actualDurationMs")
+                memory = evidence.get("memory")
+                if not isinstance(memory, dict):
+                    memory = {}
+                rss = memory.get("peakBytes")
+                observed = memory.get("observedDurationMs")
+                if (
+                    evidence.get("requestedDurationMs") != FULL_STRESS_MS
+                    or type(elapsed) not in (int, float) or not math.isfinite(elapsed) or elapsed < FULL_STRESS_MS
+                    or type(observed) is not int or observed < FULL_STRESS_MS
+                    or type(rss) is not int or rss <= 0
+                ):
+                    errors.append("Successful XCTest run is missing full-duration stress or WebContent peak RSS evidence")
 
     for number, tab in ((4, "map"), (5, "iss")):
         result = results[number - 1]
@@ -118,6 +147,7 @@ def main(output, outcome):
 
     report.update(
         results=results,
+        selectedChecks=selected_checks,
         testOutcome=outcome,
         evidenceExportErrors=errors,
         workflow={
@@ -138,7 +168,8 @@ def main(output, outcome):
             evidence.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             .replace("|", "&#124;").replace("`", "&#96;")
         )
-        table.append(f'| {result["id"]} | {name} | {result["status"]} | {evidence} |')
+        status = result["status"] if result["id"] in selected_checks else "not-run (on-device required)"
+        table.append(f'| {result["id"]} | {name} | {status} | {evidence} |')
     (output / "checks.md").write_text("\n".join(table) + "\n", encoding="utf-8")
     for error in errors:
         print(error, file=sys.stderr)

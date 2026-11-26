@@ -7,11 +7,27 @@ final class HostProofTests: XCTestCase {
     @MainActor
     func testOfflineHostProof() throws {
         continueAfterFailure = true
+        let allChecks = 1...10
+        let environment = ProcessInfo.processInfo.environment
+        let selected: Set<Int>
+        if let input = environment["G1_CHECKS"] {
+            let values = input.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            let checks = allChecks.filter { values.contains(String($0)) }
+            guard Set(values) == Set(checks.map { String($0) }) else {
+                return XCTFail("G1_CHECKS must contain comma-separated check IDs from 1 through 10")
+            }
+            selected = Set(checks)
+        } else {
+            selected = Set(allChecks)
+        }
         let app = XCUIApplication()
         app.launchArguments = ["--g1-ui-test"]
-        let duration = ProcessInfo.processInfo.environment["G1_STRESS_MS"] ?? "600000"
-        let durationMs = Int(duration) ?? 0
-        app.launchEnvironment = ["G1_STRESS_MS": String(durationMs)]
+        let duration = environment["G1_STRESS_MS"] ?? "600000"
+        let durationMs = selected.contains(10) ? (Int(duration) ?? 0) : 0
+        app.launchEnvironment = [
+            "G1_STRESS_MS": String(durationMs),
+            "G1_CHECKS": selected.sorted().map { String($0) }.joined(separator: ",")
+        ]
         app.launch()
 
         let status = app.staticTexts["g1-status"]
@@ -19,51 +35,69 @@ final class HostProofTests: XCTestCase {
             throw XCTSkip("The W-01 placeholder assets are bundled")
         }
 
-        var results = (1...10).map { row($0, "not-run", "The proof driver did not reach this check") }
+        var results: [ProofJSON] = allChecks.map { id in
+            if selected.contains(id) { return row(id, "not-run", "The proof driver did not reach this check") }
+            return ["id": id, "status": "not-run", "evidence": [
+                "reason": "Requires on-device proof; hosted simulator GPU unsupported",
+                "gate": "G1-device"
+            ]]
+        }
         var metadata: ProofJSON = [
             "runtime": UIDevice.current.systemVersion,
-            "device": ProcessInfo.processInfo.environment["SIMULATOR_DEVICE_NAME"] ?? UIDevice.current.model,
+            "device": environment["SIMULATOR_DEVICE_NAME"] ?? UIDevice.current.model,
             "stressDurationMs": durationMs
         ]
-        defer { attachResults(results, metadata: metadata) }
+        defer {
+            attachResults(results, metadata: metadata)
+            for id in selected.sorted() {
+                let result = results[id - 1]
+                XCTAssertEqual(result["status"] as? String, "pass", "G1 check \(id): \(result)")
+            }
+        }
 
+        let initialChecks = selected.intersection(1...7)
         guard app.wait(for: .runningForeground, timeout: 30),
               app.webViews.firstMatch.waitForExistence(timeout: 30),
               wait(for: "initial-ready", on: status, timeout: 465),
               let initial = read(status)
         else {
-            results[0] = row(1, "fail", "The bundled proof did not produce an initial WebView result")
+            if let id = initialChecks.min() {
+                results[id - 1] = row(id, "fail", "The bundled proof did not produce an initial WebView result")
+            }
             return XCTFail("The bundled proof did not produce an initial WebView result")
         }
 
         if let web = initial["web"] as? ProofJSON {
-            merge(web["results"], into: &results, allowed: 1...7)
+            merge(web["results"], into: &results, allowed: initialChecks)
             metadata["web"] = web.filter { $0.key != "results" }
-        } else {
-            results[0] = row(1, "fail", "Missing initial WebView results")
+        } else if let id = initialChecks.min() {
+            results[id - 1] = row(id, "fail", "Missing initial WebView results")
         }
-        metadata["screenshots"] = ["map": capture("map", in: app), "iss": capture("iss", in: app)]
+        var screenshots: ProofJSON = [:]
+        if selected.contains(4) { screenshots["map"] = capture("map", in: app) }
+        if selected.contains(5) { screenshots["iss"] = capture("iss", in: app) }
+        if !screenshots.isEmpty { metadata["screenshots"] = screenshots }
 
-        guard let before = initial["before"] as? ProofJSON,
-              let launchID = initial["launchID"] as? String,
-              let appPID = initial["appPID"] as? Int else {
-            results[7] = failedRow(8, initial["storageError"], fallback: "Missing persistent storage witness")
-            return XCTFail("Missing stored token or first launch identity")
+        guard let firstRelaunchCheck = selected.intersection(8...10).min() else { return }
+        var witness: ProofJSON = [:]
+        if selected.contains(8) {
+            guard let before = initial["before"] as? ProofJSON,
+                  let launchID = initial["launchID"] as? String,
+                  let appPID = initial["appPID"] as? Int else {
+                results[7] = failedRow(8, initial["storageError"], fallback: "Missing persistent storage witness")
+                return XCTFail("Missing stored token or first launch identity")
+            }
+            witness = ["before": before, "launchID": launchID, "appPID": appPID]
         }
-
         app.terminate()
         guard app.wait(for: .notRunning, timeout: 30) else {
-            results[7] = row(8, "fail", "XCUITest did not observe app termination")
+            results[firstRelaunchCheck - 1] = row(firstRelaunchCheck, "fail", "XCUITest did not observe app termination")
             return XCTFail("XCUITest did not observe app termination")
         }
 
-        let witness = try JSONSerialization.data(withJSONObject: [
-            "before": before,
-            "launchID": launchID,
-            "appPID": appPID,
-            "appQuitObserved": true
-        ])
-        app.launchEnvironment["G1_RELAUNCH_WITNESS"] = witness.base64EncodedString()
+        witness["appQuitObserved"] = true
+        let witnessData = try JSONSerialization.data(withJSONObject: witness)
+        app.launchEnvironment["G1_RELAUNCH_WITNESS"] = witnessData.base64EncodedString()
         app.launch()
 
         let lifecycleStatus = app.staticTexts["g1-lifecycle-status"]
@@ -71,24 +105,19 @@ final class HostProofTests: XCTestCase {
               wait(for: "lifecycle-ready", on: lifecycleStatus, timeout: 225),
               let lifecycle = read(lifecycleStatus)
         else {
-            results[7] = row(8, "fail", "The relaunched proof did not produce a lifecycle result")
+            results[firstRelaunchCheck - 1] = row(firstRelaunchCheck, "fail", "The relaunched proof did not produce a lifecycle result")
             return XCTFail("The relaunched proof did not produce a lifecycle result")
         }
-        merge(lifecycle["results"], into: &results, allowed: 8...9)
+        merge(lifecycle["results"], into: &results, allowed: selected.intersection(8...9))
         metadata["native"] = lifecycle.filter { $0.key != "results" }
 
+        guard selected.contains(10) else { return }
         let stressTimeout = 120 + Double(min(max(durationMs, 0), 600_000)) / 1_000
         guard wait(for: "complete", on: status, timeout: stressTimeout), let final = read(status) else {
             results[9] = row(10, "fail", "The WebView did not produce a completed stress result")
             return XCTFail("The WebView did not produce a completed stress result")
         }
-        merge(final["results"], into: &results, allowed: 10...10)
-
-        for (index, result) in results.enumerated() {
-            let id = index + 1
-            let status = result["status"] as? String
-            XCTAssertEqual(status, "pass", "G1 check \(id): \(result)")
-        }
+        merge(final["results"], into: &results, allowed: [10])
     }
 
     @MainActor
@@ -130,7 +159,7 @@ final class HostProofTests: XCTestCase {
         return object
     }
 
-    private func merge(_ value: Any?, into results: inout [ProofJSON], allowed: ClosedRange<Int>) {
+    private func merge(_ value: Any?, into results: inout [ProofJSON], allowed: Set<Int>) {
         var seen = Set<Int>()
         guard let rows = value as? [ProofJSON] else {
             return XCTFail("Missing G1 checks \(allowed)")

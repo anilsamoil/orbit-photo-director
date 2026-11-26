@@ -232,7 +232,7 @@ export async function measureTiles({ fetchTile, tileURL, tileRequests, localURL,
   return evidence;
 }
 
-export function createProof({ rawFetch, tile, workers, localTiles, offline, fixture }) {
+export function createProof({ rawFetch, tile, workers, localTiles, offline, fixture, renderersEnabled = true }) {
   const documentId = `${performance.timeOrigin}-${Math.random().toString(36).slice(2)}`;
   const rendererErrors = new WeakMap();
   const contextEventsByTab = { map: [], iss: [] };
@@ -251,8 +251,10 @@ export function createProof({ rawFetch, tile, workers, localTiles, offline, fixt
       console.error('[G1]', message);
     }
   };
-  for (const type of ['webglcontextcreationerror', 'webglcontextlost', 'webglcontextrestored']) {
-    document.addEventListener(type, recordContextEvent, true);
+  if (renderersEnabled) {
+    for (const type of ['webglcontextcreationerror', 'webglcontextlost', 'webglcontextrestored']) {
+      document.addEventListener(type, recordContextEvent, true);
+    }
   }
   const check = async (id, operation, { timeoutMs, tabs = [] } = {}) => {
     try { return { id, status: 'pass', evidence: await withDeadline(operation, timeoutMs) }; }
@@ -270,6 +272,7 @@ export function createProof({ rawFetch, tile, workers, localTiles, offline, fixt
     localOrigin: localOrigin(),
   });
   const selectRenderer = async (tab) => {
+    requireValue(renderersEnabled, 'Renderers are disabled for this proof selection');
     await proof.fixtureReady;
     const button = document.getElementById('tab-' + tab);
     requireValue(button, 'Unknown proof tab ' + tab);
