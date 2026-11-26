@@ -90,6 +90,7 @@ describe('picker scroll reference', () => {
 });
 
 type PickerTouchState = {
+  rowAtChange: HTMLLabelElement | null;
   events: { type: string; trusted: boolean; owns: boolean; target: string; pointerType: string | null; rect: DOMRectJSON }[];
 };
 type DOMRectJSON = { left: number; right: number; top: number; bottom: number; width: number; height: number };
@@ -118,21 +119,25 @@ beforeAll(async () => {
   script = bundle.output.find((item) => item.type === 'chunk' && item.isEntry)!.fileName;
 }, 60_000);
 
-async function geometry(page: Page, selector: string) {
-  return page.locator(selector).first().evaluate((element) => {
-    const rect = element.getBoundingClientRect();
-    const clipped = { left: Math.max(0, rect.left), top: Math.max(0, rect.top), right: Math.min(innerWidth, rect.right), bottom: Math.min(innerHeight, rect.bottom) };
-    for (let parent = element.parentElement; parent; parent = parent.parentElement) {
-      const style = getComputedStyle(parent), box = parent.getBoundingClientRect();
-      if (/auto|hidden|scroll|clip/.test(style.overflowX)) { clipped.left = Math.max(clipped.left, box.left); clipped.right = Math.min(clipped.right, box.right); }
-      if (/auto|hidden|scroll|clip/.test(style.overflowY)) { clipped.top = Math.max(clipped.top, box.top); clipped.bottom = Math.min(clipped.bottom, box.bottom); }
-    }
-    const points = [[rect.x + rect.width / 2, rect.y + rect.height / 2], [rect.left + 2, rect.y + rect.height / 2], [rect.right - 2, rect.y + rect.height / 2], [rect.x + rect.width / 2, rect.top + 2], [rect.x + rect.width / 2, rect.bottom - 2]].map(([x, y]) => {
-      const hit = document.elementFromPoint(x!, y!);
-      return { x: x!, y: y!, owns: hit === element || !!hit && element.contains(hit), hit: hit?.id || hit?.className || hit?.tagName };
-    });
-    return { rect: rect.toJSON(), clipped, points };
+function measureGeometry(target: Element | string) {
+  const element = typeof target === 'string' ? document.querySelector(target) : target;
+  if (!element) throw new Error(`Cannot measure missing element: ${target}`);
+  const rect = element.getBoundingClientRect();
+  const clipped = { left: Math.max(0, rect.left), top: Math.max(0, rect.top), right: Math.min(innerWidth, rect.right), bottom: Math.min(innerHeight, rect.bottom) };
+  for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+    const style = getComputedStyle(parent), box = parent.getBoundingClientRect();
+    if (/auto|hidden|scroll|clip/.test(style.overflowX)) { clipped.left = Math.max(clipped.left, box.left); clipped.right = Math.min(clipped.right, box.right); }
+    if (/auto|hidden|scroll|clip/.test(style.overflowY)) { clipped.top = Math.max(clipped.top, box.top); clipped.bottom = Math.min(clipped.bottom, box.bottom); }
+  }
+  const points = [[rect.x + rect.width / 2, rect.y + rect.height / 2], [rect.left + 2, rect.y + rect.height / 2], [rect.right - 2, rect.y + rect.height / 2], [rect.x + rect.width / 2, rect.top + 2], [rect.x + rect.width / 2, rect.bottom - 2]].map(([x, y]) => {
+    const hit = document.elementFromPoint(x!, y!);
+    return { x: x!, y: y!, owns: hit === element || !!hit && element.contains(hit), hit: hit?.id || hit?.className || hit?.tagName };
   });
+  return { rect: rect.toJSON(), clipped, points };
+}
+
+async function geometry(page: Page, selector: string) {
+  return page.locator(selector).first().evaluate(measureGeometry);
 }
 
 async function click(page: Page, selector: string) {
@@ -305,8 +310,14 @@ for (const engine of engines) describe.skipIf(!existsSync(engine.executablePath)
       // independently of the immediate-after-scroll reservation test below.
       await page.waitForTimeout(3200);
       await page.evaluate((selector) => {
-        const state: PickerTouchState = { events: [] };
+        const state: PickerTouchState = { rowAtChange: null, events: [] };
         (window as unknown as { __pickerTouch: PickerTouchState }).__pickerTouch = state;
+        // Capture the row before the input's change handler can replace it.
+        document.addEventListener('change', (event) => {
+          if (!event.isTrusted || !(event.target instanceof HTMLInputElement) || event.target.type !== 'checkbox') return;
+          const row = event.target.closest('label');
+          if (row?.matches(selector)) state.rowAtChange = row;
+        }, true);
         for (const type of ['pointerdown', 'pointerup', 'click']) document.addEventListener(type, (event) => {
           // Selection renders a fresh list; resolve the current label each time.
           const element = document.querySelector(selector)!;
@@ -317,28 +328,36 @@ for (const engine of engines) describe.skipIf(!existsSync(engine.executablePath)
             rect: { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, width: rect.width, height: rect.height } });
         }, true);
       }, selector);
-      const initial = await geometry(page, selector);
+      const initial = await page.evaluate(measureGeometry, selector);
       expect(initial.points[0]!.owns, JSON.stringify(initial)).toBe(true);
       await page.touchscreen.tap(initial.points[0]!.x, initial.points[0]!.y);
       await page.waitForFunction((status) => document.querySelector('#satellite-picker-status')!.textContent === status, addedStatus(target.row));
       expect(await page.locator(`${selector} input`).isChecked()).toBe(true);
-      await page.waitForTimeout(250);
       const centerEvents = await page.evaluate(() => (window as unknown as { __pickerTouch: PickerTouchState }).__pickerTouch.events);
       const touches = [];
       // Uncheck at the painted edge, then recheck there without a mouse move or
       // a center recovery. Both gestures must retain their original hit target.
       for (const checked of [false, true]) {
-        const before = await geometry(page, selector);
+        const before = await page.evaluate(measureGeometry, selector);
         const point = { x: before.rect.right - target.inset, y: before.rect.y + before.rect.height / 2 };
-        const owns = await page.locator(selector).evaluate((element, point) => {
+        const owns = await page.evaluate(({ selector, point }) => {
+          const state = (window as unknown as { __pickerTouch: PickerTouchState }).__pickerTouch;
+          const element = document.querySelector(selector);
+          state.rowAtChange = null;
+          state.events.length = 0;
           const hit = document.elementFromPoint(point.x, point.y);
-          return hit === element || !!hit && element.contains(hit);
-        }, point);
-        await page.evaluate(() => { (window as unknown as { __pickerTouch: PickerTouchState }).__pickerTouch.events.length = 0; });
+          return !!element && (hit === element || !!hit && element.contains(hit));
+        }, { selector, point });
         await page.touchscreen.tap(point.x, point.y);
-        await page.waitForTimeout(250);
+        // A native click flips checked before the picker rebuilds the list.
+        await page.waitForFunction(({ selector, checked, status }) => {
+          const { rowAtChange } = (window as unknown as { __pickerTouch: PickerTouchState }).__pickerTouch;
+          const row = document.querySelector(selector);
+          return rowAtChange !== null && row !== rowAtChange && row?.querySelector('input')?.checked === checked
+            && (status === null || document.querySelector('#satellite-picker-status')?.textContent === status);
+        }, { selector, checked, status: checked ? addedStatus(target.row) : null });
         touches.push({ before, point, owns, expectedChecked: checked,
-          checked: await page.locator(`${selector} input`).isChecked(), after: await geometry(page, selector),
+          checked: await page.locator(`${selector} input`).isChecked(), after: await page.evaluate(measureGeometry, selector),
           events: await page.evaluate(() => (window as unknown as { __pickerTouch: PickerTouchState }).__pickerTouch.events) });
       }
       await evidence(page, `${engine.name}-P2-repeat-${target.width}x${target.height}-row${target.row}-edge${target.inset}`, { target, initial, centerEvents, touches });
