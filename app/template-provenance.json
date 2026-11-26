@@ -1,0 +1,90 @@
+{
+  "repository": "https://github.com/ionic-team/capacitor",
+  "tag": "8.6.2",
+  "revision": "599fb14bd1ba128b1abc5b2629b9fb1a59bec1be",
+  "appName": "SNAP",
+  "appId": "dev.astroanil.snap",
+  "uiTestBundleId": "dev.astroanil.snap.uitests",
+  "files": [
+    {
+      "path": ".gitignore",
+      "sha": "f47029973b442a32c7ce8a83195f29d70661f124"
+    },
+    {
+      "path": "App/App.xcodeproj/project.pbxproj",
+      "sha": "56a0b7d40fd137385cf438b16ebe1e27edd68117"
+    },
+    {
+      "path": "App/App.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist",
+      "sha": "18d981003d68d0546c4804ac2ff47dd97c6e7921"
+    },
+    {
+      "path": "App/App/AppDelegate.swift",
+      "sha": "fec95acae17e22de69075aa1be2f76c3d5030e5a"
+    },
+    {
+      "path": "App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png",
+      "sha": "adf6ba01dbe256605c5152ac1fd78ae99aaa2a8d"
+    },
+    {
+      "path": "App/App/Assets.xcassets/AppIcon.appiconset/Contents.json",
+      "sha": "9b7d382dcecca887eac19d7f1c4c8dc57abe00e4"
+    },
+    {
+      "path": "App/App/Assets.xcassets/Contents.json",
+      "sha": "da4a164c918651cdd1e11dca5cc62c333f097601"
+    },
+    {
+      "path": "App/App/Assets.xcassets/Splash.imageset/Contents.json",
+      "sha": "d7d96a67c0d764a2ddfc9545441c627e6d5fa1fc"
+    },
+    {
+      "path": "App/App/Assets.xcassets/Splash.imageset/splash-2732x2732-1.png",
+      "sha": "33ea6c970f2df1db62a624a55e5bbcc4ee07bbdf"
+    },
+    {
+      "path": "App/App/Assets.xcassets/Splash.imageset/splash-2732x2732-2.png",
+      "sha": "33ea6c970f2df1db62a624a55e5bbcc4ee07bbdf"
+    },
+    {
+      "path": "App/App/Assets.xcassets/Splash.imageset/splash-2732x2732.png",
+      "sha": "33ea6c970f2df1db62a624a55e5bbcc4ee07bbdf"
+    },
+    {
+      "path": "App/App/Base.lproj/LaunchScreen.storyboard",
+      "sha": "e7ae5d7802c067edcd71596688fa7b059de8a262"
+    },
+    {
+      "path": "App/App/Base.lproj/Main.storyboard",
+      "sha": "b44df7be8f82acfcd747fd8d77fcd7a87b788f6f"
+    },
+    {
+      "path": "App/App/Info.plist",
+      "sha": "fc41ce69bc21622f3b806577afc46e74957b0972"
+    },
+    {
+      "path": "App/App/SceneDelegate.swift",
+      "sha": "f352e1e9592996633ba4ff94d4e879554638862a"
+    },
+    {
+      "path": "App/CapApp-SPM/.gitignore",
+      "sha": "3b29812086f28a2b21884e57ead495ffd9434178"
+    },
+    {
+      "path": "App/CapApp-SPM/Package.swift",
+      "sha": "5cde8b6645336087282f9b4f9a0579497e6118db"
+    },
+    {
+      "path": "App/CapApp-SPM/README.md",
+      "sha": "03964db900841d8d1125314f12ace8394c755b3b"
+    },
+    {
+      "path": "App/CapApp-SPM/Sources/CapApp-SPM/CapApp-SPM.swift",
+      "sha": "945afec8c778e227bfd9892d58cc9b43a3b45ce3"
+    },
+    {
+      "path": "debug.xcconfig",
+      "sha": "53ce18dead86a04b15c04ccc23da732642cfcc6a"
+    }
+  ]
+}

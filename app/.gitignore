@@ -1,0 +1,10 @@
+.DS_Store
+OPDKit/.build/
+OPDKit/.swiftpm/
+ios/App/App/public/
+ios/App/App/capacitor.config.json
+ios/App/App/config.xml
+ios/**/xcuserdata/
+ios/**/DerivedData/
+ios/**/.build/
+ios/**/.swiftpm/

@@ -1,0 +1,191 @@
+name: iOS unsigned
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - '.github/workflows/ios.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - '.github/workflows/ios.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  opdkit:
+    name: OPDKit Swift Testing
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Select Xcode and record runner inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            printf 'ImageOS=%s\nImageVersion=%s\n' "$ImageOS" "$ImageVersion"
+            sudo xcode-select -s /Applications/Xcode_26.6.app/Contents/Developer
+            version=$(xcodebuild -version)
+            printf '%s\n' "$version"
+            test "$version" = $'Xcode 26.6\nBuild version 17F113'
+            swift --version
+            xcrun simctl list runtimes
+          } 2>&1 | tee "$RUNNER_TEMP/ios-environment.txt"
+      - name: Test pure Swift package
+        working-directory: app/OPDKit
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift test 2>&1 | tee "$RUNNER_TEMP/opdkit-test.log"
+      - name: Upload package test evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: opdkit-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/opdkit-test.log
+            ${{ runner.temp }}/ios-environment.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  simulator:
+    name: SNAP simulator launch (${{ matrix.device }})
+    runs-on: macos-26
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: ipad-pro-m5
+            device: iPad Pro 11-inch (M5)
+          - id: iphone-17-pro
+            device: iPhone 17 Pro
+    env:
+      DESTINATION: platform=iOS Simulator,name=${{ matrix.device }},OS=26.5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Select Xcode and record runner inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            printf 'ImageOS=%s\nImageVersion=%s\n' "$ImageOS" "$ImageVersion"
+            printf 'Destination=%s\n' "$DESTINATION"
+            sudo xcode-select -s /Applications/Xcode_26.6.app/Contents/Developer
+            version=$(xcodebuild -version)
+            printf '%s\n' "$version"
+            test "$version" = $'Xcode 26.6\nBuild version 17F113'
+            swift --version
+            xcrun simctl list runtimes
+            xcrun simctl list devices available
+          } 2>&1 | tee "$RUNNER_TEMP/ios-environment.txt"
+      - name: Prepare bundled placeholder
+        run: python3 app/scripts/prepare-ios.py
+      - name: Build and test unsigned simulator app
+        id: launch
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild test \
+            -project app/ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Debug \
+            -onlyUsePackageVersionsFromResolvedFile \
+            -destination "$DESTINATION" \
+            -destination-timeout 60 \
+            -parallel-testing-enabled NO \
+            -maximum-concurrent-test-simulator-destinations 1 \
+            -resultBundlePath "$RUNNER_TEMP/SNAP-launch.xcresult" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' \
+            2>&1 | tee "$RUNNER_TEMP/ios-build.log"
+      - name: Export test attachments
+        if: always()
+        shell: bash
+        env:
+          LAUNCH_OUTCOME: ${{ steps.launch.outcome }}
+        run: |
+          set -euo pipefail
+          result="$RUNNER_TEMP/SNAP-launch.xcresult"
+          attachments="$RUNNER_TEMP/SNAP-launch-attachments"
+          if [[ -d "$result" ]]; then
+            xcrun xcresulttool export attachments --path "$result" --output-path "$attachments"
+          elif [[ "$LAUNCH_OUTCOME" == success ]]; then
+            echo 'Successful launch test produced no xcresult bundle' >&2
+            exit 1
+          else
+            echo 'No xcresult bundle exists; the build or simulator failed before test evidence was saved'
+            exit 0
+          fi
+          if [[ "$LAUNCH_OUTCOME" == success ]]; then
+            python3 - "$attachments" <<'PY'
+          import json
+          from pathlib import Path
+          import re
+          import sys
+
+          export_dir = Path(sys.argv[1])
+          manifest_path = export_dir / "manifest.json"
+          try:
+              manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          except (OSError, ValueError) as error:
+              raise SystemExit(f"Cannot read xcresult attachment manifest {manifest_path}: {error}")
+          if not isinstance(manifest, list):
+              raise SystemExit(f"Invalid xcresult attachment manifest {manifest_path}: expected a list of tests")
+
+          test_id = "LaunchTests/testBundledPlaceholderLaunch()"
+          # Xcode can append an attachment index and UUID to the readable name.
+          screenshot_name = re.compile(r"SNAP-launch(?:_\d+_[0-9a-fA-F-]{36})?(?:\.png)?")
+          found_attachment = False
+          for test in manifest:
+              if not isinstance(test, dict) or test.get("testIdentifier") != test_id:
+                  continue
+              attachments = test.get("attachments")
+              if not isinstance(attachments, list):
+                  continue
+              for attachment in attachments:
+                  if not isinstance(attachment, dict):
+                      continue
+                  name = attachment.get("suggestedHumanReadableName")
+                  if not isinstance(name, str) or not screenshot_name.fullmatch(name):
+                      continue
+                  found_attachment = True
+                  filename = attachment.get("exportedFileName")
+                  if not isinstance(filename, str) or Path(filename).name != filename:
+                      continue
+                  png = export_dir / filename
+                  if png.suffix.lower() == ".png" and png.is_file() and png.stat().st_size > 0:
+                      print(f"Verified SNAP-launch screenshot for {test_id}: {filename}")
+                      sys.exit(0)
+
+          if not found_attachment:
+              raise SystemExit(f"No SNAP-launch attachment for {test_id} in {manifest_path}")
+          raise SystemExit(f"SNAP-launch attachment for {test_id} does not reference a nonempty exported PNG")
+          PY
+          fi
+      - name: Upload full test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-launch-results-${{ matrix.id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/SNAP-launch.xcresult
+            ${{ runner.temp }}/ios-build.log
+            ${{ runner.temp }}/ios-environment.txt
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload exported screenshots and manifest
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-launch-screenshots-${{ matrix.id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/SNAP-launch-attachments
+          if-no-files-found: warn
+          retention-days: 14
