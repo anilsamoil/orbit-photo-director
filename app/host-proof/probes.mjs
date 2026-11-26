@@ -6,6 +6,7 @@ export const CHECKS = Object.freeze([
 export const BODY = Uint8Array.from({ length: 4096 }, (_, index) => index % 256);
 export const TILE_COUNT = 100;
 export const FULL_STRESS_MS = 600_000;
+export const TAB_STORAGE_KEY = 'opd-g1-tab';
 const MAX_VERIFIED_MOVE_GAP_MS = 30_000;
 export const TILE_COLORS = Object.freeze({ map: [0, 255, 0], iss: [196, 90, 40] });
 const TILE_LAYERS = {
@@ -28,12 +29,12 @@ export const BRIDGE_REQUESTS = Object.freeze([
   ...(json ? { body: [...new TextEncoder().encode(json)] } : {}),
 })));
 
-export async function withDeadline(operation, milliseconds = 60_000) {
+export async function withDeadline(operation, milliseconds = 60_000, label = 'Proof operation') {
   let timer;
   try {
     return await Promise.race([
       Promise.resolve().then(operation),
-      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Proof operation timed out')), milliseconds); }),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(label + ' timed out')), milliseconds); }),
     ]);
   } finally { clearTimeout(timer); }
 }
@@ -53,8 +54,9 @@ export function verifyEcho(actual, expected) {
   requireValue(actual?.method === method && actual.path === path, method + ' native method or path changed');
   requireValue(Object.keys(actual.headers ?? {}).length === Object.keys(headers).length
     && Object.entries(headers).every(([name, value]) => actual.headers[name] === value), method + ' native headers changed');
-  requireValue(body ? bytesEqual(actual.body, body) : actual.body == null, method + ' native body changed');
-  return { method, path, headers, bodyAbsent: actual.body == null, bytes: body?.length ?? 0,
+  const bodyAbsent = !Object.hasOwn(actual, 'body');
+  requireValue(body ? bytesEqual(actual.body, body) : bodyAbsent, method + ' native body changed');
+  return { method, path, headers, bodyAbsent, bytes: body?.length ?? 0,
     ...(body ? { receivedBodyHex: hex(actual.body) } : {}) };
 }
 
@@ -232,14 +234,18 @@ export async function measureTiles({ fetchTile, tileURL, tileRequests, localURL,
 
 async function check(id, operation, milliseconds) {
   try { return { id, status: 'pass', evidence: await withDeadline(operation, milliseconds) }; }
-  catch (error) { return { id, status: 'fail', evidence: { ...error?.evidence, error: String(error) } }; }
+  catch (error) {
+    const stack = typeof error?.stack === 'string' ? error.stack : undefined;
+    return { id, status: 'fail', evidence: { ...error?.evidence, error: String(error), ...(stack ? { stack } : {}) } };
+  }
 }
 
-export function createProof({ rawFetch, tile, workers, localTiles, offline, fixture }) {
+export function createProof({ rawFetch, tile, workers, localTiles, offline, fixture, rendererErrors = new WeakMap() }) {
   const documentId = `${performance.timeOrigin}-${Math.random().toString(36).slice(2)}`;
+  const localOrigin = () => location.protocol + '//' + location.host;
   const state = () => ({
     documentId, tab: document.querySelector('.tabs .active')?.id ?? null, token: localStorage.getItem(storageKey),
-    localOrigin: location.protocol + '//' + location.host,
+    localOrigin: localOrigin(),
   });
   const selectRenderer = async (tab) => {
     await proof.fixtureReady;
@@ -250,68 +256,103 @@ export function createProof({ rawFetch, tile, workers, localTiles, offline, fixt
       const renderer = tab === 'map' ? window.__opdMap : window.__opdIss;
       const canvas = renderer?.getCanvas();
       const rect = canvas?.getBoundingClientRect();
-      return state().tab === button.id && renderer?.loaded() && rect.width > 0 && rect.height > 0
+      if (state().tab !== button.id || !canvas) return null;
+      const error = rendererErrors.get(canvas);
+      if (error) throw new Error(tab + ' ' + error);
+      return renderer.loaded() && rect.width > 0 && rect.height > 0
         && rect.right > 0 && rect.bottom > 0 && rect.left < innerWidth && rect.top < innerHeight ? renderer : null;
     }, tab + ' renderer');
   };
-  const pixels = (map, wholeFrame = false) => new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => { map.off('render', sample); reject(new Error('Pixel probe render timeout')); }, 10_000);
-    const sample = () => {
+  const webGL = (map) => {
+    const canvas = map.getCanvas();
+    const gl = canvas.getContext('webgl2');
+    requireValue(gl instanceof WebGL2RenderingContext && !gl.isContextLost(),
+      rendererErrors.get(canvas) ?? 'Actual map canvas has no active WebGL2 context');
+    requireValue(gl.drawingBufferWidth >= 8 && gl.drawingBufferHeight >= 8, 'WebGL2 drawing buffer is smaller than the pixel sample');
+    return gl;
+  };
+  const pixels = (map, wholeFrame = false, milliseconds = 10_000) => new Promise((resolve, reject) => {
+    webGL(map);
+    const cleanup = () => {
       clearTimeout(timeout);
       map.off('render', sample);
+      map.off('webglcontextlost', lost);
+    };
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error('Pixel probe render timeout'));
+    }, milliseconds);
+    const lost = () => {
+      cleanup();
+      reject(new Error(rendererErrors.get(map.getCanvas()) ?? 'WebGL context lost before the pixel sample'));
+    };
+    const sample = () => {
+      cleanup();
       try {
-        const gl = map.getCanvas().getContext('webgl2');
-        requireValue(gl instanceof WebGL2RenderingContext && !gl.isContextLost(), 'Actual map canvas has no active WebGL2 context');
+        const gl = webGL(map);
         const width = wholeFrame ? gl.drawingBufferWidth : 8;
         const height = wholeFrame ? gl.drawingBufferHeight : 8;
         const x = Math.floor((gl.drawingBufferWidth - width) / 2);
         const y = Math.floor((gl.drawingBufferHeight - height) / 2);
         const bytes = new Uint8Array(width * height * 4);
         gl.readPixels(x, y, width, height, gl.RGBA, gl.UNSIGNED_BYTE, bytes);
-        requireValue(gl.getError() === gl.NO_ERROR, 'Pixel read failed');
+        const error = gl.getError();
+        requireValue(error === gl.NO_ERROR, 'Pixel read failed with WebGL error ' + error);
         resolve({ bytes, width, height, camera: appliedCamera(map), capturedAtMs: performance.now() });
       } catch (error) { reject(error); }
     };
     map.on('render', sample);
-    map.triggerRepaint();
+    map.on('webglcontextlost', lost);
+    try { map.triggerRepaint(); }
+    catch (error) { cleanup(); reject(error); }
   });
   const preset = async (map, name) => {
     const button = document.querySelector(`[data-iss-preset="${name}"]`);
     requireValue(button, 'ISS aim control is absent');
     button.click();
-    await waitFor(() => button.getAttribute('aria-pressed') === 'true' && map.getLayer('iss-lit') && map.isSourceLoaded('iss-lit'), 'ISS ' + name + ' tiles');
+    await waitFor(() => {
+      const error = rendererErrors.get(map.getCanvas());
+      if (error) throw new Error('ISS ' + error);
+      return button.getAttribute('aria-pressed') === 'true' && map.getLayer('iss-lit') && map.isSourceLoaded('iss-lit');
+    }, 'ISS ' + name + ' tiles');
   };
   const freshTileFrame = async (tab, map) => {
     const { source } = TILE_LAYERS[tab];
-    const start = performance.now();
-    while (performance.now() - start < 20_000) {
-      const frame = await pixels(map);
-      if (map.isSourceLoaded(source) && localTiles[tab] > 0) {
-        const tilePixels = countTilePixels(frame.bytes, tab);
-        requireValue(tilePixels >= 8, tab + ' render has no bundled tile pixels');
+    const deadline = performance.now() + 20_000;
+    let evidence = { source, sourceLoaded: false, localTileResponses: 0, tilePixels: 0 };
+    while (performance.now() < deadline) {
+      const frame = await pixels(map, false, Math.min(10_000, deadline - performance.now()));
+      const sourceLoaded = Boolean(map.getSource(source)) && map.isSourceLoaded(source);
+      const tilePixels = countTilePixels(frame.bytes, tab);
+      evidence = { source, sourceLoaded, localTileResponses: localTiles[tab], tilePixels };
+      if (sourceLoaded && evidence.localTileResponses > 0 && tilePixels >= 8) {
         return { ...frame, tilePixels };
       }
       await sleep(50);
     }
-    throw new Error('Timed out waiting for ' + tab + ' bundled raster response');
+    throw Object.assign(new Error('Timed out waiting for ' + tab + ' bundled raster pixels'), { evidence });
   };
   const mapFixture = (map) => {
     const { layer, source } = TILE_LAYERS.map;
     const raster = map.getSource(source);
     requireValue(raster && map.getLayer(layer), 'Real Map raster layer is missing');
-    if (!raster.tiles.includes('/__g1/map.png')) {
+    if (!raster.tiles?.includes('/__g1/map.png')) {
       raster.setTiles(['/__g1/map.png']);
       map.setPaintProperty(layer, 'raster-fade-duration', 0);
     }
     const allLayers = map.getStyle().layers.map((item) => [item.id, map.getLayoutProperty(item.id, 'visibility')]);
     for (const [id] of allLayers) map.setLayoutProperty(id, 'visibility', id === layer ? 'visible' : 'none');
     return () => {
-      for (const [id, visibility] of allLayers) map.setLayoutProperty(id, 'visibility', visibility ?? 'visible');
+      for (const [id, visibility] of allLayers) {
+        if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visibility ?? 'visible');
+      }
     };
   };
   const tileProbe = async (tab, map) => {
     const { layer } = TILE_LAYERS[tab];
-    const restore = tab === 'map' ? mapFixture(map) : () => map.setLayoutProperty(layer, 'visibility', 'visible');
+    const restore = tab === 'map' ? mapFixture(map) : () => {
+      if (map.getLayer(layer)) map.setLayoutProperty(layer, 'visibility', 'visible');
+    };
     try {
       const positive = await freshTileFrame(tab, map);
       map.setLayoutProperty(layer, 'visibility', 'none');
@@ -325,13 +366,20 @@ export function createProof({ rawFetch, tile, workers, localTiles, offline, fixt
     fixtureSHA256: fixture?.fixtureSHA256, documentId, checks: CHECKS, holdIssCamera: false,
     prepareRelaunch() { localStorage.setItem(storageKey, hex(crypto.getRandomValues(new Uint8Array(24)))); return state(); },
     state,
-    async select(tab) { await selectRenderer(tab); return state(); },
-    async capture(tab) {
-      const map = await selectRenderer(tab);
-      if (tab === 'map') mapFixture(map);
-      else await preset(map, 'nadir');
-      const frame = await freshTileFrame(tab, map);
-      return { ...state(), tilePixels: frame.tilePixels };
+    async select(tab) {
+      await selectRenderer(tab);
+      const selected = state();
+      localStorage.setItem(TAB_STORAGE_KEY, selected.tab);
+      return selected;
+    },
+    capture(tab) {
+      return withDeadline(async () => {
+        const map = await selectRenderer(tab);
+        if (tab === 'map') mapFixture(map);
+        else await preset(map, 'nadir');
+        const frame = await freshTileFrame(tab, map);
+        return { ...state(), tilePixels: frame.tilePixels };
+      }, 45_000, tab + ' screenshot capture');
     },
     verifyRelaunch: (before, native) => check(8, () => verifyRelaunch(before, state(), native)),
     verifyRecovery: (before, native) => check(9, async () => {
@@ -342,65 +390,13 @@ export function createProof({ rawFetch, tile, workers, localTiles, offline, fixt
       const tiles = await tileProbe('iss', map);
       return { ...witness, egress, tiles };
     }),
-    async run() {
-      const native = globalThis.Capacitor?.Plugins?.HostProof;
-      const results = [];
-      results.push(await check(1, async () => {
-        requireValue(isSecureContext && crypto.subtle, 'Local origin is not a secure context');
-        const web = hex(new Uint8Array(await crypto.subtle.digest('SHA-256', BODY)));
-        const { digest } = await native.digest({ bytes: [...BODY] });
-        requireValue(web === digest, 'Native SHA-256 and WebCrypto differ');
-        const egress = await verifyOfflineEgress(rawFetch);
-        return { localOrigin: state().localOrigin, isSecureContext, web, native: digest, bytes: BODY.length, egress };
-      }, 15_000));
-      results.push(await check(2, async () => {
-        const map = await selectRenderer('map');
-        map.jumpTo({ center: [0, 0], zoom: 1 });
-        map.addSource('g1-worker', { type: 'geojson', data: { type: 'Feature', properties: { proof: 'g1' }, geometry: { type: 'Point', coordinates: [0, 0] } } });
-        map.addLayer({ id: 'g1-worker', type: 'circle', source: 'g1-worker' });
-        await waitFor(() => map.querySourceFeatures('g1-worker').some((item) => item.properties.proof === 'g1'), 'MapLibre worker GeoJSON response');
-        requireValue(workers.some((item) => item.type === 'module' && /maplibre-gl-worker-.*\.js$/.test(item.url)), 'Actual bundled MapLibre worker module did not start');
-        return { workers, featureQuery: true, dynamicMapTabLoaded: true };
-      }));
-      results.push(await check(3, async () => {
-        const gl = (await selectRenderer('map')).getCanvas().getContext('webgl2');
-        requireValue(gl instanceof WebGL2RenderingContext && !gl.isContextLost(), 'Map canvas has no active WebGL2 context');
-        return { version: gl.getParameter(gl.VERSION), width: gl.drawingBufferWidth, height: gl.drawingBufferHeight };
-      }));
-      results.push(await check(4, async () => tileProbe('map', await selectRenderer('map'))));
-      results.push(await check(5, async () => {
-        const map = await selectRenderer('iss');
-        const { measureGeometry } = await import('./geometry.mjs');
-        const track = JSON.parse(fixture.files['/v/g1/track.json']);
-        const geometry = await measureGeometry({
-          map, track, when: fixture.now, preset, pixels,
-          tileFrame: () => freshTileFrame('iss', map),
-          holdCamera: (hold) => { proof.holdIssCamera = hold; },
-        });
-        return { ...await tileProbe('iss', map), geometry };
-      }, 90_000));
-      results.push(await check(6, async () => {
-        const verbs = [];
-        for (const request of BRIDGE_REQUESTS) {
-          const echo = verifyEcho(await native.request(request), request);
-          if (request.body === undefined) {
-            const rejected = await native.request({ ...request, body: [0, 255] }).then(
-              () => false, (error) => error?.message === 'Bodyless fixture route received a body',
-            );
-            requireValue(rejected, request.method + ' native receiver accepted a body');
-            echo.unexpectedBodyRejected = true;
-          }
-          verbs.push(echo);
-        }
-        return { verbs };
-      }, 15_000));
-      results.push(await check(7, () => measureTiles({
-        fetchTile: rawFetch,
-        tileURL: (index) => new URL(`/__g1/tiles/${index}.png`, location.href).href,
-        tileRequests: async () => (await native.tileRequests()).paths,
-        localURL: location.href, expected: tile,
-      }), 20_000));
-      return { fixtureSHA256: proof.fixtureSHA256, fixture: proof.fixtureEvidence ?? null, documentId, localOrigin: state().localOrigin, offline: { ...offline }, results };
+    runCheck(id) {
+      const definition = initialChecks[id];
+      requireValue(Number.isInteger(id) && definition, 'Unknown initial proof check ' + id);
+      return check(id, definition.run, definition.timeoutMs);
+    },
+    summary() {
+      return { fixtureSHA256: proof.fixtureSHA256, fixture: proof.fixtureEvidence ?? null, documentId, localOrigin: localOrigin(), offline: { ...offline } };
     },
     async stress(durationMs) {
       return check(10, async () => {
@@ -443,6 +439,100 @@ export function createProof({ rawFetch, tile, workers, localTiles, offline, fixt
           throw Object.assign(error, { evidence: { sessions, actualDurationMs } });
         }
       }, FULL_STRESS_MS + 60_000);
+    },
+  };
+  const native = () => {
+    const plugin = globalThis.Capacitor?.Plugins?.HostProof;
+    requireValue(plugin, 'Native HostProof plugin is unavailable');
+    return plugin;
+  };
+  const initialChecks = {
+    1: {
+      timeoutMs: 15_000,
+      async run() {
+        requireValue(isSecureContext && crypto.subtle, 'Local origin is not a secure context');
+        const web = hex(new Uint8Array(await crypto.subtle.digest('SHA-256', BODY)));
+        const { digest } = await native().digest({ bytes: [...BODY] });
+        requireValue(web === digest, 'Native SHA-256 and WebCrypto differ');
+        const egress = await verifyOfflineEgress(rawFetch);
+        return { localOrigin: localOrigin(), isSecureContext, web, native: digest, bytes: BODY.length, egress };
+      },
+    },
+    2: {
+      async run() {
+        const id = 'g1-worker';
+        let map;
+        try {
+          map = await selectRenderer('map');
+          map.jumpTo({ center: [0, 0], zoom: 1 });
+          map.addSource(id, { type: 'geojson', data: { type: 'Feature', properties: { proof: 'g1' }, geometry: { type: 'Point', coordinates: [0, 0] } } });
+          map.addLayer({ id, type: 'circle', source: id });
+          await waitFor(() => map.querySourceFeatures(id).some((item) => item.properties?.proof === 'g1'), 'MapLibre worker GeoJSON response');
+          const local = new URL(location.href);
+          requireValue(workers.some((item) => {
+            const url = new URL(item.url, local);
+            return item.type === 'module' && !item.error && url.protocol === local.protocol && url.host === local.host
+              && /^\/assets\/maplibre-gl-worker-[^/]+\.js$/.test(url.pathname);
+          }), 'Actual bundled MapLibre worker module did not start');
+          return { workers: workers.map((worker) => ({ ...worker })), featureQuery: true, dynamicMapTabLoaded: true };
+        } catch (error) {
+          throw Object.assign(error, { evidence: { workers: workers.map((worker) => ({ ...worker })) } });
+        } finally {
+          if (map?.getLayer(id)) map.removeLayer(id);
+          if (map?.getSource(id)) map.removeSource(id);
+        }
+      },
+    },
+    3: {
+      async run() {
+        const gl = webGL(await selectRenderer('map'));
+        const version = gl.getParameter(gl.VERSION);
+        requireValue(typeof version === 'string' && version.length > 0, 'WebGL2 version is unavailable');
+        return { version, width: gl.drawingBufferWidth, height: gl.drawingBufferHeight };
+      },
+    },
+    4: { run: async () => tileProbe('map', await selectRenderer('map')) },
+    5: {
+      timeoutMs: 90_000,
+      async run() {
+        const map = await selectRenderer('iss');
+        const { measureGeometry } = await import('./geometry.mjs');
+        const track = JSON.parse(fixture.files['/v/g1/track.json']);
+        const geometry = await measureGeometry({
+          map, track, when: fixture.now, preset, pixels,
+          tileFrame: () => freshTileFrame('iss', map),
+          holdCamera: (hold) => { proof.holdIssCamera = hold; },
+        });
+        return { ...await tileProbe('iss', map), geometry };
+      },
+    },
+    6: {
+      timeoutMs: 15_000,
+      async run() {
+        const plugin = native();
+        const verbs = [];
+        for (const request of BRIDGE_REQUESTS) {
+          const echo = verifyEcho(await plugin.request(request), request);
+          if (request.body === undefined) {
+            const rejected = await plugin.request({ ...request, body: [0, 255] }).then(
+              () => false, (error) => error?.message === 'Bodyless fixture route received a body',
+            );
+            requireValue(rejected, request.method + ' native receiver accepted a body');
+            echo.unexpectedBodyRejected = true;
+          }
+          verbs.push(echo);
+        }
+        return { verbs };
+      },
+    },
+    7: {
+      timeoutMs: 20_000,
+      run: () => measureTiles({
+        fetchTile: rawFetch,
+        tileURL: (index) => new URL(`/__g1/tiles/${index}.png`, location.href).href,
+        tileRequests: async () => (await native().tileRequests()).paths,
+        localURL: location.href, expected: tile,
+      }),
     },
   };
   return proof;

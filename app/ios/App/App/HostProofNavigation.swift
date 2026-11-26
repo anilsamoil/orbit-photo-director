@@ -69,6 +69,7 @@ final class HostProofNavigation: NSObject, WKNavigationDelegate {
     private(set) var finishes = 0
     private(set) var terminations = 0
     private(set) var blockedNavigations = 0
+    private(set) var isReloading = false
 
     init(downstream: WKNavigationDelegate, localURL: URL) {
         self.downstream = downstream
@@ -97,6 +98,7 @@ final class HostProofNavigation: NSObject, WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         downstream.webView?(webView, didFinish: navigation)
         finishes += 1
+        isReloading = false
         didFinish?()
     }
 
@@ -120,6 +122,7 @@ final class HostProofNavigation: NSObject, WKNavigationDelegate {
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         terminations += 1
+        isReloading = true
         downstream.webViewWebContentProcessDidTerminate?(webView)
     }
 }

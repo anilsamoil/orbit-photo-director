@@ -40,15 +40,14 @@ final class HostProofTests: XCTestCase {
             merge(web["results"], into: &results, allowed: 1...7)
             metadata["web"] = web.filter { $0.key != "results" }
         } else {
-            results[0] = row(1, "fail", initial["error"] as? String ?? "Missing initial WebView results")
+            results[0] = row(1, "fail", "Missing initial WebView results")
         }
-        capture("map", in: app)
-        capture("iss", in: app)
+        metadata["screenshots"] = ["map": capture("map", in: app), "iss": capture("iss", in: app)]
 
         guard let before = initial["before"] as? ProofJSON,
               let launchID = initial["launchID"] as? String,
               let appPID = initial["appPID"] as? Int else {
-            results[7] = row(8, "fail", initial["error"] as? String ?? "Missing persistent storage witness")
+            results[7] = failedRow(8, initial["storageError"], fallback: "Missing persistent storage witness")
             return XCTFail("Missing stored token or first launch identity")
         }
 
@@ -93,17 +92,27 @@ final class HostProofTests: XCTestCase {
     }
 
     @MainActor
-    private func capture(_ tab: String, in app: XCUIApplication) {
+    private func capture(_ tab: String, in app: XCUIApplication) -> ProofJSON {
         let screenshotName = "G1-\(tab)"
         let button = app.buttons["g1-\(tab)"]
+        let status = app.staticTexts["g1-screenshot-status"]
         guard button.waitForExistence(timeout: 10) else {
-            return failWithScreenshot("Missing \(tab) screenshot control", named: screenshotName)
+            let error = "Missing \(tab) screenshot control"
+            failWithScreenshot(error, named: screenshotName)
+            return ["error": error]
         }
         button.tap()
-        guard wait(for: tab, on: app.staticTexts["g1-screenshot-status"], timeout: 35) else {
-            return failWithScreenshot("The \(tab) screenshot view did not report readiness", named: screenshotName)
+        // Match the response to this capture, including failures from the WebView.
+        let predicate = NSPredicate(format: "label == %@ OR label == %@", tab, "\(tab) failed")
+        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: status)
+        _ = XCTWaiter.wait(for: [expectation], timeout: 115)
+        guard status.exists, status.label == tab else {
+            let evidence = read(status) ?? ["error": "The \(tab) screenshot view did not report readiness"]
+            failWithScreenshot("The \(tab) screenshot failed: \(evidence)", named: screenshotName)
+            return evidence
         }
         attachRenderedScreenshot(named: screenshotName)
+        return read(status) ?? [:]
     }
 
     @MainActor
@@ -115,7 +124,7 @@ final class HostProofTests: XCTestCase {
 
     @MainActor
     private func read(_ element: XCUIElement) -> ProofJSON? {
-        guard let payload = element.value as? String,
+        guard element.exists, let payload = element.value as? String,
               let object = try? JSONSerialization.jsonObject(with: Data(payload.utf8)) as? ProofJSON
         else { return nil }
         return object
@@ -138,6 +147,10 @@ final class HostProofTests: XCTestCase {
 
     private func row(_ id: Int, _ status: String, _ message: String) -> ProofJSON {
         ["id": id, "status": status, "evidence": ["error": message]]
+    }
+
+    private func failedRow(_ id: Int, _ evidence: Any?, fallback: String) -> ProofJSON {
+        ["id": id, "status": "fail", "evidence": evidence as? ProofJSON ?? ["error": fallback]]
     }
 
     private func attachResults(_ results: [ProofJSON], metadata: ProofJSON) {

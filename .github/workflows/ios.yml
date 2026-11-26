@@ -273,6 +273,7 @@ jobs:
           set -euo pipefail
           node --test app/host-proof/proof.test.mjs
           python3 -B app/scripts/test_export_host_proof.py
+          python3 -B app/scripts/test_observe_host_proof.py
           node app/host-proof/build.mjs
           cp app/host-proof/dist/__g1/build.json "$PROOF_OUTPUT/build.json"
           python3 app/scripts/prepare-ios.py --host-proof
@@ -282,13 +283,27 @@ jobs:
         run: |
           set -euo pipefail
           xcrun simctl bootstatus "$SIMULATOR_UDID" -b
-          python3 -u app/scripts/observe-host-proof.py "$SIMULATOR_UDID" > "$PROOF_OUTPUT/observer.log" 2>&1 &
+          observer_ready="$RUNNER_TEMP/host-proof-observer.ready"
+          python3 -u app/scripts/observe-host-proof.py "$SIMULATOR_UDID" \
+            --ready-file "$observer_ready" > "$PROOF_OUTPUT/observer.log" 2>&1 &
           observer=$!
           stop_observer() {
-            kill "$observer" 2>/dev/null || true
-            wait "$observer" 2>/dev/null || true
+            local stopped=0 observer_status=0
+            kill "$observer" 2>/dev/null && stopped=1
+            wait "$observer" 2>/dev/null || observer_status=$?
+            if [[ "$stopped" == 0 || "$observer_status" != 143 ]]; then
+              printf '::warning::Host proof observer exited with status %s. See observer.log.\n' "$observer_status"
+            fi
           }
-          trap stop_observer EXIT
+          trap 'status=$?; stop_observer; exit "$status"' EXIT
+          for ((attempt = 0; attempt < 40; attempt++)); do
+            [[ -f "$observer_ready" ]] && break
+            kill -0 "$observer" 2>/dev/null || break
+            sleep 1
+          done
+          if [[ ! -f "$observer_ready" ]]; then
+            echo '::warning::Host proof observer did not finish startup. Continuing XCTest and preserving its artifacts.'
+          fi
           xcodebuild test \
             -project app/ios/App/App.xcodeproj \
             -scheme HostProof \

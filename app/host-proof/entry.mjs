@@ -1,46 +1,21 @@
 import fixture from 'virtual:g1-fixture';
-import { createProof, waitFor } from './probes.mjs';
+import { createProof, TAB_STORAGE_KEY, waitFor, withDeadline } from './probes.mjs';
 
 const rawFetch = globalThis.fetch.bind(globalThis);
 const tile = Uint8Array.from(atob(fixture.tile), (character) => character.charCodeAt(0));
 const workers = [];
 const localTiles = { map: 0, iss: 0 };
+const rendererErrors = new WeakMap();
 const offline = {
   policy: document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.content ?? null,
-  serviceWorkerControlled: Boolean(navigator.serviceWorker?.controller),
+  serviceWorkerControlled: null,
   fixtureResponses: 0, deniedFetches: 0, blockedResources: 0,
 };
-const NativeWorker = globalThis.Worker;
-globalThis.Worker = new Proxy(NativeWorker, {
-  construct(target, args) {
-    const worker = Reflect.construct(target, args);
-    workers.push({ url: String(args[0]), type: args[1]?.type ?? 'classic' });
-    return worker;
-  },
-});
-document.addEventListener('securitypolicyviolation', () => { offline.blockedResources++; });
-
 const local = new URL(location.href);
-local.searchParams.set('e2e', '');
-local.searchParams.set('u', 'g1-fixture');
-history.replaceState(null, '', local);
-Date.now = () => fixture.now;
-// The website shell requires an available account/plan transport on its
-// first load. In this build that transport is the offline fixture below.
-Object.defineProperty(navigator, 'onLine', { value: true });
+const proof = createProof({ rawFetch, tile, workers, localTiles, offline, fixture, rendererErrors });
+window.__opdG1 = proof;
 
-const tabKey = 'opd-g1-tab';
-const recoveredTab = localStorage.getItem(tabKey);
-if (recoveredTab === 'tab-iss') {
-  sessionStorage.setItem('opd-map-import-view', recoveredTab);
-}
-const tabs = document.querySelector('.tabs');
-new MutationObserver(() => {
-  const active = tabs.querySelector('.tab.active')?.id;
-  if (active === 'tab-map' || active === 'tab-iss') localStorage.setItem(tabKey, active);
-}).observe(tabs, { subtree: true, attributes: true, attributeFilter: ['class'] });
-
-globalThis.fetch = async (input, init) => {
+async function fixtureFetch(input, init) {
   const request = input instanceof Request ? input : null;
   const url = new URL(request ? request.url : String(input), location.href);
   const method = init?.method ?? request?.method ?? 'GET';
@@ -71,12 +46,55 @@ globalThis.fetch = async (input, init) => {
   }
   offline.deniedFetches++;
   throw new TypeError('G1 offline fixture has no local route for this request');
-};
+}
 
-const proof = createProof({ rawFetch, tile, workers, localTiles, offline, fixture });
-window.__opdG1 = proof;
-proof.ready = import('/src/main.ts');
-proof.fixtureReady = proof.ready.then(async (main) => {
+const frontend = withDeadline(async () => {
+  offline.serviceWorkerControlled = Boolean(navigator.serviceWorker?.controller);
+  globalThis.Worker = new Proxy(globalThis.Worker, {
+    construct(target, args) {
+      const record = { url: String(args[0]), type: args[1]?.type ?? 'classic' };
+      workers.push(record);
+      try {
+        const worker = Reflect.construct(target, args);
+        worker.addEventListener('error', (event) => { record.error = event.message || 'Worker script failed'; });
+        return worker;
+      } catch (error) {
+        record.error = String(error);
+        throw error;
+      }
+    },
+  });
+  const recordContextError = (event) => {
+    const message = event.statusMessage ? `${event.type}: ${event.statusMessage}` : event.type;
+    rendererErrors.set(event.target, message);
+    console.error('[G1]', message);
+  };
+  document.addEventListener('webglcontextcreationerror', recordContextError, true);
+  document.addEventListener('webglcontextlost', recordContextError, true);
+  document.addEventListener('webglcontextrestored', (event) => rendererErrors.delete(event.target), true);
+  document.addEventListener('securitypolicyviolation', () => { offline.blockedResources++; });
+
+  local.searchParams.set('e2e', '');
+  local.searchParams.set('u', 'g1-fixture');
+  history.replaceState(null, '', local);
+  Date.now = () => fixture.now;
+  // The website shell requires an available account/plan transport on its
+  // first load. In this build that transport is the offline fixture below.
+  Object.defineProperty(navigator, 'onLine', { value: true });
+  globalThis.fetch = fixtureFetch;
+
+  const recoveredTab = localStorage.getItem(TAB_STORAGE_KEY);
+  if (recoveredTab === 'tab-iss') sessionStorage.setItem('opd-map-import-view', recoveredTab);
+  const tabs = document.querySelector('.tabs');
+  new MutationObserver(() => {
+    const active = tabs.querySelector('.tab.active')?.id;
+    if (active === 'tab-map' || active === 'tab-iss') localStorage.setItem(TAB_STORAGE_KEY, active);
+  }).observe(tabs, { subtree: true, attributes: true, attributeFilter: ['class'] });
+
+  return { main: await import('/src/main.ts'), recoveredTab };
+}, 20_000, 'Proof frontend startup');
+proof.fixtureReady = withDeadline(async () => {
+  const { main, recoveredTab } = await frontend;
   const manifest = await waitFor(() => {
     const active = main.getCurrentManifest();
     return active?.version === 'g1-fixture' && active;
@@ -92,8 +110,8 @@ proof.fixtureReady = proof.ready.then(async (main) => {
     queueCard: card,
   };
   if (recoveredTab === 'tab-iss') {
-    await waitFor(() => proof.state().tab === recoveredTab && window.__opdIss?.loaded(), 'restored ISS tab');
+    await waitFor(() => proof.state().tab === recoveredTab, 'restored ISS tab');
   }
-});
+}, 45_000, 'Proof fixture startup');
 // The native digest and bridge checks still run if fixture rendering fails.
 void proof.fixtureReady.catch(() => {});

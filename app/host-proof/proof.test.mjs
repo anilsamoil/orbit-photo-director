@@ -4,7 +4,7 @@ import { registerHooks } from 'node:module';
 import { inflateSync } from 'node:zlib';
 import test from 'node:test';
 import { makeFixture, tilePNG } from './build.mjs';
-import { BODY, BRIDGE_REQUESTS, CHECKS, TILE_COLORS, createProof, measureTiles, verifyEcho, verifyMove, verifyPixels, verifyRecovery, verifyRelaunch, verifyStress, withDeadline } from './probes.mjs';
+import { BODY, BRIDGE_REQUESTS, CHECKS, TAB_STORAGE_KEY, TILE_COLORS, createProof, measureTiles, verifyEcho, verifyMove, verifyPixels, verifyRecovery, verifyRelaunch, verifyStress, withDeadline } from './probes.mjs';
 
 test('fixture artifacts carry matching lengths and SHA-256 digests', () => {
   const { files } = makeFixture(['synthetic line 1', 'synthetic line 2']);
@@ -31,6 +31,7 @@ test('native echoes require exact method, path and headers, absent GET and DELET
     const { body } = request;
     assert.equal(verifyEcho(request, request).bytes, body?.length ?? 0);
     assert.throws(() => verifyEcho({ ...request, body: body ? body.slice(1) : [] }, request), /body changed/);
+    assert.throws(() => verifyEcho({ ...request, body: null }, request), /body changed/);
     if (body) {
       const corrupt = body.slice();
       corrupt[Math.floor(corrupt.length / 2)] ^= 1;
@@ -69,15 +70,16 @@ test('tile throughput consumes bytes and rejects corruption, cache aliases, and 
 });
 
 test('a stalled native operation produces a timeout instead of hanging the proof', async () => {
-  await assert.rejects(withDeadline(() => new Promise(() => {}), 5), /timed out/);
+  await assert.rejects(withDeadline(() => new Promise(() => {}), 5, 'Proof frontend startup'), /Proof frontend startup timed out/);
 });
 
-test('proof.run returns the full initial report and the native-driven phases reach checks 8–10', async (t) => {
+test('independent checks return the full report and the native-driven phases reach checks 8–10', async (t) => {
   const fixture = makeFixture(['synthetic line 1', 'synthetic line 2']);
   const tile = Buffer.from(fixture.tile, 'base64');
   const location = new URL('capacitor://localhost/');
   const document = new EventTarget();
   const storage = new Map();
+  const rendererErrors = new WeakMap();
   let activeTab = 'map';
   let now = 0;
   const realSetTimeout = globalThis.setTimeout;
@@ -105,32 +107,45 @@ test('proof.run returns the full initial report and the native-driven phases rea
     getError() { return this.NO_ERROR; }
     getParameter() { return 'Fake WebGL2'; }
   }
-  function renderer(tab, layer) {
+  function renderer(tab, layer, source) {
     let visible = true;
     let center = [0, 0];
     let zoom = 1;
+    let blankNextFrame = false;
+    let loseOnRepaint = false;
     const gl = new FakeWebGL2();
     const paint = new EventTarget();
-    const sources = new Map([['carto-dark', { tiles: ['/__g1/map.png'] }]]);
+    const sources = new Map([[source, { tiles: ['/__g1/' + tab + '.png'] }]]);
+    const layers = new Set([layer]);
     gl.readPixels = (_x, _y, _w, _h, _format, _type, bytes) => {
-      const pixel = visible ? [...TILE_COLORS[tab], 255] : [0, 0, 0, 255];
+      const pixel = visible && !blankNextFrame ? [...TILE_COLORS[tab], 255] : [0, 0, 0, 255];
+      blankNextFrame = false;
       for (let offset = 0; offset < bytes.length; offset += 4) bytes.set(pixel, offset);
     };
+    const canvas = {
+      getContext: () => gl,
+      getBoundingClientRect: () => ({ width: 8, height: 8, right: 8, bottom: 8, left: 0, top: 0 }),
+    };
     return {
-      getCanvas: () => ({
-        getContext: () => gl,
-        getBoundingClientRect: () => ({ width: 8, height: 8, right: 8, bottom: 8, left: 0, top: 0 }),
-      }),
-      loaded: () => true, isSourceLoaded: () => true, getLayer: () => ({ id: layer }),
+      getCanvas: () => canvas,
+      loaded: () => true, isSourceLoaded: () => true, getLayer: (id) => layers.has(id) ? { id } : undefined,
       getSource: (id) => sources.get(id), getStyle: () => ({ layers: [{ id: layer }] }),
       getLayoutProperty: () => visible ? 'visible' : 'none',
       setLayoutProperty: (_layer, _property, value) => { visible = value === 'visible'; },
       on: paint.addEventListener.bind(paint), off: paint.removeEventListener.bind(paint),
-      triggerRepaint: () => paint.dispatchEvent(new Event('render')),
+      blankNextFrame: () => { blankNextFrame = true; },
+      loseOnRepaint: () => { loseOnRepaint = true; },
+      triggerRepaint: () => {
+        if (loseOnRepaint) {
+          rendererErrors.set(canvas, 'webglcontextlost: GPU disconnected');
+          paint.dispatchEvent(new Event('webglcontextlost'));
+        } else paint.dispatchEvent(new Event('render'));
+      },
       jumpTo: (next) => { center = next.center; zoom = next.zoom; },
       getCenter: () => ({ lng: center[0], lat: center[1] }), getZoom: () => zoom,
       getBearing: () => 0, getPitch: () => 0, getRoll: () => 0, getVerticalFieldOfView: () => 36,
-      addSource: (id, source) => sources.set(id, source), addLayer() {},
+      addSource: (id, value) => sources.set(id, value), addLayer: ({ id }) => layers.add(id),
+      removeLayer: (id) => layers.delete(id), removeSource: (id) => sources.delete(id),
       querySourceFeatures: (id) => [sources.get(id).data],
     };
   }
@@ -141,7 +156,7 @@ test('proof.run returns the full initial report and the native-driven phases rea
   const paths = [];
   const globals = {
     document, location, innerWidth: 8, innerHeight: 8, isSecureContext: true, WebGL2RenderingContext: FakeWebGL2,
-    window: { __opdMap: renderer('map', 'carto-dark-layer'), __opdIss: renderer('iss', 'iss-lit') },
+    window: { __opdMap: renderer('map', 'carto-dark-layer', 'carto-dark'), __opdIss: renderer('iss', 'iss-lit', 'iss-lit') },
     localStorage: { getItem: (key) => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) },
     Capacitor: {
       nativePromise: denied,
@@ -189,8 +204,9 @@ test('proof.run returns the full initial report and the native-driven phases rea
     policy: "connect-src 'self'", serviceWorkerControlled: false,
     fixtureResponses: 6, deniedFetches: 0, blockedResources: 3,
   };
+  const workers = [{ type: 'module', url: '/assets/maplibre-gl-worker-fixture.js' }];
   const makeProof = () => createProof({
-    fixture, offline, tile, workers: [{ type: 'module', url: '/assets/maplibre-gl-worker-fixture.js' }],
+    fixture, offline, tile, workers, rendererErrors,
     localTiles: { map: 1, iss: 1 },
     rawFetch: async (url) => {
       const request = new URL(url);
@@ -201,19 +217,38 @@ test('proof.run returns the full initial report and the native-driven phases rea
     },
   });
   const proof = makeProof();
+  const failedStartup = makeProof();
+  failedStartup.fixtureReady = Promise.reject(new Error('Unable to import the frontend'));
+  assert.match((await failedStartup.runCheck(2)).evidence.error, /Unable to import the frontend/);
+  assert.equal((await failedStartup.runCheck(1)).status, 'pass');
+  assert.equal((await failedStartup.runCheck(6)).status, 'pass');
   const manifest = JSON.parse(fixture.files['/manifest.json']);
   const fixtureEvidence = {
     version: manifest.version, generatedAt: manifest.generated_at,
     trackSHA256: manifest.artifacts.track.sha256, queueCard: 'Synthetic proof target',
   };
   proof.fixtureEvidence = fixtureEvidence;
-  const web = await proof.run();
-  const { results: initialResults, ...reportFields } = web;
-  assert.deepEqual(reportFields, {
+  const initialResults = [];
+  for (let id = 1; id <= 7; id++) {
+    if (id === 4) window.__opdMap.blankNextFrame();
+    initialResults.push(await proof.runCheck(id));
+  }
+  assert.deepEqual(proof.summary(), {
     fixtureSHA256: fixture.fixtureSHA256, fixture: fixtureEvidence,
     documentId: proof.documentId, localOrigin: 'capacitor://localhost', offline,
   });
   assert.deepEqual(initialResults.map(({ id }) => id), [1, 2, 3, 4, 5, 6, 7]);
+  assert.equal(window.__opdMap.getSource('g1-worker'), undefined);
+  assert.equal(window.__opdMap.getLayer('g1-worker'), undefined);
+  workers[0].url = 'https://off-origin.invalid/assets/maplibre-gl-worker-fixture.js';
+  assert.equal((await proof.runCheck(2)).status, 'fail');
+  workers[0].url = '/assets/maplibre-gl-worker-fixture.js';
+  workers[0].error = 'Worker script failed';
+  const failedWorker = await proof.runCheck(2);
+  assert.equal(failedWorker.status, 'fail');
+  assert.match(failedWorker.evidence.stack, /Actual bundled MapLibre worker module did not start/);
+  assert.equal(failedWorker.evidence.workers[0].error, 'Worker script failed');
+  delete workers[0].error;
 
   // XCTest collects checks 8–10 separately after the first launch has returned.
   const beforeRelaunch = proof.prepareRelaunch();
@@ -222,6 +257,7 @@ test('proof.run returns the full initial report and the native-driven phases rea
     beforeLaunchId: 'first-launch', afterLaunchId: 'second-launch', appQuitObserved: true,
   });
   const beforeRecovery = await relaunched.select('iss');
+  assert.equal(storage.get(TAB_STORAGE_KEY), 'tab-iss');
   const recovered = makeProof();
   const recovery = await recovered.verifyRecovery(beforeRecovery, { terminationCallbacks: 1, reloads: 1 });
   const stress = await recovered.stress(600_000);
@@ -236,6 +272,14 @@ test('proof.run returns the full initial report and the native-driven phases rea
   assert.equal(initialResults[6].evidence.witnessedPaths, 100);
   assert.deepEqual(stress.evidence.sessions.map(({ verifiedMoveTimesMs }) => verifiedMoveTimesMs),
     Array.from({ length: 2 }, () => Array.from({ length: 30 }, (_, i) => i * 10_000)));
+
+  window.__opdMap.loseOnRepaint();
+  const lostFrame = await proof.runCheck(4);
+  assert.equal(lostFrame.status, 'fail');
+  assert.match(lostFrame.evidence.error, /webglcontextlost: GPU disconnected/);
+  const lostRenderer = await proof.runCheck(3);
+  assert.equal(lostRenderer.status, 'fail');
+  assert.match(lostRenderer.evidence.error, /webglcontextlost: GPU disconnected/);
 });
 
 test('stress reports a renderer failure', async () => {

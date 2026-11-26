@@ -100,8 +100,8 @@ export async function measureGeometry({ map, track, when, preset, pixels, tileFr
       const frame = await measure(tileFrame);
       zoom12 = { projection: frame.projection, runtime: frame.runtime, applied: frame.camera, tilePixels: frame.tilePixels };
     } finally {
-      map.jumpTo({ zoom: nadir.applied.zoom });
       holdCamera(false);
+      if (map.getLayer(projectionLayer)) map.jumpTo({ zoom: nadir.applied.zoom });
     }
     const { blue, black } = await decodePair(subsolarPoint(new Date(when)));
     const checks = checksFor(horizon, nadir, zoom12.projection, blue, black);
@@ -117,6 +117,6 @@ export async function measureGeometry({ map, track, when, preset, pixels, tileFr
   } finally {
     if (map.getLayer(nestedLayer)) map.removeLayer(nestedLayer);
     if (map.getSource(nestedLayer)) map.removeSource(nestedLayer);
-    map.removeLayer(projectionLayer);
+    if (map.getLayer(projectionLayer)) map.removeLayer(projectionLayer);
   }
 }

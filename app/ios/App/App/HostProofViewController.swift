@@ -14,6 +14,7 @@ final class HostProofViewController: CAPBridgeViewController {
     private let screenshotStatus = UILabel()
     private let lifecycleStatus = UILabel()
     private var proofNavigation: HostProofNavigation?
+    private var screenshotTask: Task<Void, Never>?
 
     override func router() -> Router { proofRouter }
 
@@ -100,13 +101,18 @@ final class HostProofViewController: CAPBridgeViewController {
     }
 
     private func showForScreenshot(_ tab: String) {
+        screenshotTask?.cancel()
         screenshotStatus.text = "loading"
-        Task {
+        screenshotStatus.accessibilityValue = nil
+        screenshotTask = Task { [weak self] in
+            guard let self else { return }
             do {
-                _ = try await web("return await proof.capture(tab);", arguments: ["tab": tab])
-                screenshotStatus.text = tab
+                let result = try await web("capture", arguments: [tab])
+                guard !Task.isCancelled else { return }
+                publish(tab, result, on: screenshotStatus)
             } catch {
-                screenshotStatus.text = "picture failed"
+                guard !Task.isCancelled else { return }
+                publish("\(tab) failed", errorEvidence(error), on: screenshotStatus)
             }
         }
     }
@@ -119,11 +125,24 @@ final class HostProofViewController: CAPBridgeViewController {
         } else {
             var output: ProofJSON = ["launchID": launchID, "appPID": Int(getpid())]
             do {
-                output["web"] = try await web("return await proof.run();")
-                output["before"] = try await web("return proof.prepareRelaunch();")
+                output["before"] = try await web("prepareRelaunch")
             } catch {
-                output["error"] = error.localizedDescription
+                output["storageError"] = errorEvidence(error)
             }
+            // Collect bridge and storage evidence before starting a GPU-dependent renderer.
+            var results: [ProofJSON] = []
+            for id in [1, 6, 7, 2, 3, 4, 5] {
+                results.append(await checked(id) { try await web("runCheck", arguments: [id]) })
+            }
+            var webOutput: ProofJSON
+            do {
+                webOutput = try await web("summary")
+            } catch {
+                webOutput = ["summaryError": errorEvidence(error)]
+            }
+            webOutput["results"] = results
+            webOutput["webProcessTerminations"] = proofNavigation?.terminations ?? 0
+            output["web"] = webOutput
             publish("initial-ready", output, on: proofStatus)
         }
     }
@@ -144,10 +163,7 @@ final class HostProofViewController: CAPBridgeViewController {
                 "afterAppPID": Int(getpid()),
                 "appQuitObserved": true
             ]
-            return try await web("return await proof.verifyRelaunch(before, witness);", arguments: [
-                "before": before,
-                "witness": witness
-            ])
+            return try await web("verifyRelaunch", arguments: [before, witness])
         }
         let observer = ProofObserver()
         let recovery = await checked(9) { try await verifyRecovery(observer) }
@@ -171,7 +187,7 @@ final class HostProofViewController: CAPBridgeViewController {
 
     private func verifyRecovery(_ observer: ProofObserver) async throws -> ProofJSON {
         guard let proofNavigation else { throw HostProofError("Missing WebKit navigation observer") }
-        let before = try await web("return await proof.select('iss');")
+        let before = try await web("select", arguments: ["iss"])
         guard before["tab"] as? String == "tab-iss" else { throw HostProofError("ISS tab not active before termination") }
         let baselineTerminations = proofNavigation.terminations
         let baselineNavigations = proofNavigation.finishes
@@ -192,10 +208,7 @@ final class HostProofViewController: CAPBridgeViewController {
             "reloads": proofNavigation.finishes - baselineNavigations,
             "process": exit
         ]
-        var result = try await web("return await proof.verifyRecovery(before, witness);", arguments: [
-            "before": before,
-            "witness": witness
-        ])
+        var result = await checked(9) { try await web("verifyRecovery", arguments: [before, witness]) }
         var evidence = result["evidence"] as? ProofJSON ?? [:]
         evidence["native"] = witness
         result["evidence"] = evidence
@@ -211,9 +224,9 @@ final class HostProofViewController: CAPBridgeViewController {
         _ = try await observer.request("memoryStart")
         var result: ProofJSON
         do {
-            result = try await web("return await proof.stress(durationMs);", arguments: ["durationMs": durationMs])
+            result = try await web("stress", arguments: [durationMs])
         } catch {
-            result = failure(10, error.localizedDescription)
+            result = failure(10, evidence: errorEvidence(error))
         }
         var evidence = result["evidence"] as? ProofJSON ?? [:]
         evidence["requestedDurationMs"] = durationMs
@@ -221,7 +234,8 @@ final class HostProofViewController: CAPBridgeViewController {
         do {
             memory = try await observer.request("memoryStop")
         } catch {
-            return failure(10, error.localizedDescription, evidence: evidence)
+            evidence["memoryError"] = errorEvidence(error)
+            return failure(10, evidence["error"] as? String ?? error.localizedDescription, evidence: evidence)
         }
         let terminations = proofNavigation.terminations - baselineTerminations
         evidence["memory"] = memory
@@ -230,8 +244,13 @@ final class HostProofViewController: CAPBridgeViewController {
         guard terminations == 0,
               let peak = memory["peakBytes"] as? Int, peak > 0,
               let samples = memory["samples"] as? Int, samples >= 2,
-              memory["missingSamples"] as? Int == 0
-        else { return failure(10, "WebContent ended or memory evidence was incomplete", evidence: evidence) }
+              memory["missingSamples"] as? Int == 0,
+              let gap = memory["maxSampleGapMs"] as? Int,
+              let allowedGap = memory["maxAllowedSampleGapMs"] as? Int, gap <= allowedGap
+        else {
+            evidence["memoryError"] = "WebContent ended or memory evidence was incomplete"
+            return failure(10, evidence["error"] as? String ?? "WebContent ended or memory evidence was incomplete", evidence: evidence)
+        }
 
         if result["status"] as? String == "pass",
            (evidence["actualDurationMs"] as? Double ?? 0) < Double(durationMs) {
@@ -245,28 +264,83 @@ final class HostProofViewController: CAPBridgeViewController {
         return result
     }
 
-    private func web(_ body: String, arguments: ProofJSON = [:]) async throws -> ProofJSON {
+    private func web(_ operation: String, arguments: [Any] = []) async throws -> ProofJSON {
         guard let webView else { throw HostProofError("The Capacitor web view is missing") }
+        if let proofNavigation, proofNavigation.isReloading {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(45))
+            while proofNavigation.isReloading {
+                guard ContinuousClock.now < deadline else { throw HostProofError("WebContent did not reload before \(operation)") }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        let terminations = proofNavigation?.terminations ?? 0
         let source = """
-            const proof = window.__opdG1;
-            if (!proof) throw new Error('Bundled proof did not start');
-            await proof.ready;
-            \(body)
+            try {
+                const deadline = performance.now() + 20000;
+                while (!window.__opdG1 && performance.now() < deadline) {
+                    await new Promise(resolve => setTimeout(resolve, 50));
+                }
+                const proof = window.__opdG1;
+                if (!proof) throw new Error('Timed out waiting for the bundled proof entry');
+                const result = await proof[operation](...JSON.parse(input));
+                if (!result || typeof result !== 'object' || Array.isArray(result)) {
+                    throw new Error('Expected a proof result object');
+                }
+                return JSON.stringify({result, documentId: proof.documentId});
+            } catch (error) {
+                return JSON.stringify({failure: {
+                    error: String(error?.message ?? error),
+                    stack: typeof error?.stack === 'string' ? error.stack : undefined
+                }});
+            }
             """
-        let value = try await webView.callAsyncJavaScript(source, arguments: arguments, in: nil, contentWorld: .page)
-        guard let object = value as? ProofJSON else { throw HostProofError("Malformed web proof response") }
-        return object
+        let input = try JSONSerialization.data(withJSONObject: arguments)
+        let value: Any?
+        do {
+            value = try await webView.callAsyncJavaScript(source, arguments: [
+                "operation": operation,
+                "input": String(decoding: input, as: UTF8.self)
+            ], in: nil, contentWorld: .page)
+        } catch {
+            throw WebProofError.webKit(
+                error as NSError, operation: operation,
+                terminations: (proofNavigation?.terminations ?? 0) - terminations
+            )
+        }
+        guard let json = value as? String,
+              let envelope = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? ProofJSON
+        else { throw HostProofError("Malformed web proof response for \(operation)") }
+        if let failure = envelope["failure"] as? ProofJSON, let message = failure["error"] as? String {
+            throw WebProofError.script(message, stack: failure["stack"] as? String, operation: operation)
+        }
+        guard var result = envelope["result"] as? ProofJSON else {
+            throw HostProofError("Missing web proof result for \(operation)")
+        }
+        if var evidence = result["evidence"] as? ProofJSON, let documentId = envelope["documentId"] as? String {
+            evidence["documentId"] = documentId
+            result["evidence"] = evidence
+        }
+        return result
     }
 
     private func checked(_ id: Int, _ operation: () async throws -> ProofJSON) async -> ProofJSON {
         do { return try await operation() }
-        catch { return failure(id, error.localizedDescription) }
+        catch { return failure(id, evidence: errorEvidence(error)) }
+    }
+
+    private func errorEvidence(_ error: Error) -> ProofJSON {
+        if let error = error as? WebProofError { return error.evidence }
+        return ["error": error.localizedDescription]
     }
 
     private func failure(_ id: Int, _ error: String, evidence: ProofJSON = [:]) -> ProofJSON {
         var details = evidence
         details["error"] = error
-        return ["id": id, "status": "fail", "evidence": details]
+        return failure(id, evidence: details)
+    }
+
+    private func failure(_ id: Int, evidence: ProofJSON) -> ProofJSON {
+        ["id": id, "status": "fail", "evidence": evidence]
     }
 
     private func publish(_ stage: String, _ payload: ProofJSON, on label: UILabel) {
@@ -276,6 +350,38 @@ final class HostProofViewController: CAPBridgeViewController {
             label.text = stage
         } catch {
             label.text = "malformed results"
+        }
+    }
+}
+
+private enum WebProofError: Error {
+    case script(String, stack: String?, operation: String)
+    case webKit(NSError, operation: String, terminations: Int)
+
+    var evidence: ProofJSON {
+        switch self {
+        case let .script(message, stack, operation):
+            var details: ProofJSON = ["error": message, "operation": operation]
+            details["stack"] = stack
+            return details
+        case let .webKit(error, operation, terminations):
+            var details: ProofJSON = [
+                "error": error.localizedDescription, "operation": operation,
+                "webProcessTerminationsDuringCall": terminations
+            ]
+            guard error.domain == WKErrorDomain else { return details }
+            details["wkErrorCode"] = error.code
+            let keys = ["WKJavaScriptExceptionMessage", "WKJavaScriptExceptionLineNumber",
+                        "WKJavaScriptExceptionColumnNumber", "WKJavaScriptExceptionSourceURL"]
+            for key in keys {
+                switch error.userInfo[key] {
+                case let url as URL: details[key] = url.absoluteString
+                case let text as String: details[key] = text
+                case let number as NSNumber: details[key] = number
+                default: break
+                }
+            }
+            return details
         }
     }
 }
