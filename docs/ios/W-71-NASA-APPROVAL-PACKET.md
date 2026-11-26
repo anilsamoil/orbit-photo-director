@@ -49,7 +49,10 @@ The iOS design omits external place search. Saved personal target names and coor
 ## Traffic outside the app
 
 - **Worker to providers.** Cloudflare Access verification keys, Open-Meteo (`api.open-meteo.com`) cloud data, AviationWeather.gov station reports, and NOAA space weather (`services.swpc.noaa.gov`). The design adds Apple public verification keys, token exchange, validation, and revocation at `appleid.apple.com`.
-- **Website place search.** On both website hosts, an explicit search beyond the curated local aliases sends the query through SNAP to the configured provider even if the user saves no target. **TODO** Record the provider and how it handles queries.
+- **Website place search.**
+  - **Current website.** For an explicit search beyond the curated local aliases, the browser sends the query directly to Nominatim on a cache miss. The browser can store the query and results in local storage.
+  - **Planned after the W-21 cutover.** When an approved provider is enabled, both website hosts will send explicit searches beyond the curated local aliases through SNAP to the configured provider. SNAP will send the query even if the user saves no target. The iOS design omits external place search.
+  - **TODO** Record the approved provider and how it handles queries. Attach W-21 proof for both hosts that direct browser calls to the provider have ended, legacy search entries have been removed, and new search entries do not persist.
 - **Apple to the Worker.** Apple sends signed consent-withdrawal and account-deletion notices to a dedicated HTTPS endpoint outside website Access. **TODO** Record the configured endpoint.
 - **Recovery email.** The Worker sends a one-use deletion code to an independently verified mailbox when the holder opts in. **TODO** Record the delivery provider and origin.
 - **Generator and publisher on Earth.** Source code lists CelesTrak, ARISS, and Where The ISS At for orbits. It lists Open-Meteo GFS (`https://api.open-meteo.com/v1/gfs`) for cloud and CAPE, NASA GIBS, EUMETSAT, NICT Himawari, NOAA hurricane and lightning data, NASA FIRMS, Launch Library 2, and FAA, Coast Guard, and NGA hazard feeds. The publisher sends artifacts to Cloudflare. **TODO** Confirm enabled sources, the production forecast endpoint, and public inputs in W-21.
