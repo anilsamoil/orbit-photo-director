@@ -284,11 +284,7 @@ async function hydrateUnchangedProfile(profileName: string): Promise<void> {
       || typeof target.lat !== 'number' || typeof target.lon !== 'number'
       || typeof target.priority !== 'number' || typeof target.createdAt !== 'string') return;
     const checked = validatePersonalTargetInput({ ...target, profileName });
-    if (!checked.ok) {
-      if (checked.error !== 'name_empty' || target.name.length === 0) return;
-      if (!validatePersonalTargetInput({ ...target, profileName, name: 'Unnamed' }).ok) return;
-      continue;
-    }
+    if (!checked.ok) return; // A wrong-profile or malformed list is never applied.
     if (!ids.has(target.id)) {
       ids.add(target.id);
       missing.push(checked.target);

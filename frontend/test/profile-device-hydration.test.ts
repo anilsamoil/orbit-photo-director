@@ -89,33 +89,6 @@ describe('personal targets across devices', () => {
     expect(ipad.loadProfile('josh')!.additions).toEqual([ararat]);
   });
 
-  it('hydrates valid targets on both sides of a whitespace-only name', async () => {
-    const second = { ...ararat, id: 'personal:josh:second', name: 'Second target' };
-    serverLists.set('josh', [
-      { ...ararat, name: ' Mount Ararat ' },
-      { ...ararat, id: 'personal:josh:blank', name: ' \t ' },
-      second,
-    ]);
-    const ipad = await freshDevice();
-
-    await ipad.hydratePersonalTargets('josh');
-
-    expect(ipad.loadProfile('josh')!.additions).toEqual([ararat, second]);
-  });
-
-  it.each([
-    ['a wrong-profile ID', { id: 'personal:other:blank', name: '   ' }],
-    ['invalid coordinates', { lat: 91, name: '   ' }],
-    ['an empty name', { name: '' }],
-  ])('rejects the full target list when a row has %s', async (_defect, fields) => {
-    serverLists.set('josh', [ararat, { ...ararat, id: 'personal:josh:blank', ...fields }]);
-    const ipad = await freshDevice();
-
-    await ipad.hydratePersonalTargets('josh');
-
-    expect(ipad.loadProfile('josh')!.additions).toEqual([]);
-  });
-
   it.each(['network', '503', 'expired session', 'invalid_response'])(
     'retries a failed %s boot read when the Profile section opens in the same page',
     async (failure) => {

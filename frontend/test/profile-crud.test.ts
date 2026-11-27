@@ -403,30 +403,6 @@ describe('optimistic add flow', () => {
   });
 });
 
-describe('optimistic edit flow', () => {
-  it('preserves legacy whitespace-only names when saving an edit', async () => {
-    const target = makeTarget();
-    const legacy = makeTarget({ name: ' \t\n ' });
-    const serverOnly = makeTarget({ name: '  From another device  ' });
-    const edited = { ...target, name: 'Edited target' };
-    const serverTargets = [serverOnly, legacy, target];
-    saveProfile(addPersonalTarget(createDefaultProfile(PROFILE), target));
-
-    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) =>
-      init?.method === 'PUT'
-        ? Response.json({ ok: true, count: serverTargets.length })
-        : Response.json({ targets: serverTargets }),
-    );
-    vi.stubGlobal('fetch', fetchMock);
-
-    expect(await _test.handleEdit(PROFILE, edited)).toBe('ok');
-
-    const put = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT');
-    expect(JSON.parse(String(put?.[1]?.body))).toEqual({ targets: [serverOnly, legacy, edited] });
-    expect(loadProfile(PROFILE)?.additions).toEqual([edited]);
-  });
-});
-
 describe.each([
   [PROFILE, {
     add: 'Added "Test target" — appears on the map & queue after the next hourly update',

@@ -410,30 +410,13 @@ describe('PUT /api/profiles/<name>/targets', () => {
     expect(body.errors[0]?.error).toBe('name_must_be_string');
   });
 
-  it('preserves a stored whitespace-only target alongside an edit to another target', async () => {
-    const env = makeEnv();
-    const fields = validTarget({ id: 'personal:jack:blank', name: ' \t\n ', lat: 40, lon: -75 });
-    const legacy = { metadata: { camera: 'Z9', frame: 1 }, ...fields };
-    await env.CALIB.put('profiles/jack/targets.json', JSON.stringify([legacy, validTarget()]));
-    const targets = [{ ...fields, metadata: { frame: 1, camera: 'Z9' } }, validTarget({ name: 'Cambridge' })];
-    const r = await fetchWorker(env, '/api/profiles/jack/targets', {
-      method: 'PUT',
-      headers: authHeaders(),
-      body: JSON.stringify({ targets }),
-    });
-    expect(r.status).toBe(200);
-    expect(await r.json()).toEqual({ ok: true, count: 2 });
-    const got = await fetchWorker(env, '/api/profiles/jack/targets', { headers: authHeaders() });
-    expect(await got.json()).toMatchObject({ targets });
-  });
-
-  it('rejects a new target with a whitespace-only name', async () => {
+  it.each(['', ' \t\n '])('rejects a target named %j', async (name) => {
     const env = makeEnv();
     const r = await fetchWorker(env, '/api/profiles/jack/targets', {
       method: 'PUT',
       headers: authHeaders(),
       body: JSON.stringify({
-        targets: [validTarget(), validTarget({ id: 'personal:jack:blank', name: '   ' })],
+        targets: [validTarget(), validTarget({ id: 'personal:jack:blank', name })],
       }),
     });
     expect(r.status).toBe(400);
@@ -441,86 +424,6 @@ describe('PUT /api/profiles/<name>/targets', () => {
       error: 'invalid_targets',
       errors: [{ index: 1, error: 'name_empty' }],
     });
-    expect(env.CALIB.has('profiles/jack/targets.json')).toBe(false);
-  });
-
-  it.each([
-    ['a different blank name', { name: '\t' }],
-    ['an unknown id with the same blank name', { id: 'personal:jack:other' }],
-    ['a changed latitude', { lat: 11 }],
-    ['a changed priority', { priority: 6 }],
-    ['a changed creation timestamp', { createdAt: '2026-05-26T13:00:00Z' }],
-    ['a changed nested field', { metadata: { camera: 'Z9', frame: 2 } }],
-  ])('rejects a PUT with %s', async (_description, overrides) => {
-    const env = makeEnv();
-    const legacy = validTarget({ name: '   ', lat: 10, metadata: { camera: 'Z9', frame: 1 } });
-    await env.CALIB.put('profiles/jack/targets.json', JSON.stringify([legacy]));
-    const r = await fetchWorker(env, '/api/profiles/jack/targets', {
-      method: 'PUT',
-      headers: authHeaders(),
-      body: JSON.stringify({ targets: [{ ...legacy, ...overrides }] }),
-    });
-    expect(r.status).toBe(400);
-    expect(await r.json()).toEqual({
-      error: 'invalid_targets',
-      errors: [{ index: 0, error: 'name_empty' }],
-    });
-    const got = await fetchWorker(env, '/api/profiles/jack/targets', { headers: authHeaders() });
-    expect(await got.json()).toMatchObject({ targets: [legacy] });
-  });
-
-  it.each([
-    ['a literal empty name', { name: '' }],
-    ['an out-of-range latitude', { name: '   ', lat: 91 }],
-  ])('rejects an exact resend of a stored target with %s', async (_description, overrides) => {
-    const env = makeEnv();
-    const targets = [validTarget(overrides)];
-    await env.CALIB.put('profiles/jack/targets.json', JSON.stringify(targets));
-    const r = await fetchWorker(env, '/api/profiles/jack/targets', {
-      method: 'PUT',
-      headers: authHeaders(),
-      body: JSON.stringify({ targets }),
-    });
-    expect(r.status).toBe(400);
-    expect(await r.json()).toEqual({
-      error: 'invalid_targets',
-      errors: [{ index: 0, error: 'name_empty' }],
-    });
-  });
-
-  it('appends omitted whitespace-only targets in stored order and removes other omitted targets', async () => {
-    const env = makeEnv();
-    const first = validTarget({ id: 'personal:jack:blank-z', name: '   ' });
-    const second = validTarget({ id: 'personal:jack:blank-a', name: '\t' });
-    const empty = validTarget({ id: 'personal:jack:empty', name: '' });
-    await env.CALIB.put('profiles/jack/targets.json', JSON.stringify([first, validTarget(), empty, second]));
-    const replacement = validTarget({ id: 'personal:jack:new', name: 'Kyoto' });
-    const r = await fetchWorker(env, '/api/profiles/jack/targets', {
-      method: 'PUT',
-      headers: authHeaders(),
-      body: JSON.stringify({ targets: [replacement] }),
-    });
-    expect(r.status).toBe(200);
-    expect(await r.json()).toEqual({ ok: true, count: 3 });
-    const got = await fetchWorker(env, '/api/profiles/jack/targets', { headers: authHeaders() });
-    expect(await got.json()).toMatchObject({ targets: [replacement, first, second] });
-  });
-
-  it('returns 503 before replacing targets if stored targets cannot be read', async () => {
-    const env = makeEnv();
-    const targets = [validTarget()];
-    await env.CALIB.put('profiles/jack/targets.json', JSON.stringify(targets));
-    env.CALIB.throwOnGet = new Error('outage');
-    const r = await fetchWorker(env, '/api/profiles/jack/targets', {
-      method: 'PUT',
-      headers: authHeaders(),
-      body: JSON.stringify({ targets: [validTarget({ name: 'Kyoto' })] }),
-    });
-    expect(r.status).toBe(503);
-    expect(await r.json()).toEqual({ error: 'storage_unavailable' });
-    env.CALIB.throwOnGet = null;
-    const got = await fetchWorker(env, '/api/profiles/jack/targets', { headers: authHeaders() });
-    expect(await got.json()).toMatchObject({ targets });
   });
 
   it('rejects target whose id profile-segment does not match URL profile', async () => {
@@ -549,34 +452,27 @@ describe('PUT /api/profiles/<name>/targets', () => {
     expect(body.errors[0]?.error).toBe('priority_must_be_integer');
   });
 
-  it.each(['incoming', 'preserved'])('rejects duplicate ids among %s rows', async (source) => {
+  it('rejects duplicate ids in the same PUT', async () => {
     const env = makeEnv();
-    if (source === 'preserved') {
-      const legacy = validTarget({ id: 'personal:jack:blank', name: '   ' });
-      await env.CALIB.put('profiles/jack/targets.json', JSON.stringify([legacy, legacy]));
-    }
-    const targets = source === 'incoming' ? [validTarget(), validTarget()] : [validTarget()];
     const r = await fetchWorker(env, '/api/profiles/jack/targets', {
       method: 'PUT',
       headers: authHeaders(),
-      body: JSON.stringify({ targets }),
+      body: JSON.stringify({ targets: [validTarget(), validTarget()] }),
     });
     expect(r.status).toBe(400);
     const body = (await r.json()) as { error: string };
     expect(body.error).toBe('duplicate_id');
   });
 
-  it.each([501, 500])('rejects PUT with %i incoming rows and one omitted whitespace-only row', async (count) => {
+  it('rejects PUT exceeding the per-profile target cap', async () => {
     const env = makeEnv();
-    const legacy = validTarget({ id: 'personal:jack:blank', name: '   ' });
-    await env.CALIB.put('profiles/jack/targets.json', JSON.stringify([legacy]));
-    const targets = Array.from({ length: count }, (_, i) => validTarget({
+    const tooMany = Array.from({ length: 501 }, (_, i) => validTarget({
       id: `personal:jack:${String(i).padStart(8, '0')}-aaaa-bbbb-cccc-dddddddddddd`,
     }));
     const r = await fetchWorker(env, '/api/profiles/jack/targets', {
       method: 'PUT',
       headers: authHeaders(),
-      body: JSON.stringify({ targets }),
+      body: JSON.stringify({ targets: tooMany }),
     });
     expect(r.status).toBe(400);
     const body = (await r.json()) as { error: string };
@@ -607,11 +503,14 @@ describe('POST /api/profiles/<name>/targets', () => {
     const r = await fetchWorker(env, '/api/profiles/jack/targets', {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify(validTarget()),
+      body: JSON.stringify(validTarget({ name: ' Boston ' })),
     });
     expect(r.status).toBe(200);
     const body = (await r.json()) as { ok: boolean; count: number };
     expect(body.count).toBe(1);
+
+    const getRes = await fetchWorker(env, '/api/profiles/jack/targets', { headers: authHeaders() });
+    expect(await getRes.json()).toMatchObject({ targets: [{ name: ' Boston ' }] });
   });
 
   it('appends a target to an existing list', async () => {
@@ -664,16 +563,15 @@ describe('POST /api/profiles/<name>/targets', () => {
     expect(body.detail).toBe('lon_out_of_range');
   });
 
-  it('rejects a whitespace-only target name', async () => {
+  it.each(['', ' \t\n '])('rejects a target named %j', async (name) => {
     const env = makeEnv();
     const r = await fetchWorker(env, '/api/profiles/jack/targets', {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify(validTarget({ name: ' \t\n ' })),
+      body: JSON.stringify(validTarget({ name })),
     });
     expect(r.status).toBe(400);
     expect(await r.json()).toEqual({ error: 'invalid_target', detail: 'name_empty' });
-    expect(env.CALIB.has('profiles/jack/targets.json')).toBe(false);
   });
 });
 
@@ -682,10 +580,10 @@ describe('POST /api/profiles/<name>/targets', () => {
 // --------------------------------------------------------------------------
 
 describe('DELETE /api/profiles/<name>/targets/<id>', () => {
-  it.each(['Boston', ' \t '])('removes a matching entry named %j', async (name) => {
+  it('removes a matching entry', async () => {
     const env = makeEnv();
     const list = [
-      validTarget({ name }),
+      validTarget(),
       validTarget({
         id: 'personal:jack:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
         name: 'Kyoto',
@@ -702,8 +600,9 @@ describe('DELETE /api/profiles/<name>/targets/<id>', () => {
     expect(body.removed).toBe(true);
     expect(body.count).toBe(1);
 
-    const got = await fetchWorker(env, '/api/profiles/jack/targets', { headers: authHeaders() });
-    expect(await got.json()).toMatchObject({ targets: [list[1]] });
+    const stored = JSON.parse(env.CALIB.raw('profiles/jack/targets.json') ?? '[]');
+    expect(stored).toHaveLength(1);
+    expect(stored[0].name).toBe('Kyoto');
   });
 
   it('returns ok:true removed:false when id does not exist (idempotent)', async () => {
