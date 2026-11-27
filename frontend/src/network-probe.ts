@@ -24,6 +24,13 @@
  */
 export const PROBE_PATH = '/__opd_probe';
 
+export class NetworkTransportError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = 'NetworkTransportError';
+  }
+}
+
 export async function probeConnectivity(
   probePath: string = PROBE_PATH,
   timeoutMs = 3000,

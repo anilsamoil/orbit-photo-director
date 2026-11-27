@@ -33,7 +33,7 @@ import { liveIssNow } from './iss';
 import { createPollScheduler, isOnline, type PollScheduler } from './network-status';
 import { DEFAULT_DISTANCE_THRESHOLD_KM, filterPassesByDistance, filterRemovedCurated } from './pass-filter';
 import { emptyQueueHint, EMPTY_HINT_THRESHOLD_MIN } from './empty-hint';
-import { probeConnectivity } from './network-probe';
+import { NetworkTransportError, probeConnectivity } from './network-probe';
 import { buildIcs } from './ics';
 import { shareOrDownloadIcs } from './calendar-share';
 import { clearShotlist, isInShotlist, nextSequence, pruneExpired, shotlistCount, toggleShotlist } from './shotlist';
@@ -43,7 +43,7 @@ import { initSunWidget } from './sun';
 import { loadOrCreateProfileFromURL, loadProfile, removePersonalTarget, saveProfile, toggleCuratedRemoved, type Profile } from './profile';
 import { EDIT_TARGET_EVENT, subscribeProfileChanged } from './profile-events';
 import { getAccountProfile, invalidateRosterReadScope, resolveAccountProfile } from './profile-session';
-import { bindLinkedRosterPageLifecycle, setLinkedRosterTargetsOffline } from './profile-roster-targets';
+import { bindLinkedRosterPageLifecycle, refreshLinkedRosterTargets, setLinkedRosterTargetsOffline } from './profile-roster-targets';
 import { isRosterProfile } from './crew-roster';
 import { mountProfileMenu } from './profile-menu';
 import { deleteProfileTarget, putRemovedCuratedIds } from './profile-api';
@@ -465,7 +465,7 @@ async function doRefresh(): Promise<void> {
       // based, via renderOfflineBanner) rather than blaming the generator.
       renderOfflineBanner();
     } else if (!(await maybeFlagExpiredSession(manifest.generated_at))) {
-      if (!currentlyOffline && isOnline()) setLinkedRosterTargetsOffline(false);
+      if (!currentlyOffline && isOnline()) refreshLinkedRosterTargets();
       // Not an expired Access session, so the ordinary staleness banner is
       // honest. When it IS expired, maybeFlagExpiredSession has already put the
       // tappable sign-in banner up and we must not overwrite it — a "STALE"
@@ -496,6 +496,7 @@ async function doRefresh(): Promise<void> {
       // landing tab from the snapshot instead of leaving it blank.
       renderPendingMapPane();
     } else {
+      if (e instanceof NetworkTransportError) onOffline();
       setBanner(bannerError((e as Error).message));
     }
   }

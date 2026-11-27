@@ -18,11 +18,13 @@ export class SessionSignInRequired extends Error {
 }
 
 const CACHE_KEY = 'opd-account-session-v1';
+const ROSTER_SESSION_RECHECK_MS = 60_000;
 let account: AccountProfile | null = null;
 let signedInAccount: AccountProfile | null = null;
 let authorizedProfiles: AccountProfile[] | undefined;
-let rosterReadScope: { account: AccountProfile; profileName: string; displayName: string } | undefined;
+let rosterReadScope: { account: AccountProfile; profileName: string; displayName: string; viewerName: string } | undefined;
 let rosterReadRevision = 0;
+let lastRosterSessionCheck = -Infinity;
 
 /** Active profile; all personal caches, writes and ratings use this scope. */
 export function getAccountProfile(): AccountProfile | null { return account; }
@@ -139,21 +141,44 @@ function validateAuthorizedProfiles(value: unknown, own: AccountProfile): Accoun
   }));
 }
 
-export async function resolveAccountProfile(urlHref = window.location.href): Promise<AccountProfile> {
+export function revalidateRosterReadScope(urlHref: string): Promise<AccountProfile> | undefined {
+  if (performance.now() - lastRosterSessionCheck < ROSTER_SESSION_RECHECK_MS) return;
+  return resolveAccountProfile(urlHref, { preserveRosterReadScope: true });
+}
+
+export async function resolveAccountProfile(
+  urlHref = window.location.href,
+  { preserveRosterReadScope = false } = {},
+): Promise<AccountProfile> {
   const roster = requestedRosterProfile(urlHref);
   if (!roster || account?.name !== roster.name || account.isVerified !== false) account = null;
-  invalidateRosterReadScope();
+  const previousScope = preserveRosterReadScope && roster ? getRosterReadScope(roster.name) : undefined;
+  if (!previousScope) invalidateRosterReadScope();
   const revision = rosterReadRevision;
-  const session = await resolveSessionProfile(roster ? sessionHref(urlHref) : urlHref);
+  const isCurrent = () => !roster || revision === rosterReadRevision;
+  if (roster?.accountProfile) lastRosterSessionCheck = performance.now();
+  let session: AccountProfile;
+  try {
+    session = await resolveSessionProfile(roster ? sessionHref(urlHref) : urlHref, isCurrent);
+  } catch (error) {
+    if (previousScope && isCurrent()) invalidateRosterReadScope();
+    throw error;
+  }
   if (!roster) {
     account = session;
     return account;
   }
-  account = { name: roster.name, displayName: roster.displayName, isVerified: false };
+  const rosterAccount = account?.name === roster.name
+    ? account : { name: roster.name, displayName: roster.displayName, isVerified: false };
+  if (!isCurrent()) return rosterAccount;
+  account = rosterAccount;
   const profileName = roster.accountProfile;
-  if (revision === rosterReadRevision && profileName && signedInAccount?.isVerified
-    && !signedInAccount.localOnly && authorizedProfiles?.some((profile) => profile.name === profileName)) {
-    rosterReadScope = { account, profileName, displayName: roster.displayName };
+  const viewer = signedInAccount;
+  const granted = profileName && viewer?.isVerified && !viewer.localOnly
+    && authorizedProfiles?.some((profile) => profile.name === profileName);
+  if (previousScope && (!granted || previousScope.viewerName !== viewer?.name)) invalidateRosterReadScope();
+  if (granted && !rosterReadScope) {
+    rosterReadScope = { account, profileName, displayName: roster.displayName, viewerName: viewer.name };
   }
   return account;
 }
@@ -172,7 +197,7 @@ function sessionHref(urlHref: string): string {
   return url.href;
 }
 
-async function resolveSessionProfile(urlHref: string): Promise<AccountProfile> {
+async function resolveSessionProfile(urlHref: string, isCurrent: () => boolean): Promise<AccountProfile> {
   signedInAccount = null;
   authorizedProfiles = undefined;
   // Tab-local storage avoids selecting another account merely because it used
@@ -208,6 +233,7 @@ async function resolveSessionProfile(urlHref: string): Promise<AccountProfile> {
       settled = true;
       // iOS can report online during LOS. A transport failure can resume this
       // tab read-only; an actual HTTP denial or malformed response cannot.
+      if (!isCurrent()) throw error;
       const cached = resumeOfflineProfile();
       if (cached) return cached;
       throw error;
@@ -220,11 +246,12 @@ async function resolveSessionProfile(urlHref: string): Promise<AccountProfile> {
       settled = true;
     } catch (error) {
       settled = true;
-      if (!(error instanceof Error) || error.message !== 'The session request timed out') throw error;
+      if (!isCurrent() || !(error instanceof Error) || error.message !== 'The session request timed out') throw error;
       const cached = resumeOfflineProfile();
       if (cached) return cached;
       throw error;
     }
+    if (!isCurrent()) throw new Error('The session request was superseded');
     if (decided.kind === 'local') return adoptLocalProfile(decided.name);
     if (decided.kind === 'sign-in') throw new SessionSignInRequired();
     const body = sessionJson(decided.body);
@@ -242,7 +269,9 @@ async function resolveSessionProfile(urlHref: string): Promise<AccountProfile> {
     return profile;
   } catch (error) {
     // An expired or changed account must not resume an older offline identity.
-    try { sessionStorage.removeItem(CACHE_KEY); } catch { /* storage disabled */ }
+    if (isCurrent()) {
+      try { sessionStorage.removeItem(CACHE_KEY); } catch { /* storage disabled */ }
+    }
     throw error;
   } finally {
     clearTimeout(timer);

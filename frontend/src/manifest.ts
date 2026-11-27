@@ -1,3 +1,4 @@
+import { NetworkTransportError } from './network-probe';
 import type {
   ArtifactEntry,
   CuratedTarget,
@@ -8,6 +9,14 @@ import type {
   Track,
 } from './types';
 
+async function fetchArtifactResponse(url: string, cache: RequestCache): Promise<Response> {
+  try {
+    return await fetch(url, { cache });
+  } catch (cause) {
+    throw new NetworkTransportError(cause);
+  }
+}
+
 /** Fetch manifest.json from the site root and dereference an artifact by logical name. */
 export async function fetchManifest(baseUrl = ''): Promise<Manifest> {
   // No ?cb= buster: `cache: 'no-cache'` already forces revalidation, and a
@@ -15,7 +24,7 @@ export async function fetchManifest(baseUrl = ''): Promise<Manifest> {
   // (Workbox does exact URL matching by default → cached entry never matches
   // a new ?cb= value, so the offline second-line-of-defense never fires).
   const url = `${baseUrl}/manifest.json`;
-  const resp = await fetch(url, { cache: 'no-cache' });
+  const resp = await fetchArtifactResponse(url, 'no-cache');
   if (!resp.ok) {
     throw new Error(`manifest fetch failed: ${resp.status}`);
   }
@@ -128,7 +137,7 @@ export async function fetchArtifact<T>(
     throw new Error(`manifest has no artifact "${name}"`);
   }
   const url = `${baseUrl}/${entry.path}`;
-  const resp = await fetch(url, { cache: 'force-cache' }); // versioned path → safe to cache long
+  const resp = await fetchArtifactResponse(url, 'force-cache'); // versioned path → safe to cache long
   if (!resp.ok) {
     throw new Error(`artifact ${name} fetch failed: ${resp.status}`);
   }

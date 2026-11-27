@@ -2,7 +2,7 @@ import { rosterProfiles } from './crew-roster';
 import { parseProfileFromURL, validatePersonalTargetInput, type PersonalTarget } from './profile';
 import { getProfileTargets } from './profile-api';
 import { ROSTER_READ_SCOPE_INVALIDATED } from './profile-events';
-import { getRosterReadScope, invalidateRosterReadScope, resolveAccountProfile } from './profile-session';
+import { getRosterReadScope, invalidateRosterReadScope, resolveAccountProfile, revalidateRosterReadScope } from './profile-session';
 
 export const LINKED_ROSTER_TARGETS_CHANGED = 'opd-linked-roster-targets-changed';
 
@@ -59,6 +59,11 @@ export function setLinkedRosterTargetsOffline(isOffline: boolean): void {
   }
 }
 
+export function refreshLinkedRosterTargets(): void {
+  if (offline) setLinkedRosterTargetsOffline(false);
+  else reverifyLinkedRosterTargets('poll');
+}
+
 export function bindLinkedRosterPageLifecycle(): void {
   window.addEventListener('pagehide', onLinkedRosterPageHide);
   window.addEventListener('pageshow', onLinkedRosterPageShow);
@@ -77,21 +82,25 @@ function onLinkedRosterPageShow(event: PageTransitionEvent): void {
   reverifyLinkedRosterTargets();
 }
 
-function reverifyLinkedRosterTargets(): void {
+function reverifyLinkedRosterTargets(source: 'lifecycle' | 'poll' = 'lifecycle'): void {
   if (offline || cachedPage || revalidation?.revision === lifecycleRevision) return;
   const url = window.location.href;
   const name = parseProfileFromURL(url);
   if (!rosterProfiles().some((profile) => profile.name === name && profile.accountProfile)) return;
-  invalidateRosterReadScope();
+  if (source === 'lifecycle') invalidateRosterReadScope();
   const revision = lifecycleRevision;
   const task = Promise.resolve(revalidation?.task).then(async () => {
     if (revision !== lifecycleRevision) return;
+    const previousScope = getRosterReadScope(name);
     try {
-      await resolveAccountProfile(url);
+      const resolution = source === 'poll' ? revalidateRosterReadScope(url) : resolveAccountProfile(url);
+      if (!resolution) return;
+      await resolution;
     } catch {
       return;
     }
-    if (revision === lifecycleRevision) await hydrateLinkedRosterTargets(name);
+    const scope = getRosterReadScope(name);
+    if (revision === lifecycleRevision && scope && scope !== previousScope) await hydrateLinkedRosterTargets(name);
   }).finally(() => {
     if (revalidation?.revision === revision) revalidation = undefined;
   });
