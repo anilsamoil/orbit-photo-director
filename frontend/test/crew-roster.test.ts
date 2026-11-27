@@ -16,7 +16,7 @@ describe('crew roster registry', () => {
   it('lists the three roster profiles in roster.json order', () => {
     expect(rosterProfiles()).toEqual([
       { name: 'watkins', displayName: 'Jessica Watkins (Watty)' },
-      { name: 'kutryk', displayName: 'Josh Kutryk' },
+      { name: 'kutryk', displayName: 'Josh Kutryk', accountProfile: 'josh' },
       { name: 'delaney', displayName: 'Luke Delaney' },
     ]);
   });
@@ -135,6 +135,16 @@ describe('crew roster registry over broken files', () => {
     const roster = await rosterWith({ 'roster.json': JSON.stringify(ROSTER.slice(0, 2)) });
     expect(() => roster.rosterProfiles()).toThrow('crew roster: delaney.csv has no roster.json entry');
   });
+
+  it.each([null, 42, '', 'JOSH', 'josh/targets', 'kutryk', 'watkins'])(
+    'refuses an invalid account profile link (%s)',
+    async (accountProfile) => {
+      const roster = await rosterWith({
+        'roster.json': JSON.stringify(ROSTER.map((entry) => entry.name === 'kutryk' ? { ...entry, accountProfile } : entry)),
+      });
+      expect(() => roster.rosterProfiles()).toThrow('crew roster: kutryk has an invalid accountProfile');
+    },
+  );
 
   it('refuses a CSV whose header is not name,lat,lon,priority and lists no other profile', async () => {
     const roster = await rosterWith({ 'watkins.csv': 'site,latitude,longitude\r\nGrand Canyon,36.308,-112.293\r\n' });

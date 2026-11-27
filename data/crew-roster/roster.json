@@ -1,5 +1,5 @@
 [
   { "name": "watkins", "displayName": "Jessica Watkins (Watty)" },
-  { "name": "kutryk", "displayName": "Josh Kutryk" },
+  { "name": "kutryk", "displayName": "Josh Kutryk", "accountProfile": "josh" },
   { "name": "delaney", "displayName": "Luke Delaney" }
 ]

@@ -1,4 +1,6 @@
 import { rosterProfiles, type RosterProfile } from './crew-roster';
+import { isOnline } from './network-status';
+import { ROSTER_READ_SCOPE_INVALIDATED } from './profile-events';
 
 export interface AccountProfile {
   name: string;
@@ -16,9 +18,13 @@ export class SessionSignInRequired extends Error {
 }
 
 const CACHE_KEY = 'opd-account-session-v1';
+const ROSTER_SESSION_RECHECK_MS = 60_000;
 let account: AccountProfile | null = null;
 let signedInAccount: AccountProfile | null = null;
-let authorizedProfiles: AccountProfile[] = [];
+let authorizedProfiles: AccountProfile[] | undefined;
+let rosterReadScope: { account: AccountProfile; profileName: string; displayName: string; viewerName: string } | undefined;
+let rosterReadRevision = 0;
+let lastRosterSessionCheck = -Infinity;
 
 /** Active profile; all personal caches, writes and ratings use this scope. */
 export function getAccountProfile(): AccountProfile | null { return account; }
@@ -26,10 +32,22 @@ export function getAccountProfile(): AccountProfile | null { return account; }
 export function getSignedInAccountProfile(): AccountProfile | null { return signedInAccount; }
 /** Offline cache never supplies permissions to switch into another profile. */
 export function getAuthorizedProfiles(): AccountProfile[] {
-  return authorizedProfiles.map((profile) => ({ ...profile }));
+  return (authorizedProfiles ?? (signedInAccount ? [signedInAccount] : [])).map((profile) => ({ ...profile }));
 }
 export function canSelectProfile(name: string): boolean {
-  return account?.isVerified === true && authorizedProfiles.some((profile) => profile.name === name);
+  return account?.isVerified === true && (authorizedProfiles ?? [account]).some((profile) => profile.name === name);
+}
+
+export function getRosterReadScope(name: string) {
+  if (rosterReadScope?.account === account && account?.name === name && isOnline()) return rosterReadScope;
+}
+
+export function invalidateRosterReadScope(): void {
+  rosterReadRevision += 1;
+  if (rosterReadScope) {
+    rosterReadScope = undefined;
+    window.dispatchEvent(new Event(ROSTER_READ_SCOPE_INVALIDATED));
+  }
 }
 
 const LOCAL_NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
@@ -44,9 +62,7 @@ function profileNameFromUrl(urlHref: string): string {
 
 function adoptLocalProfile(name: string): AccountProfile {
   const profile: AccountProfile = { name, displayName: name, isVerified: false, localOnly: true };
-  account = profile;
   signedInAccount = profile;
-  authorizedProfiles = [profile];
   try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(profile)); } catch { /* storage disabled */ }
   return profile;
 }
@@ -82,17 +98,16 @@ function cachedSessionProfile(): AccountProfile | null {
 function resumeOfflineProfile(): AccountProfile | null {
   const cached = cachedSessionProfile();
   if (!cached) return null;
-  account = {
+  const profile = {
     name: cached.name,
     displayName: cached.displayName,
     isVerified: false,
     ...(cached.localOnly ? { localOnly: true } : {}),
   };
-  if (account.localOnly) {
-    signedInAccount = account;
-    authorizedProfiles = [account];
+  if (profile.localOnly) {
+    signedInAccount = profile;
   }
-  return account;
+  return profile;
 }
 
 function sessionJson(value: unknown): { profile: unknown; profiles: unknown } | null {
@@ -126,11 +141,45 @@ function validateAuthorizedProfiles(value: unknown, own: AccountProfile): Accoun
   }));
 }
 
-export async function resolveAccountProfile(urlHref = window.location.href): Promise<AccountProfile> {
+export function revalidateRosterReadScope(urlHref: string): Promise<AccountProfile> | undefined {
+  if (performance.now() - lastRosterSessionCheck < ROSTER_SESSION_RECHECK_MS) return;
+  return resolveAccountProfile(urlHref, { preserveRosterReadScope: true });
+}
+
+export async function resolveAccountProfile(
+  urlHref = window.location.href,
+  { preserveRosterReadScope = false } = {},
+): Promise<AccountProfile> {
   const roster = requestedRosterProfile(urlHref);
-  const session = await resolveSessionProfile(roster ? sessionHref(urlHref) : urlHref);
-  if (!roster) return session;
-  account = { name: roster.name, displayName: roster.displayName, isVerified: false };
+  if (!roster || account?.name !== roster.name || account.isVerified !== false) account = null;
+  const previousScope = preserveRosterReadScope && roster ? getRosterReadScope(roster.name) : undefined;
+  if (!previousScope) invalidateRosterReadScope();
+  const revision = rosterReadRevision;
+  const isCurrent = () => !roster || revision === rosterReadRevision;
+  if (roster?.accountProfile) lastRosterSessionCheck = performance.now();
+  let session: AccountProfile;
+  try {
+    session = await resolveSessionProfile(roster ? sessionHref(urlHref) : urlHref, isCurrent);
+  } catch (error) {
+    if (previousScope && isCurrent()) invalidateRosterReadScope();
+    throw error;
+  }
+  if (!roster) {
+    account = session;
+    return account;
+  }
+  const rosterAccount = account?.name === roster.name
+    ? account : { name: roster.name, displayName: roster.displayName, isVerified: false };
+  if (!isCurrent()) return rosterAccount;
+  account = rosterAccount;
+  const profileName = roster.accountProfile;
+  const viewer = signedInAccount;
+  const granted = profileName && viewer?.isVerified && !viewer.localOnly
+    && authorizedProfiles?.some((profile) => profile.name === profileName);
+  if (previousScope && (!granted || previousScope.viewerName !== viewer?.name)) invalidateRosterReadScope();
+  if (granted && !rosterReadScope) {
+    rosterReadScope = { account, profileName, displayName: roster.displayName, viewerName: viewer.name };
+  }
   return account;
 }
 
@@ -148,10 +197,9 @@ function sessionHref(urlHref: string): string {
   return url.href;
 }
 
-async function resolveSessionProfile(urlHref: string): Promise<AccountProfile> {
-  account = null;
+async function resolveSessionProfile(urlHref: string, isCurrent: () => boolean): Promise<AccountProfile> {
   signedInAccount = null;
-  authorizedProfiles = [];
+  authorizedProfiles = undefined;
   // Tab-local storage avoids selecting another account merely because it used
   // this browser previously. Never resume a cache after an HTTP/auth failure.
   if (navigator.onLine === false) {
@@ -185,6 +233,7 @@ async function resolveSessionProfile(urlHref: string): Promise<AccountProfile> {
       settled = true;
       // iOS can report online during LOS. A transport failure can resume this
       // tab read-only; an actual HTTP denial or malformed response cannot.
+      if (!isCurrent()) throw error;
       const cached = resumeOfflineProfile();
       if (cached) return cached;
       throw error;
@@ -197,11 +246,12 @@ async function resolveSessionProfile(urlHref: string): Promise<AccountProfile> {
       settled = true;
     } catch (error) {
       settled = true;
-      if (!(error instanceof Error) || error.message !== 'The session request timed out') throw error;
+      if (!isCurrent() || !(error instanceof Error) || error.message !== 'The session request timed out') throw error;
       const cached = resumeOfflineProfile();
       if (cached) return cached;
       throw error;
     }
+    if (!isCurrent()) throw new Error('The session request was superseded');
     if (decided.kind === 'local') return adoptLocalProfile(decided.name);
     if (decided.kind === 'sign-in') throw new SessionSignInRequired();
     const body = sessionJson(decided.body);
@@ -212,14 +262,16 @@ async function resolveSessionProfile(urlHref: string): Promise<AccountProfile> {
     const profiles = validateAuthorizedProfiles(body.profiles, own);
     let requested: string | null = null;
     try { requested = new URL(urlHref).searchParams.get('u'); } catch { /* use own profile */ }
-    account = profiles.find((profile) => profile.name === requested) ?? own;
+    const profile = profiles.find((candidate) => candidate.name === requested) ?? own;
     signedInAccount = own;
-    authorizedProfiles = profiles;
-    try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(account)); } catch { /* storage disabled */ }
-    return account;
+    authorizedProfiles = body.profiles === undefined ? undefined : profiles;
+    try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(profile)); } catch { /* storage disabled */ }
+    return profile;
   } catch (error) {
     // An expired or changed account must not resume an older offline identity.
-    try { sessionStorage.removeItem(CACHE_KEY); } catch { /* storage disabled */ }
+    if (isCurrent()) {
+      try { sessionStorage.removeItem(CACHE_KEY); } catch { /* storage disabled */ }
+    }
     throw error;
   } finally {
     clearTimeout(timer);

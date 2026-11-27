@@ -10,7 +10,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const session = vi.hoisted(() => ({ account: null as { name: string; displayName: string; isVerified?: boolean } | null }));
-vi.mock('../src/profile-session', () => ({ getAccountProfile: () => session.account }));
+vi.mock('../src/profile-session', () => ({
+  getAccountProfile: () => session.account,
+  invalidateRosterReadScope: vi.fn(),
+}));
 
 import {
   addPersonalTarget,

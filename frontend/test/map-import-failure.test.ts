@@ -72,6 +72,7 @@ vi.mock('../src/network-status', async () => {
 vi.mock('../src/profile-session', () => ({
   getAccountProfile: () => ({ name: 'anil', displayName: 'Anil', isVerified: true }),
   getSignedInAccountProfile: () => null,
+  invalidateRosterReadScope: vi.fn(),
   resolveAccountProfile: async () => ({ name: 'anil', displayName: 'Anil', isVerified: true }),
   SessionSignInRequired: class SessionSignInRequired extends Error {},
 }));

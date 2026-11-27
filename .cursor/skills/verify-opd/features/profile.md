@@ -9,7 +9,7 @@ Profile holds the signed-in astronaut, the distance threshold, personal targets,
 - `profile-add` adds a target named Verify Harbor.
 - `profile-hidden` shows Hidden curated targets. Restore removes `verify-mesa` from that list, the GET drops that id, and a new Chrome profile shows the card again.
 - `profile-lookup` resolves the fixture timestamp and drops a lookup pin on the map. It then resolves a last-good TLE at that TLE's own epoch, and a 2035 timestamp. A 2035 time that still propagates shows `low confidence — TLE age` and `ISS at`. A 2035 time where every element set fails SGP4 shows `orbit data is out of date, reconnect to refresh`.
-- `profile-hydration` is #374 (`c431fc4`). A verified account profile whose name starts with `u-` loads personal targets from `GET /api/browser/profiles/<name>/targets`. A failed read does not latch. The next Profile open, with no reload, fetches again. A distance-slider change during that read keeps the new threshold and the server rows. A local target edit during that read keeps the edit and does not add a server-only row. A signed-out 401 shows `Please sign in again to open your own profile. Your saved data has been kept.` and does not fetch targets. An anonymous `?u=` adoption (`isVerified` false) does not fetch. Crew roster profiles do not hydrate.
+- `profile-hydration` is #374 (`c431fc4`). A verified account profile whose name starts with `u-` loads personal targets from `GET /api/browser/profiles/<name>/targets`. A failed read does not latch. The next Profile open, with no reload, fetches again. A distance-slider change during that read keeps the new threshold and the server rows. A local target edit during that read keeps the edit and does not add a server-only row. A signed-out 401 shows `Please sign in again to open your own profile. Your saved data has been kept.` and does not fetch targets. An anonymous `?u=` adoption (`isVerified` false) does not fetch. Crew roster targets remain read-only. Josh Kutryk can show labelled account targets when the verified session includes `josh`.
 
 ## How to get to it (user POV)
 
@@ -55,6 +55,37 @@ Stub `GET /api/browser/session` and `/api/browser/profiles/<name>/targets` on th
 Stdout is `profile hydration signed-out 401 sign-in message targets 0`, `profile hydration anonymous ?u= targets 0`, `profile hydration retry reads <n> harbor kept`, `profile hydration slider 800 km harbor kept`, and `profile hydration local edit kept server-only absent`. Shots are `profile-hydration-signed-out.png`, `profile-hydration-anonymous.png`, `profile-hydration-retry.png`, `profile-hydration-slider.png`, and `profile-hydration-edit.png`.
 
 Known issues, not passes: a server target whose name is only whitespace fails `validatePersonalTargetInput` (`name_empty` after trim) and `hydrateUnchangedProfile` returns before adding any row, so that one field blocks the list. `handleAdd` still toasts `after the next hourly update` for a `u-` profile. Do not treat either as a green check.
+
+## Josh roster link on a local Vite server
+
+Use the verify origin and `isolateSnapRequests`. Create a fresh Chromium context with service workers blocked for each case. Before navigation, stub `GET /api/browser/session` and record all requests to `/api/browser/profiles/josh/targets`.
+
+Use this synthetic viewer in the session responses.
+
+```json
+{"name":"test-viewer","displayName":"Fixture Viewer"}
+```
+
+In both cases, open `/?e2e` without a `u` parameter. Open the top-bar profile badge and choose **Josh Kutryk** (`#profile-menu [data-profile="kutryk"]`). Wait for `u=kutryk`, then open **Profile**.
+
+### Viewer with the grant
+
+1. Return HTTP 200 with `ok: true`, the synthetic viewer in `profile`, and both the viewer and `{"name":"josh","displayName":"Fixture Account"}` in `profiles`.
+2. Return HTTP 200 on the linked GET with this body.
+
+   ```json
+   {"targets":[{"id":"personal:josh:fixture-ridge","name":"Fixture Ridge","lat":12.5,"lon":24.5,"priority":5,"createdAt":"2026-11-16T12:00:00Z"}]}
+   ```
+
+3. Follow the top-bar steps. Verify that **Crew roster sites** lists 11 bundled sites. Check that **Josh Kutryk’s account profile** lists **Fixture Ridge** without an edit button.
+4. Open **Map**. Pan and zoom to the fixture coordinates. With `?e2e`, you can use `window.__opdMap.jumpTo({ center: [24.5, 12.5], zoom: 4 })`. Wait for the ring on `my-targets-layer`, then click it.
+5. Check that the popup shows **Fixture Ridge** and **From Josh Kutryk’s account profile**. Confirm that the request log contains exactly one linked GET.
+
+### Viewer without the grant
+
+1. Return HTTP 200 with `ok: true` and the same synthetic viewer in `profile` and as the sole entry in `profiles`. Return an error if the linked endpoint is called, and count that request.
+2. Follow the top-bar steps. Verify that **Crew roster sites** lists 11 bundled sites and that `#profile-roster-account-targets` is hidden.
+3. Open **Map** and check that the `my-targets` source contains only the 11 bundled sites. Confirm that the linked request count is zero across the menu switch and both tabs.
 
 ## Gotchas
 

@@ -1,10 +1,11 @@
 import { fetchLiveCloud } from '../../../cloud';
-import { isRosterProfile } from '../../../crew-roster';
+import { isRosterProfile, rosterProfiles } from '../../../crew-roster';
 import { getMapLaunchMode } from '../../../map-launch-mode';
 import { isLaunchPass } from '../../../launch-selectors';
 import { DEFAULT_DISTANCE_THRESHOLD_KM, filterPassesByDistance, filterRemovedCurated } from '../../../pass-filter';
 import { loadProfile, parseProfileFromURL, type PersonalTarget } from '../../../profile';
 import { EDIT_TARGET_EVENT, subscribeProfileChanged } from '../../../profile-events';
+import { LINKED_ROSTER_TARGETS_CHANGED, linkedRosterTargets } from '../../../profile-roster-targets';
 import { getShotCount } from '../../../shot-counts';
 import { applyTargetFilter, getTargetFilter } from '../../../target-filter-pref';
 import type { PassEntry } from '../../../types';
@@ -34,6 +35,7 @@ type Runtime = {
   clock: Clock | null;
   passes: PassEntry[];
   profileBound: boolean;
+  linkedPopup: PopupHandle | null;
 };
 
 const state: Runtime = {
@@ -41,6 +43,7 @@ const state: Runtime = {
   clock: null,
   passes: [],
   profileBound: false,
+  linkedPopup: null,
 };
 
 function mapClock(): Clock {
@@ -126,14 +129,21 @@ export function refreshTargetsSource(): void {
 export function refreshMyTargetsSource(): void {
   const core = state.core;
   if (!core) return;
+  const name = parseProfileFromURL(window.location.href);
   let additions: PersonalTarget[] = [];
   try {
-    const profile = loadProfile(parseProfileFromURL(window.location.href));
+    const profile = loadProfile(name);
     additions = Array.isArray(profile?.additions) ? profile.additions : [];
   } catch {
     additions = [];
   }
-  const features = additions
+  const linked = linkedRosterTargets(name);
+  if (!linked) {
+    state.linkedPopup?.remove();
+    state.linkedPopup = null;
+  }
+  const linkedIds = new Set(linked?.targets.map((target) => target.id));
+  const features = [...additions, ...(linked?.targets ?? [])]
     .filter((target) =>
       Number.isFinite(target.lat) && Number.isFinite(target.lon)
       && Math.abs(target.lat) <= 90 && Math.abs(target.lon) <= 180)
@@ -147,6 +157,7 @@ export function refreshMyTargetsSource(): void {
         priority: target.priority,
         has_pass: false,
         is_personal: true,
+        ...(linkedIds.has(target.id) && { account_profile_label: linked?.label }),
       },
       geometry: { type: 'Point' as const, coordinates: [target.lon, target.lat] },
     }));
@@ -166,6 +177,7 @@ export function bindProfileChangedListener(): void {
   subscribeProfileChanged(() => {
     applyDistanceThreshold();
   });
+  window.addEventListener(LINKED_ROSTER_TARGETS_CHANGED, refreshMyTargetsSource);
   state.profileBound = true;
 }
 
@@ -245,17 +257,30 @@ export function bindTargetInteractions(host: MapCore): void {
     const priorityLayers = (['ascent-pad-layer', 'lookup-pin-layer', 'dropped-pin-layer'] as const)
       .filter((id) => core.hasLayer(id));
     if (priorityLayers.length > 0 && core.queryAt(bbox, priorityLayers).length > 0) return;
-    const feats = core.queryAt(bbox, layers);
-    if (feats.length === 0) return;
+    const profileName = parseProfileFromURL(window.location.href);
+    const isRoster = isRosterProfile(profileName);
+    const linkedProfileName = rosterProfiles().find((profile) => profile.name === profileName)?.accountProfile;
+    const linkedPrefix = linkedProfileName && `personal:${linkedProfileName}:`;
+    const linked = linkedRosterTargets(profileName);
+    const feats = core.queryAt(bbox, layers).filter(({ properties }) => {
+      const id = properties?.target_id;
+      const isLinkedTarget = properties?.account_profile_label
+        || (linkedPrefix && typeof id === 'string' && id.startsWith(linkedPrefix));
+      return !isLinkedTarget
+        || linked?.targets.some((target) => target.id === id);
+    });
     const hit = pickTargetAtTap(feats, { x: event.point.x, y: event.point.y }, (lngLat) => core.project(lngLat));
     if (!hit) return;
     const props = hit.props;
+    if (linked?.targets.some((target) => target.id === props.target_id)) {
+      props.account_profile_label = linked.label;
+    }
     if (props.target_id) {
       const shot = getShotCount(props.target_id);
       if (shot > 0) props.shot_count = shot;
     }
     let popup: PopupHandle | null = null;
-    const onEdit = props.is_personal && props.target_id && !isRosterProfile(parseProfileFromURL(window.location.href))
+    const onEdit = props.is_personal && props.target_id && !isRoster
       ? (id: string) => {
           popup?.remove();
           window.dispatchEvent(new CustomEvent(EDIT_TARGET_EVENT, { detail: { targetId: id } }));
@@ -263,6 +288,14 @@ export function bindTargetInteractions(host: MapCore): void {
       : undefined;
     const popupBody = buildTargetPopupContent(props, mapClock().now(), onEdit, core.view().track, () => mapClock().now());
     popup = core.openPopup({ at: hit.lngLat, content: popupBody, maxWidth: '360px', owner: 'target' });
+    if (props.account_profile_label) {
+      const linkedPopup = popup;
+      state.linkedPopup = linkedPopup;
+      linkedPopup.onClose(() => {
+        if (state.linkedPopup === linkedPopup) state.linkedPopup = null;
+      });
+      return;
+    }
     const [lon, lat] = hit.lngLat;
     void fetchLiveCloud(lat, lon).then((pct) => {
       if (popupBody.isConnected) patchPopupWeather(popupBody, pct, props);

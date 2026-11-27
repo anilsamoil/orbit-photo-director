@@ -22,6 +22,7 @@ export interface TargetPopupProps {
   priority?: number;
   has_pass?: boolean;
   is_personal?: boolean;
+  account_profile_label?: string;
   shot_count?: number;
   category?: string;
   angle_off_nadir_deg?: number;
@@ -84,6 +85,10 @@ export function buildTargetPopupContent(
   nameEl.textContent = props.target_name ?? 'unknown';
   body.appendChild(nameEl);
 
+  if (props.account_profile_label) {
+    addRow('map-popup-row', `From ${props.account_profile_label}`, 'margin-top:2px');
+  }
+
   const paint = categoryPaint(props.category);
   if (paint) {
     addRow(
@@ -120,8 +125,10 @@ export function buildTargetPopupContent(
     );
   }
 
-  const atPass = hasPass && typeof props.cloud_fraction === 'number' ? Math.round(props.cloud_fraction) : null;
-  addRow('map-popup-weather', atPass != null ? `Cloud: at pass ${atPass}%` : 'Cloud: checking now…', 'margin-top:2px');
+  if (!props.account_profile_label) {
+    const atPass = hasPass && typeof props.cloud_fraction === 'number' ? Math.round(props.cloud_fraction) : null;
+    addRow('map-popup-weather', atPass != null ? `Cloud: at pass ${atPass}%` : 'Cloud: checking now…', 'margin-top:2px');
+  }
 
   if (typeof props.shot_count === 'number' && props.shot_count > 0) {
     addRow('map-popup-shot', `✓ shot ${props.shot_count}×`, 'margin-top:4px');

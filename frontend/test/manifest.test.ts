@@ -6,6 +6,7 @@ import {
   fetchManifest,
   resolveArtifactEntry,
 } from '../src/manifest';
+import { NetworkTransportError } from '../src/network-probe';
 import type { Manifest } from '../src/types';
 
 const SAMPLE_MANIFEST: Manifest = {
@@ -25,6 +26,15 @@ const SAMPLE_MANIFEST: Manifest = {
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+function interruptedResponse(): Response {
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      controller.error(new TypeError('Connection lost while reading response body'));
+    },
+  });
+  return new Response(body);
+}
 
 describe('artifactUrl', () => {
   it('returns the version-tagged path', () => {
@@ -66,6 +76,16 @@ describe('fetchManifest', () => {
       vi.fn(async () => new Response('notfound', { status: 404 }))
     );
     await expect(fetchManifest()).rejects.toThrow(/manifest fetch failed/);
+  });
+
+  it('reports an interrupted response body as a transport error', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => interruptedResponse()));
+    await expect(fetchManifest()).rejects.toBeInstanceOf(NetworkTransportError);
+  });
+
+  it('reports malformed JSON as a syntax error', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{')));
+    await expect(fetchManifest()).rejects.toBeInstanceOf(SyntaxError);
   });
 
   it('uses cache:no-cache to force revalidation (no query-string buster)', async () => {
@@ -114,11 +134,18 @@ describe('fetchArtifact', () => {
     await expect(fetchArtifact(SAMPLE_MANIFEST, 'passes')).rejects.toThrow();
   });
 
+  it('reports an interrupted response body as a transport error', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => interruptedResponse()));
+    await expect(fetchArtifact(SAMPLE_MANIFEST, 'passes')).rejects.toBeInstanceOf(NetworkTransportError);
+  });
+
   it('throws when the response body sha256 does not match the manifest', async () => {
     // SAMPLE_MANIFEST declares sha256: 'aaaa…' but the body hash is different.
     const body = JSON.stringify([{ x: 1 }]);
     vi.stubGlobal('fetch', vi.fn(async () => new Response(body, { status: 200 })));
-    await expect(fetchArtifact(SAMPLE_MANIFEST, 'passes')).rejects.toThrow(/sha256 mismatch/);
+    const result = fetchArtifact(SAMPLE_MANIFEST, 'passes');
+    await expect(result).rejects.toThrow(/sha256 mismatch/);
+    await expect(result).rejects.not.toBeInstanceOf(NetworkTransportError);
   });
 
   it('skips verification when the manifest entry has no sha256 (defensive)', async () => {

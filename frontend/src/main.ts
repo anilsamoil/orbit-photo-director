@@ -33,7 +33,7 @@ import { liveIssNow } from './iss';
 import { createPollScheduler, isOnline, type PollScheduler } from './network-status';
 import { DEFAULT_DISTANCE_THRESHOLD_KM, filterPassesByDistance, filterRemovedCurated } from './pass-filter';
 import { emptyQueueHint, EMPTY_HINT_THRESHOLD_MIN } from './empty-hint';
-import { probeConnectivity } from './network-probe';
+import { NetworkTransportError, probeConnectivity } from './network-probe';
 import { buildIcs } from './ics';
 import { shareOrDownloadIcs } from './calendar-share';
 import { clearShotlist, isInShotlist, nextSequence, pruneExpired, shotlistCount, toggleShotlist } from './shotlist';
@@ -42,7 +42,8 @@ import { betaNoticeText, scanBetaForecast } from './beta-angle';
 import { initSunWidget } from './sun';
 import { loadOrCreateProfileFromURL, loadProfile, removePersonalTarget, saveProfile, toggleCuratedRemoved, type Profile } from './profile';
 import { EDIT_TARGET_EVENT, subscribeProfileChanged } from './profile-events';
-import { getAccountProfile, resolveAccountProfile } from './profile-session';
+import { getAccountProfile, invalidateRosterReadScope, resolveAccountProfile } from './profile-session';
+import { bindLinkedRosterPageLifecycle, pollLinkedRosterTargets, setLinkedRosterTargetsOffline } from './profile-roster-targets';
 import { isRosterProfile } from './crew-roster';
 import { mountProfileMenu } from './profile-menu';
 import { deleteProfileTarget, putRemovedCuratedIds } from './profile-api';
@@ -238,6 +239,7 @@ async function maybeFlagExpiredSession(generatedAtIso: string): Promise<boolean>
     return false;
   }
   if (await isAccessSessionExpired()) {
+    invalidateRosterReadScope();
     setAuthBanner(bannerAuthExpired(ageMin));
     return true;
   }
@@ -275,9 +277,11 @@ function isStaleManifest(manifest: Manifest, nowMs: number): boolean {
 }
 
 async function refresh(): Promise<void> {
-  void launchCatalog.refresh(isOnline());
+  const online = isOnline();
+  if (online && !sessionBannerHeld) pollLinkedRosterTargets();
+  void launchCatalog.refresh(online);
   if (refreshInFlight) return refreshInFlight;
-  refreshInFlight = Promise.all([launchStore.refresh(isOnline()), doRefresh()]).then(() => {}).finally(() => {
+  refreshInFlight = Promise.all([launchStore.refresh(online), doRefresh()]).then(() => {}).finally(() => {
     refreshInFlight = null;
   });
   return refreshInFlight;
@@ -345,15 +349,12 @@ async function doRefresh(): Promise<void> {
     // manifest from cache, and iOS reports navigator.onLine===true in Airplane
     // Mode — so a successful fetch of STALE data does NOT prove we're online.
     // When the data is stale, probe the network (cache-busting) to tell which
-    // it is. Fresh data is itself proof of connectivity, so the happy path
-    // skips the probe entirely. NaN generated_at → treat as online (no claim).
-    // NaN generated_at → not-offline ("no claim"). Note this intentionally
-    // diverges from isStaleManifest, which treats NaN as stale=true; a malformed
-    // timestamp is a generator bug, not an offline signal, so we don't claim LOS.
+    // it is. After a known outage, probe even with a recent manifest because
+    // the service worker can still serve that manifest from cache.
     const ageMin = (Date.now() - Date.parse(manifest.generated_at)) / 60_000;
-    currentlyOffline = Number.isFinite(ageMin) && ageMin >= EMPTY_HINT_THRESHOLD_MIN
-      ? !(await probeConnectivity())  // dedicated /__opd_probe path — never SW-cached
-      : false;
+    const needsProbe = currentlyOffline || (Number.isFinite(ageMin) && ageMin >= EMPTY_HINT_THRESHOLD_MIN);
+    const connected = !needsProbe || await probeConnectivity();
+    currentlyOffline = !connected || !isOnline();
 
     // Persist atomically AFTER all artifacts loaded successfully — but ONLY
     // when the manifest version is STRICTLY NEWER than what's on disk AND we're
@@ -461,11 +462,16 @@ async function doRefresh(): Promise<void> {
     });
 
     renderQueue();
+    const accessWasExpired = sessionBannerHeld;
     if (currentlyOffline) {
       // Stale data + failed probe = LOS. Show the "LOS" framing (snapshot-age
       // based, via renderOfflineBanner) rather than blaming the generator.
       renderOfflineBanner();
     } else if (!(await maybeFlagExpiredSession(manifest.generated_at))) {
+      if (!currentlyOffline && isOnline()) {
+        setLinkedRosterTargetsOffline(false);
+        if (accessWasExpired) pollLinkedRosterTargets();
+      }
       // Not an expired Access session, so the ordinary staleness banner is
       // honest. When it IS expired, maybeFlagExpiredSession has already put the
       // tappable sign-in banner up and we must not overwrite it — a "STALE"
@@ -496,9 +502,15 @@ async function doRefresh(): Promise<void> {
       // landing tab from the snapshot instead of leaving it blank.
       renderPendingMapPane();
     } else {
+      if (e instanceof NetworkTransportError) onOffline();
       setBanner(bannerError((e as Error).message));
     }
   }
+}
+
+function onOffline(): void {
+  currentlyOffline = true;
+  setLinkedRosterTargetsOffline(true);
 }
 
 /** Drop passes whose closest_approach has already happened. The generator
@@ -662,6 +674,7 @@ function bootFromSnapshot(): boolean {
  *  When there's no snapshot AND no network, this still renders something
  *  useful instead of leaving the previous banner stuck. */
 function renderOfflineBanner(): void {
+  setLinkedRosterTargetsOffline(true);
   const snap = readSnapshot();
   if (!snap) {
     setBanner(bannerError('offline — no cached data'));
@@ -2051,6 +2064,8 @@ async function init(): Promise<void> {
   }
   bindTabs(!sessionFailed);
   if (sessionFailed) return;
+  window.addEventListener('offline', onOffline);
+  bindLinkedRosterPageLifecycle();
   // Slot 11 — subscribe via the central event bus (in-tab CustomEvent +
   // cross-tab storage event, debounced 150ms). Re-read currentProfile on
   // each fire so the slot 7 distance filter reflects the just-saved
@@ -2105,11 +2120,8 @@ async function init(): Promise<void> {
         currentManifest ? fetchCupolaWindows(currentManifest, '') : Promise.resolve([]),
     });
   }
-  // Hydrate this profile's server-side targets into localStorage on load so
-  // the my-targets map rings (and the Profile list) reflect them without
-  // needing a Profile-tab visit first. Uses the signed-in Google session and
-  // stays retryable until one is set. saveProfile fires 'profile-changed', so
-  // an already-open map picks the rings up. Fire-and-forget.
+  // Load server-side targets for the map and Profile list on boot. Account
+  // profiles hydrate localStorage. Authorized roster links stay in page memory.
   // Dynamic import (boot-slim review 2026-06-11): the static import dragged
   // ~37KB of profile-CRUD machinery (geocode, CSV parse, JSON IO, API) into
   // the boot chunk — 28% of boot JS for a background hydrate that isn't
@@ -2164,7 +2176,6 @@ async function init(): Promise<void> {
   subscribeLaunchSlots(renderQueue);
   await launchStore.restore();
   renderQueue();
-  await refresh();
 
   // Visibility-aware polling: pause while the tab is hidden, fetch
   // immediately on visible-again. Saves ISS bandwidth on tabs nobody is
@@ -2175,6 +2186,7 @@ async function init(): Promise<void> {
     intervalMs: REFRESH_MS,
     onPoll: () => void refresh(),
   });
+  await refresh();
   // Per-second countdown updates without re-fetching the manifest
   stopCountdown();
   countdownTimer = window.setInterval(rerenderCountdowns, COUNTDOWN_TICK_MS);

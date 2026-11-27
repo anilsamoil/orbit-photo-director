@@ -18,6 +18,7 @@ const SATELLITES = 'src/map/features/satellites/index.ts';
 const SATELLITE_LAYERS = 'src/map/features/satellites/layers.ts';
 const ORBIT_LOOKUP = 'src/satellites.ts';
 const TARGETS = 'src/map/features/targets/index.ts';
+const TARGET_POPUP = 'src/map/features/targets/popup.ts';
 const LABELS = 'src/map/features/labels/index.ts';
 const NIGHT_LIGHTS = 'src/map/features/night-lights/layers.ts';
 const GLOBAL_DIM = 'src/map/overlays/global-dim.ts';
@@ -45,6 +46,7 @@ const PIN_FILES = [
   'test/orbit-sight.test.ts',
   'src/map/features/lightning/lightning.test.ts',
   'src/map/features/targets/targets.test.ts',
+  'test/profile-roster-link.test.ts',
   'src/map/features/launch-corridor/launch-corridor.test.ts',
   'test/launch-map-schedule.test.ts',
   'test/launch-hazards.test.ts',
@@ -337,8 +339,32 @@ const MUTATIONS = [
   {
     contract: 'a crew roster site popup has no Edit button',
     file: TARGETS,
-    find: '    const onEdit = props.is_personal && props.target_id && !isRosterProfile(parseProfileFromURL(window.location.href))',
+    find: '    const onEdit = props.is_personal && props.target_id && !isRoster',
     replace: '    const onEdit = props.is_personal && props.target_id',
+  },
+  {
+    contract: 'a linked roster target popup credits the account profile',
+    file: TARGETS,
+    find: '        ...(linkedIds.has(target.id) && { account_profile_label: linked?.label }),',
+    replace: '',
+  },
+  {
+    contract: 'a linked roster popup sends no cloud request',
+    file: TARGETS,
+    find: '      });\n      return;\n    }\n    const [lon, lat] = hit.lngLat;',
+    replace: '      });\n    }\n    const [lon, lat] = hit.lngLat;',
+  },
+  {
+    contract: 'a linked roster popup shows no cloud loading row',
+    file: TARGET_POPUP,
+    find: '  if (!props.account_profile_label) {',
+    replace: '  {',
+  },
+  {
+    contract: 'a stale map hit cannot reopen an unauthorized linked popup',
+    file: TARGETS,
+    find: '      return !isLinkedTarget\n        || linked?.targets.some((target) => target.id === id);',
+    replace: '      return true;',
   },
   {
     contract: 'a scheduled Watch launch remains a map pin without a photography chance',

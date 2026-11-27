@@ -32,6 +32,7 @@ const PROFILE_KEY_PREFIX = 'opd-profile-';
 
 /** The map asks the profile pane to edit one saved target. */
 export const EDIT_TARGET_EVENT = 'opd-edit-target';
+export const ROSTER_READ_SCOPE_INVALIDATED = 'opd-roster-read-scope-invalidated';
 
 export type ProfileChangedHandler = () => void;
 

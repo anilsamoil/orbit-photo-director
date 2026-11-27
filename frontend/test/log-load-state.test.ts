@@ -6,6 +6,7 @@ const identity = vi.hoisted(() => ({ account: { name: 'jessica', displayName: 'J
 vi.mock('../src/profile-session', () => ({
   getAccountProfile: () => identity.account,
   getSignedInAccountProfile: () => identity.account,
+  invalidateRosterReadScope: vi.fn(),
   resolveAccountProfile: async () => identity.account,
 }));
 

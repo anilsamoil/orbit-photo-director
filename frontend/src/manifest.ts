@@ -1,3 +1,4 @@
+import { NetworkTransportError } from './network-probe';
 import type {
   ArtifactEntry,
   CuratedTarget,
@@ -8,6 +9,14 @@ import type {
   Track,
 } from './types';
 
+async function withNetworkTransport<T>(read: () => Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch (cause) {
+    throw new NetworkTransportError(cause);
+  }
+}
+
 /** Fetch manifest.json from the site root and dereference an artifact by logical name. */
 export async function fetchManifest(baseUrl = ''): Promise<Manifest> {
   // No ?cb= buster: `cache: 'no-cache'` already forces revalidation, and a
@@ -15,13 +24,14 @@ export async function fetchManifest(baseUrl = ''): Promise<Manifest> {
   // (Workbox does exact URL matching by default → cached entry never matches
   // a new ?cb= value, so the offline second-line-of-defense never fires).
   const url = `${baseUrl}/manifest.json`;
-  const resp = await fetch(url, { cache: 'no-cache' });
+  const resp = await withNetworkTransport(() => fetch(url, { cache: 'no-cache' }));
   if (!resp.ok) {
     throw new Error(`manifest fetch failed: ${resp.status}`);
   }
   const type = resp.headers.get('content-type') ?? '';
   if (type.includes('text/html')) throw new Error('this address has no shot queue');
-  return (await resp.json()) as Manifest;
+  const text = await withNetworkTransport(() => resp.text());
+  return JSON.parse(text) as Manifest;
 }
 
 /** Type guard: is this an ArtifactEntry (flat) vs a ProfilesBlock (nested)?
@@ -128,7 +138,7 @@ export async function fetchArtifact<T>(
     throw new Error(`manifest has no artifact "${name}"`);
   }
   const url = `${baseUrl}/${entry.path}`;
-  const resp = await fetch(url, { cache: 'force-cache' }); // versioned path → safe to cache long
+  const resp = await withNetworkTransport(() => fetch(url, { cache: 'force-cache' })); // versioned path → safe to cache long
   if (!resp.ok) {
     throw new Error(`artifact ${name} fetch failed: ${resp.status}`);
   }
@@ -146,7 +156,7 @@ export async function fetchArtifact<T>(
   // per-profile variant, so the sha256 we check against is the variant's
   // sha256 — not the canonical's. resolveArtifactEntry already returned
   // the right entry, so the verification is automatic.
-  const buf = await resp.arrayBuffer();
+  const buf = await withNetworkTransport(() => resp.arrayBuffer());
   const expected = entry.sha256;
   if (expected) {
     // SubtleCrypto requires HTTPS / localhost. map.astroanil.dev is HTTPS;

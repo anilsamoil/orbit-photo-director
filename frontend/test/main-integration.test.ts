@@ -16,6 +16,7 @@ import type { Manifest, PassEntry, Track } from '../src/types';
 import { artifact as launchArtifact, assessment, catalog, catalogItem, launch, plannerItem, supported, NOW as LAUNCH_NOW } from './launch-fixtures';
 import { tiersAt } from '../src/launch-tiers';
 import * as profileApi from '../src/profile-api';
+import { createVendorDouble } from './vendor-map-double';
 
 const schedulerStops = vi.hoisted(() => new Set<() => void>());
 const profileStops = vi.hoisted(() => new Set<() => void>());
@@ -43,12 +44,21 @@ vi.mock('../src/profile-api', async () => {
 
 // These orchestration fixtures exercise the legacy cache migration boundary.
 // Account selection and fail-closed boot are tested in account-session.test.ts.
-const session = vi.hoisted(() => ({ account: null as { name: string; displayName: string; isVerified: boolean } | null }));
-vi.mock('../src/profile-session', () => ({
-  getAccountProfile: () => session.account,
-  getSignedInAccountProfile: () => null,
-  resolveAccountProfile: async () => session.account ?? { name: 'anil', displayName: 'Anil', isVerified: true },
+const session = vi.hoisted(() => ({
+  account: null as { name: string; displayName: string; isVerified: boolean } | null,
+  useActual: false,
 }));
+vi.mock('../src/profile-session', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/profile-session')>();
+  return {
+    ...actual,
+    getAccountProfile: () => session.useActual ? actual.getAccountProfile() : session.account,
+    getSignedInAccountProfile: () => session.useActual ? actual.getSignedInAccountProfile() : null,
+    resolveAccountProfile: async () => session.useActual
+      ? actual.resolveAccountProfile()
+      : session.account ?? { name: 'anil', displayName: 'Anil', isVerified: true },
+  };
+});
 
 // Mock the network layer at module boundary so tests control what each
 // fetch resolves with.
@@ -61,6 +71,7 @@ vi.mock('../src/manifest', () => ({
   fetchArtifact: vi.fn(),
   fetchPasses: vi.fn(async () => []),
   fetchStatus: vi.fn(),
+  fetchCuratedTargets: async () => [],
 }));
 
 // Mock tile-precache so refresh() doesn't fire real cross-origin tile
@@ -86,6 +97,7 @@ vi.mock('../src/map', () => ({
   focusLaunchOnMap: vi.fn(),
   clearLaunchOnMap: vi.fn(() => false),
   isLaunchShownOnMap: vi.fn(() => false),
+  refreshMapForManifest: async () => {},
   applyDistanceThreshold: vi.fn(),
   dropLookupPin: vi.fn(),
   getSatelliteTopbarReadouts: vi.fn(() => []),
@@ -183,8 +195,10 @@ let restoreIntervalSpy: (() => void) | undefined;
 
 beforeEach(async () => {
   session.account = null;
+  session.useActual = false;
   document.body.innerHTML = DOM;
   localStorage.clear();
+  sessionStorage.clear();
   vi.resetModules();    // clears module-level state in main.ts (refreshInFlight, currentManifest, etc.)
   vi.resetAllMocks();
   const mapModule = await import('../src/map');
@@ -1457,5 +1471,235 @@ describe('main.ts: expired session banner holds through the countdown', () => {
     const assign = vi.spyOn(window.location, 'assign').mockImplementation(() => {});
     document.getElementById('status-banner')?.click();
     expect(assign).toHaveBeenCalledWith('/api/app');
+  });
+});
+
+it('requires an uncached probe to confirm recovery even when the manifest is fresh', async () => {
+  const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+  const { doRefresh } = await import('../src/main');
+  await doRefresh();
+  online.mockReturnValue(true);
+  vi.mocked(manifestModule.fetchManifest).mockResolvedValue(buildManifest({ generated_at: new Date().toISOString() }));
+  vi.mocked(manifestModule.fetchTop5).mockResolvedValue([]);
+  vi.mocked(manifestModule.fetchTop24h).mockResolvedValue([]);
+  vi.mocked(manifestModule.fetchTrack).mockResolvedValue(buildTrack());
+  const aurora = await import('../src/aurora');
+  vi.mocked(aurora.fetchKpData).mockResolvedValue(null);
+  const probes: string[] = [];
+  let reachable = false;
+  vi.stubGlobal('fetch', async (url: string) => {
+    if (!url.startsWith('/__opd_probe?')) return new Response(null, { status: 404 });
+    probes.push(url);
+    if (!reachable) throw new TypeError('Connection lost');
+    return new Response(null, { status: 204 });
+  });
+
+  await doRefresh();
+  expect(document.getElementById('status-banner')?.textContent).toMatch(/offline/i);
+  expect(probes).toHaveLength(1);
+
+  reachable = true;
+  await doRefresh();
+  expect(document.getElementById('status-banner')?.textContent).toContain('Last updated');
+  expect(probes).toHaveLength(2);
+
+  await doRefresh();
+  expect(probes).toHaveLength(2);
+});
+
+describe('main.ts: online roster link verification', () => {
+  const viewer = { name: 'test-viewer', displayName: 'Fixture viewer' };
+  const linkedPath = '/api/browser/profiles/josh/targets';
+  const linkedId = 'personal:josh:fixture-ridge';
+  const linkedRow = () => document.querySelector(`[data-target-id="${linkedId}"]`);
+  const openProfile = () => document.getElementById('tab-profile')?.click();
+
+  beforeEach(async () => {
+    session.useActual = true;
+    history.replaceState(null, '', '/?u=kutryk');
+    document.querySelector('header')?.insertAdjacentHTML('beforeend', '<button id="tab-profile"></button>');
+    document.getElementById('view')?.insertAdjacentHTML('beforeend', '<div id="profile-body"></div>');
+    vi.mocked(manifestModule.fetchManifest).mockResolvedValue(buildManifest());
+    vi.mocked(manifestModule.fetchTop5).mockResolvedValue([]);
+    vi.mocked(manifestModule.fetchTop24h).mockResolvedValue([]);
+    vi.mocked(manifestModule.fetchTrack).mockResolvedValue(buildTrack());
+    vi.mocked((await import('../src/aurora')).fetchKpData).mockResolvedValue(null);
+  });
+
+  afterEach(() => history.replaceState(null, '', '/'));
+
+  function stubRosterNetwork() {
+    const network = {
+      granted: true, connected: true, manifestStatus: 200, dropManifestBody: false, requests: [] as string[],
+    };
+    vi.stubGlobal('fetch', async (url: string) => {
+      network.requests.push(url);
+      if (!network.connected) throw new TypeError('Failed to fetch');
+      if (url === '/api/browser/session') {
+        const profiles = network.granted ? [viewer, { name: 'josh', displayName: 'Fixture account' }] : [viewer];
+        return Response.json({ ok: true, profile: viewer, profiles });
+      }
+      if (url === linkedPath) {
+        return Response.json({ targets: [{
+          id: linkedId, name: 'Fixture ridge', lat: 12.5, lon: 24.5, priority: 5,
+          createdAt: '2026-11-16T12:00:00Z',
+        }] });
+      }
+      if (url === '/manifest.json') {
+        if (network.manifestStatus !== 200) return new Response(null, { status: network.manifestStatus });
+        if (network.dropManifestBody) {
+          const stream = new ReadableStream({ start: (controller) => controller.error(new TypeError('Failed to fetch')) });
+          return new Response(stream, { headers: { 'Content-Type': 'application/json' } });
+        }
+        return Response.json(buildManifest());
+      }
+      return new Response(null, { status: 204 });
+    });
+    const sessions = () => network.requests.filter((url) => url === '/api/browser/session');
+    const linkedGets = () => network.requests.filter((url) => url === linkedPath);
+    const probes = () => network.requests.filter((url) => url.startsWith('/__opd_probe?'));
+    return { network, sessions, linkedGets, probes };
+  }
+
+  it.each(['503', 'stalled artifact'])('clears revoked linked rows, rings and popup while the public feed has a %s', async (failure) => {
+    const { network, sessions, linkedGets } = stubRosterNetwork();
+    const manifest = await vi.importActual<typeof manifestModule>('../src/manifest');
+    vi.mocked(manifestModule.fetchManifest).mockImplementation(manifest.fetchManifest);
+    let releaseArtifact: (passes: PassEntry[]) => void = () => {};
+    if (failure === '503') network.manifestStatus = 503;
+    else vi.mocked(manifestModule.fetchTop5).mockReturnValue(new Promise((resolve) => { releaseArtifact = resolve; }));
+
+    const { init, refresh, stopCountdown, stopPollScheduler } = await import('../src/main');
+    const rings = await import('../src/map/features/targets');
+    const { createClock } = await import('../src/map/map-core/clock');
+    const { createMapCore } = await import('../src/map/map-core/core');
+    const vendor = createVendorDouble({ layers: [rings.myTargetsLayer()] });
+    const mapClock = createClock();
+    const core = createMapCore(vendor, mapClock);
+    rings.bindTargetsClock(mapClock);
+    rings.targets.mount(core);
+    rings.bindProfileChangedListener();
+    rings.bindTargetInteractions(core);
+    const linkedRing = () => {
+      const source = vendor.sources.get('my-targets');
+      if (source?.type === 'geojson' && typeof source.data !== 'string') {
+        return source.data.features.find((feature) => feature.properties?.target_id === linkedId);
+      }
+    };
+
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(0);
+    const boot = init();
+    try {
+      await vi.waitFor(() => expect(linkedRing()).toBeDefined());
+      openProfile();
+      await vi.waitFor(() => expect(linkedRow()?.textContent).toContain('Fixture ridge'));
+      if (failure === '503') await boot;
+      else expect(manifestModule.fetchTop5).toHaveBeenCalledOnce();
+      const ring = linkedRing();
+      if (!ring) throw new Error('Missing linked target ring');
+      const lngLat: [number, number] = [24.5, 12.5];
+      vendor.queryAt = (_box, layers) => layers.includes('my-targets-layer') ? [ring] : [];
+      vendor.fire('click', { point: core.project(lngLat), lngLat });
+      const popup = vendor.popups.at(-1);
+      expect(popup?.content.textContent).toContain('Fixture ridge');
+      expect(sessions()).toHaveLength(1);
+
+      network.granted = false;
+      clock.mockReturnValue(60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.waitFor(() => expect(linkedRow()).toBeNull());
+      expect(linkedRing()).toBeUndefined();
+      expect(popup?.removed).toBe(true);
+      expect(sessions()).toHaveLength(2);
+      expect(linkedGets()).toHaveLength(1);
+      if (failure === 'stalled artifact') expect(manifestModule.fetchTop5).toHaveBeenCalledOnce();
+
+      void refresh();
+      void refresh();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sessions()).toHaveLength(2);
+    } finally {
+      releaseArtifact([]);
+      await boot;
+      stopPollScheduler();
+      stopCountdown();
+      vi.useRealTimers();
+    }
+  });
+
+  it('rechecks an open Profile on refresh and clears the linked row until a later grant', async () => {
+    const { network, sessions, linkedGets } = stubRosterNetwork();
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(0);
+    const { init, refresh } = await import('../src/main');
+    await init();
+    openProfile();
+    await vi.waitFor(() => expect(linkedRow()?.textContent).toContain('Fixture ridge'));
+    expect(sessions()).toHaveLength(1);
+    expect(linkedGets()).toHaveLength(1);
+
+    network.granted = false;
+    clock.mockReturnValue(60_000);
+    await refresh();
+    await vi.waitFor(() => expect(sessions()).toHaveLength(2));
+    await vi.waitFor(() => expect(linkedRow()).toBeNull());
+
+    openProfile();
+    await refresh();
+    expect(sessions()).toHaveLength(2);
+    expect(linkedGets()).toHaveLength(1);
+
+    clock.mockReturnValue(120_000);
+    await refresh();
+    await vi.waitFor(() => expect(sessions()).toHaveLength(3));
+    expect(linkedRow()).toBeNull();
+    expect(linkedGets()).toHaveLength(1);
+
+    network.granted = true;
+    clock.mockReturnValue(180_000);
+    await refresh();
+    await vi.waitFor(() => expect(linkedRow()?.textContent).toContain('Fixture ridge'));
+    expect(sessions()).toHaveLength(4);
+    expect(linkedGets()).toHaveLength(2);
+
+    const restoredRow = linkedRow();
+    clock.mockReturnValue(240_000);
+    await refresh();
+    await vi.waitFor(() => expect(sessions()).toHaveLength(5));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(linkedRow()).toBe(restoredRow);
+    expect(linkedGets()).toHaveLength(2);
+  });
+
+  it.each(['before headers', 'while reading the body'])('rechecks the cached session once after a cold-start transport failure %s', async (failure) => {
+    const { network, sessions, linkedGets, probes } = stubRosterNetwork();
+    const manifest = await vi.importActual<typeof manifestModule>('../src/manifest');
+    vi.mocked(manifestModule.fetchManifest).mockImplementation(manifest.fetchManifest);
+    sessionStorage.setItem('opd-account-session-v1', JSON.stringify(viewer));
+    network.connected = failure !== 'before headers';
+    network.dropManifestBody = failure === 'while reading the body';
+    const { init, refresh } = await import('../src/main');
+    await init();
+    openProfile();
+    await vi.waitFor(() => expect(document.querySelector('#profile-crud-section')).not.toBeNull());
+    expect(document.getElementById('status-banner')?.textContent).toContain('Failed to fetch');
+    expect(sessions()).toHaveLength(1);
+    expect(linkedRow()).toBeNull();
+    expect(linkedGets()).toHaveLength(0);
+
+    network.connected = true;
+    network.dropManifestBody = false;
+    await Promise.all([refresh(), refresh()]);
+    expect(probes()).toHaveLength(1);
+    expect(document.getElementById('status-banner')?.textContent).toContain('Last updated');
+    await vi.waitFor(() => expect(sessions()).toHaveLength(2));
+    await vi.waitFor(() => expect(linkedGets()).toHaveLength(1));
+    await vi.waitFor(() => expect(linkedRow()?.textContent).toContain('Fixture ridge'));
+    openProfile();
+    await refresh();
+    expect(sessions()).toHaveLength(2);
+    expect(linkedGets()).toHaveLength(1);
+    expect(network.requests.findIndex((url) => url.startsWith('/__opd_probe?')))
+      .toBeLessThan(network.requests.lastIndexOf('/api/browser/session'));
   });
 });
