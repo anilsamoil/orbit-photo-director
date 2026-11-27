@@ -76,6 +76,12 @@ A `GET /manifest.json` 503 after the snapshot is on screen throws in `fetchManif
 
 Recorded after #386 (`c65abb2b431f7d042f226bdd0a5ee3b4a7623caf`).
 
+## Product gap: ISS inset labels from the 2026-11-27 spot check
+
+A read-only look at the ISS plan inset on 2026-11-27, not reproduced in this skill. Brazil's country label is missing while Argentina's renders. Country labels sit on continent labels: Canada over NORTH AMERICA, Nigeria over AFRICA, France over EUROPE, and SOUTH AMERICA is garbled. Pacific and Atlantic are doubled, probably from wrapped world copies. That doubling is low priority. The likely cause is that #264's dedupe compares country with country only. A root-cause repro is queued after W-03. This skill does not edit `track-inset.ts` and does not fetch the public hosts.
+
+Recorded after the 2026-11-27 spot check.
+
 ## P3: a zero-width-only target name is accepted
 
 `validateTarget` uses `name.trim()`. U+200B is not whitespace, so a name that is only U+200B has length 1 after trim and POST and PUT accept it. The client trim does the same. A product test should reject that name. This skill does not edit `worker/src/profiles.ts`.
