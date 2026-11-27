@@ -107,8 +107,7 @@ function removedKey(profileName: string): string {
 }
 
 /** Read the stored target list. R2 miss → []. R2 read error → throws so
- *  caller can return 503. Parse error → throws with context (treat as
- *  corruption; operator will replace via PUT). */
+ *  caller can return 503. Parse errors also propagate. */
 async function readTargets(env: Env, profileName: string): Promise<PersonalTarget[]> {
   const obj = await env.CALIB.get(targetsKey(profileName));
   if (!obj) return [];
@@ -225,6 +224,17 @@ async function handleGetTargets(env: Env, profileName: string): Promise<Response
   });
 }
 
+function sameJsonValue(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (typeof left !== 'object' || left === null || typeof right !== 'object' || right === null) return false;
+  if (Array.isArray(left) !== Array.isArray(right)) return false;
+
+  const leftEntries: [string, unknown][] = Object.entries(left);
+  const rightFields = right as Record<string, unknown>;
+  return leftEntries.length === Object.keys(rightFields).length
+    && leftEntries.every(([key, value]) => Object.hasOwn(rightFields, key) && sameJsonValue(value, rightFields[key]));
+}
+
 async function handlePutTargets(
   request: Request,
   env: Env,
@@ -276,9 +286,9 @@ async function handlePutTargets(
       const legacy = target as Pick<PersonalTarget, 'id' | 'name'>;
       const { id, name } = legacy;
       // Change one character for validation so the original length is still checked.
-      if (validateTarget({ ...legacy, name: `x${name.slice(1)}` }, profileName) === null) {
+      if (name.length > 0 && validateTarget({ ...legacy, name: `x${name.slice(1)}` }, profileName) === null) {
         storedTargets ??= await readTargets(env, profileName);
-        if (storedTargets.some((stored) => stored?.id === id && stored.name === name)) continue;
+        if (storedTargets.some((stored) => stored?.id === id && sameJsonValue(stored, legacy))) continue;
       }
     }
     if (error) errors.push({ index: i, error });
@@ -286,18 +296,28 @@ async function handlePutTargets(
   if (errors.length > 0) {
     return jsonResponse({ error: 'invalid_targets', errors }, 400);
   }
+  const incoming: PersonalTarget[] = targets;
+  const incomingIds = new Set(incoming.map((target) => target.id));
+  storedTargets ??= await readTargets(env, profileName);
+  const preserved = storedTargets.filter((stored) =>
+    validateTarget(stored, profileName) === 'name_empty' && stored.name.length > 0 && !incomingIds.has(stored.id),
+  );
+  const finalTargets = [...incoming, ...preserved];
+  if (finalTargets.length > MAX_TARGETS_PER_PROFILE) {
+    return jsonResponse({ error: 'too_many_targets', max: MAX_TARGETS_PER_PROFILE }, 400);
+  }
   // Validate duplicate ids — keeps the daemon's downstream union(curated,
   // additions) walk well-defined.
   const seen = new Set<string>();
-  for (const t of targets as PersonalTarget[]) {
+  for (const t of finalTargets) {
     if (seen.has(t.id)) {
       return jsonResponse({ error: 'duplicate_id', id: t.id }, 400);
     }
     seen.add(t.id);
   }
   if (removed) await writeRemoved(env, profileName, removed);
-  await writeTargets(env, profileName, targets as PersonalTarget[]);
-  return jsonResponse({ ok: true, count: targets.length });
+  await writeTargets(env, profileName, finalTargets);
+  return jsonResponse({ ok: true, count: finalTargets.length });
 }
 
 async function handlePostTarget(
