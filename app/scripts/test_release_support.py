@@ -1,12 +1,14 @@
+from base64 import b64encode
 from contextlib import redirect_stdout
 import importlib.util
 import io
 import json
 from pathlib import Path
 import plistlib
+from subprocess import CompletedProcess
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 from zipfile import ZIP_DEFLATED, ZipFile
 
 SPEC = importlib.util.spec_from_file_location(
@@ -71,7 +73,7 @@ class ReleaseSupportTests(unittest.TestCase):
                 "testFlightInternalTestingOnly": True,
             })
 
-    def test_redaction_only_writes_the_filtered_log(self):
+    def test_summary_keeps_only_redacted_diagnostics_markers_and_outcome(self):
         source = self.root / "raw.log"
         output = self.root / "safe.log"
         auth = self.root / "work" / "AuthKey"
@@ -81,22 +83,88 @@ class ReleaseSupportTests(unittest.TestCase):
             "APP_STORE_CONNECT_ISSUER_ID": "FIXTURE_ISSUER_IDENTIFIER",
             "APP_STORE_CONNECT_PRIVATE_KEY": "FIXTURE_KEY_BYTES\nFIXTURE_NEXT_LINE",
         }
-        source.write_text(
-            f"{auth} alternate/AuthKey_fixture\n"
-            + "\n".join(env.values())
-            + "\nfixture@example.invalid\n"
-            + " Signing Identity: Apple Development: fixture identity\n"
-            + "** ARCHIVE SUCCEEDED **\n"
-        )
-        support.redact_log(source, output, auth, env)
+        encoded = b64encode(b"synthetic credential data").decode("ascii")
+        uuid = "01234567-89ab-cdef-0123-456789abcdef"
+        source.write_text("\n".join([
+            f"credential: {encoded}",
+            "Build phase detail",
+            f'warning: could not read "{auth}" or alternate/AuthKey_fixture',
+            f'/Users/fixture-account/project/file.swift: error: No profiles for {support.BUNDLE_ID}',
+            'warning: Your team "FIXTURE_TEAM_NAME" has no devices',
+            "warning: Your team 'FIXTURE_TEAM_NAME' has no devices",
+            'warning: configuration at "/home/fixture-account/path with spaces/settings"',
+            'warning: configuration at "~/path with spaces/settings"',
+            'warning: configuration at “/Users/fixture-account/path with spaces/settings”',
+            'warning: configuration at /Users/fixture-account/path with spaces/settings',
+            f"error: fixture@example.invalid {uuid} 01234567-89abcdef01234567",
+            *[f"error: rejected {value}" for secret in env.values() for value in secret.splitlines()],
+            *[f"error: {identity}: FIXTURE_CERTIFICATE (TEAMID0000) was rejected" for identity in (
+                "Apple", "Apple Development", "Apple Distribution", "Apple Distribution Managed",
+            )],
+            "error: Could not load Apple Distribution: FIXTURE_CERTIFICATE",
+            "** ARCHIVE FAILED **",
+        ]))
+        support.redact_log(source, output, auth, "archive", 65, env)
         filtered = output.read_text()
-        for forbidden in (str(auth), "AuthKey", "FIXTURE", "TEAMID0000", "@", "fixture identity"):
+        for forbidden in (
+            str(auth), "AuthKey", "FIXTURE", "TEAMID0000", "@", uuid, "01234567-89abcdef01234567",
+            "fixture-account", "path with spaces", encoded, "credential:", "Build phase detail",
+        ):
             self.assertNotIn(forbidden, filtered)
-        self.assertIn("ARCHIVE SUCCEEDED", filtered)
+        self.assertTrue(filtered.startswith("Xcode archive: failed (exit 65)\n"))
+        self.assertIn(f"error: No profiles for {support.BUNDLE_ID}", filtered)
+        self.assertEqual(filtered.count("warning: Your team [redacted] has no devices"), 2)
+        self.assertEqual(filtered.count("Apple Distribution: [redacted] was rejected"), 4)
+        self.assertIn("error: Could not load Apple Distribution: [redacted]", filtered)
+        self.assertIn("** ARCHIVE FAILED **", filtered)
+
+    def test_summary_refuses_private_key_marker_even_on_discarded_line(self):
+        source = self.root / "raw.log"
         source.write_bytes(support.PRIVATE_MARKER)
         with self.assertRaisesRegex(support.ReleaseError, "marker found"):
-            support.redact_log(source, self.root / "refused.log", auth, env)
+            support.redact_log(source, self.root / "refused.log", self.root / "key", "archive", 0, {})
         self.assertFalse((self.root / "refused.log").exists())
+
+    def test_entitlements_request_codesign_xml(self):
+        app = self.root / "App.app"
+        command = ("codesign", "-d", "--entitlements", "-", "--xml", app)
+        entitlements = {"com.apple.developer.team-identifier": "TEAMID0000"}
+        with patch.object(support.subprocess, "run", return_value=CompletedProcess(
+            command, 0, stdout=plistlib.dumps(entitlements), stderr=b"fixture diagnostic",
+        )) as run:
+            self.assertEqual(support.read_entitlements(app), entitlements)
+        run.assert_called_once_with(command, input=None, capture_output=True, check=False)
+
+    def test_entitlements_fall_back_to_checked_der_conversion(self):
+        app = self.root / "App.app"
+        xml = ("codesign", "-d", "--entitlements", "-", "--xml", app)
+        der = ("codesign", "-d", "--entitlements", "-", "--der", app)
+        derq = ("derq", "query", "--xml")
+        encoded = b"fixture DER"
+        entitlements = {"com.apple.developer.team-identifier": "TEAMID0000"}
+        for status, data in ((1, b"unsupported option"), (0, b"[Dict]"), (0, b"")):
+            with self.subTest(xml_status=status, xml_shape=data), patch.object(
+                support.subprocess, "run", side_effect=[
+                    CompletedProcess(xml, status, stdout=data),
+                    CompletedProcess(der, 0, stdout=encoded),
+                    CompletedProcess(derq, 0, stdout=plistlib.dumps(entitlements)),
+                ],
+            ) as run:
+                self.assertEqual(support.read_entitlements(app), entitlements)
+                self.assertEqual(run.call_args_list, [
+                    call(xml, input=None, capture_output=True, check=False),
+                    call(der, input=None, capture_output=True, check=False),
+                    call(derq, input=encoded, capture_output=True, check=False),
+                ])
+
+    def test_entitlements_reject_nonzero_der_and_converter_statuses(self):
+        for statuses, failing_tool in (((1, 1), "codesign"), ((1, 0, 1), "derq")):
+            with self.subTest(tool=failing_tool), patch.object(support.subprocess, "run", side_effect=[
+                CompletedProcess((), status, stdout=plistlib.dumps({})) for status in statuses
+            ]) as run:
+                with self.assertRaisesRegex(support.ReleaseError, f"{failing_tool} failed"):
+                    support.read_entitlements(self.root / "App.app")
+                self.assertEqual(run.call_count, len(statuses))
 
     def test_scans_uncompressed_data_inside_an_ipa(self):
         ipa = self.root / "fixture.ipa"
@@ -108,7 +176,7 @@ class ReleaseSupportTests(unittest.TestCase):
         with self.assertRaisesRegex(support.ReleaseError, "marker found"):
             support.scan_artifacts([ipa])
 
-    def test_signing_verification_reports_no_identifiers(self):
+    def test_signing_verification_reports_only_public_fields(self):
         team = "TEAMID0000"
         bundle = support.BUNDLE_ID
         app = self.root / "App.app"
@@ -121,26 +189,37 @@ class ReleaseSupportTests(unittest.TestCase):
             "CFBundleShortVersionString": "1.0",
             "ITSAppUsesNonExemptEncryption": False,
         }))
-        entitlements = {
-            "application-identifier": f"{team}.{bundle}",
-            "com.apple.developer.team-identifier": team,
-        }
-        profile = {
-            "TeamIdentifier": [team],
-            "ApplicationIdentifierPrefix": [team],
-            "Entitlements": entitlements,
-        }
-        signature = f"Identifier={bundle}\nTeamIdentifier={team}\nAuthority=Apple Distribution: fixture identity\n"
-        results = [b"", signature.encode(), plistlib.dumps(entitlements), plistlib.dumps(profile)]
-        with (
-            patch.dict("os.environ", TEAM_ID=team),
-            patch.object(support, "run_silently", side_effect=results),
-            redirect_stdout(io.StringIO()) as log,
+        for phase, identity, profile_type in (
+            ("archive", "Apple Development", "Development"),
+            ("export", "Apple Distribution", "App Store"),
         ):
-            support.verify_signing(app, "1.2.4", "export")
-        self.assertIn("Apple Distribution, App Store profile", log.getvalue())
-        self.assertNotIn(team, log.getvalue())
-        self.assertNotIn("fixture identity", log.getvalue())
+            entitlements = {
+                "application-identifier": f"{team}.{bundle}",
+                "com.apple.developer.team-identifier": team,
+            }
+            profile = {
+                "TeamIdentifier": [team],
+                "ApplicationIdentifierPrefix": [team],
+                "Entitlements": entitlements,
+            }
+            if phase == "archive":
+                entitlements["get-task-allow"] = True
+                profile["ProvisionedDevices"] = ["FIXTURE_DEVICE_IDENTIFIER"]
+            signature = f"Identifier={bundle}\nTeamIdentifier={team}\nAuthority={identity}: fixture identity\n"
+            results = [b"", signature.encode(), plistlib.dumps(entitlements), plistlib.dumps(profile)]
+            with (
+                self.subTest(phase=phase),
+                patch.dict("os.environ", TEAM_ID=team),
+                patch.object(support, "run_silently", side_effect=results),
+                redirect_stdout(io.StringIO()) as log,
+            ):
+                support.verify_signing(app, "1.2.4", phase)
+                self.assertEqual(log.getvalue().splitlines(), [
+                    f"Build 1.2.4 · {bundle}",
+                    f"Verified {phase} signature · {identity}, {profile_type} profile",
+                    f"Team ID: {team}",
+                    f"Entitlement keys: {', '.join(sorted(entitlements))}",
+                ])
 
 
 if __name__ == "__main__":

@@ -31,11 +31,12 @@ def passing_evidence():
     projected = {"projection": projection, "runtime": {"projection": projection, "shaderVariant": "globe", "transition": 1}}
     pose = {
         **projected, "appliedPose": True, "verticalFovDeg": 81.20259, "pitchDeg": 30, "analyticPitchDeg": 30,
-        "maxPitchDeg": 90, "radiusErrorM": 0, "subpointErrorDeg": 0, "earthFraction": 1, "limbErrorDeg": 0,
+        "maxPitchDeg": 90, "radiusErrorM": 0, "subpointErrorDeg": 0, "earthFraction": 1,
+        "applied": {"zoom": 10, "roll": -180}, "expectedZoom": 10,
     }
     geometry = {
-        "horizon": {**pose, "preset": "horizon"},
-        "nadir": {**pose, "preset": "nadir"},
+        "horizon": {**pose, "preset": "horizon", "limbErrorDeg": -0.999},
+        "nadir": {**pose, "preset": "nadir", "limbErrorDeg": None},
         "zoom12": {**projected, "applied": {"zoom": 12}, "tilePixels": 24},
         "checks": [{"name": name, "pass": True} for name in (
             "projection", "field of view", "pitch clamp", "camera radius", "sub-point", "limb", "nadir filled",
@@ -71,7 +72,7 @@ def passing_evidence():
         4: map_pixels,
         5: {**iss_pixels, "geometry": geometry},
         6: {"verbs": receipts},
-        7: {"count": 100, "elapsedMs": 1000, "tilesPerSecond": 100, "bytesPerTile": 64, "witnessedPaths": 100,
+        7: {"count": 100, "elapsedMs": 2000, "tilesPerSecond": 50, "bytesPerTile": 64, "witnessedPaths": 100,
             "observedPaths": [f"/__g1/tiles/{index}.png" for index in range(100)],
             "route": "/__g1/tiles/<index>.png", "cache": "no-store"},
         8: {"before": before, "after": after, "beforeLaunchId": "first-app", "afterLaunchId": "second-app",
@@ -182,6 +183,33 @@ class HostProofExportTests(unittest.TestCase):
         self.assertEqual(report["evidenceExportErrors"], [])
         self.assertEqual(report["selectedChecks"], list(range(1, 11)))
         self.assertEqual([row["status"] for row in report["results"]], ["pass"] * 10)
+
+    def test_passing_geometry_flags_cannot_override_measured_limits(self):
+        for preset, key, value, expected in (
+            ("horizon", "limbErrorDeg", 90, "horizon limb error below 1 degree"),
+            ("horizon", "limbErrorDeg", -1, "horizon limb error below 1 degree"),
+            ("horizon", "limbErrorDeg", 1, "horizon limb error below 1 degree"),
+            ("horizon", "verticalFovDeg", 80, "field of view"),
+            ("nadir", "pitchDeg", 30.5, "pitch"),
+            ("nadir", "maxPitchDeg", 89, "pitch"),
+            ("horizon", "radiusErrorM", -2000, "radius error"),
+            ("horizon", "applied", {"zoom": 2, "roll": 180}, "applied zoom or roll"),
+            ("nadir", "applied", {"zoom": 10, "roll": 0}, "applied zoom or roll"),
+            ("nadir", "subpointErrorDeg", 0.05, "sub-point error"),
+            ("nadir", "earthFraction", 0.98, "nadir Earth coverage"),
+        ):
+            with self.subTest(preset=preset, key=key, value=value):
+                evidence = passing_evidence()[5]
+                evidence["geometry"][preset][key] = value
+                process, report, table = self.export(
+                    "success", {"G1-iss": fixture_png(ISS_MARKER)}, checks="5",
+                    performed_checks=(5,), evidence_overrides={5: evidence},
+                )
+                row = report["results"][4]
+                self.assertEqual((process.returncode, row["status"]), (1, "fail"), process.stderr)
+                self.assertIn(expected, row["evidence"]["evidenceError"])
+                self.assertIn("| 5 | ISS pixels and vertical-perspective geometry | fail |", table)
+                self.assertIn(expected, table)
 
     def test_full_mode_still_requires_egress_and_stress_evidence(self):
         process, report, table = self.export(
@@ -344,6 +372,38 @@ class HostProofExportTests(unittest.TestCase):
         self.assertEqual([report["results"][index]["status"] for index in (6, 7)], ["fail", "fail"])
         self.assertIn("per-path native tile observations", table)
         self.assertIn("distinct WebView documents", table)
+
+    def test_tile_benchmark_requires_exact_count_and_minimum_rate(self):
+        for count, elapsed, rate in ((101, 1000, 101), (100, 2500, 40), (100, 2000.000001, 50)):
+            with self.subTest(count=count, rate=rate):
+                evidence = passing_evidence()[7]
+                evidence.update(count=count, elapsedMs=elapsed, tilesPerSecond=rate, witnessedPaths=count,
+                                observedPaths=[f"/__g1/tiles/{index}.png" for index in range(count)])
+                process, report, table = self.export(
+                    "success", {}, checks="7", performed_checks=(7,), evidence_overrides={7: evidence},
+                )
+                self.assertEqual((process.returncode, report["results"][6]["status"]), (1, "fail"), process.stderr)
+                self.assertIn("| 7 | Bundled tiles at 50 tiles per second | fail |", table)
+
+    def test_stress_requires_full_duration_for_each_renderer_and_memory_trace(self):
+        short_renderer = passing_evidence()[10]
+        short_renderer["sessions"][0]["elapsedMs"] = 299_999
+        short_renderer["sessions"][1]["elapsedMs"] = 300_001
+        short_trace = passing_evidence()[10]
+        short_trace["memory"]["observedDurationMs"] = 599_999
+        for evidence, expected in (
+            (short_renderer, "missing verified full-duration raster frames for map"),
+            (short_trace, "missing full-duration stress or WebContent peak RSS evidence"),
+        ):
+            with self.subTest(expected=expected):
+                process, report, table = self.export(
+                    "success", {}, checks="10", performed_checks=(10,), evidence_overrides={10: evidence},
+                )
+                row = report["results"][9]
+                self.assertEqual((process.returncode, row["status"]), (1, "fail"), process.stderr)
+                self.assertIn(expected, row["evidence"]["evidenceError"])
+                self.assertIn("| 10 | Scripted pan and zoom, peak memory | fail |", table)
+                self.assertIn(expected, table)
 
     def test_stress_duration_and_rss_without_regular_raster_frames_does_not_pass(self):
         stress = passing_evidence()[10]

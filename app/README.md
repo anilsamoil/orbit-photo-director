@@ -62,7 +62,7 @@ The unsigned workflow builds `HostProof` with `CODE_SIGNING_ALLOWED=NO`. Hosted 
 
 ### W-03 signed proof archive
 
-Open **Actions → iOS release → Run workflow** on `main`, enter the Apple Developer Team ID as `team_id`, and approve the `ios-release` deployment. The workflow builds and tests the proof assets in an unprivileged job. The signing job verifies the asset manifest and the archive's signing and SDK privacy evidence before TestFlight upload. The owner assigns the processed build to the internal TestFlight group. [Release workflow](../.github/workflows/ios-release.yml) · [Ground checklist](../docs/ios/W-03-GROUND-CHECKLIST.md)
+After confirming the ground device is registered for G0, open **Actions → iOS release → Run workflow** on `main`, enter the Apple Developer Team ID as `team_id`, and approve the `ios-release` deployment. The workflow builds and tests the proof assets in an unprivileged job. The signing job verifies the asset manifest, archive signing and SDK privacy before TestFlight upload. Its Actions artifact contains redacted release evidence. The archive and IPA stay on the runner. The owner assigns the processed build to the internal TestFlight group. [Release workflow](../.github/workflows/ios-release.yml) · [Ground checklist](../docs/ios/W-03-GROUND-CHECKLIST.md)
 
 ## SDK inventory
 

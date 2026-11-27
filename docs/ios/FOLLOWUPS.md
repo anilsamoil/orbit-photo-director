@@ -15,3 +15,7 @@ Astra round 3 raised these findings during W-02.
 **Fixed in W-03.** HostProof uses a dedicated persistent `WKWebsiteDataStore` with a stable UUID. Runtime verification still needs a disposable simulator or device. Write a distinct `localStorage` value in each build and switch builds in place. Verify each build can read only its own value and that the proof value survives a proof relaunch.
 
 **Automatic Screen Capture in the hosted test plan.** Review the implicit capture setting for the hosted `HostProof` XCTest run in `ios.yml`. W-03 leaves that setting for a later change.
+
+## W-03 signed host proof
+
+**Ground proof loses earlier evidence on exit or retry.** Exit SNAP during checks 1–7 and reopen it, or retry a blocked recovery or stress check. The ground controller loses the completed rows on exit and clears earlier evidence on retry. Persist each completed row and allow the tester to retry the blocked stage directly. [`HostProofGround.swift:132`](../../app/ios/App/App/HostProofGround.swift#L132)

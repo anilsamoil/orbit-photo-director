@@ -138,6 +138,44 @@ class ArchivePrivacyTests(unittest.TestCase):
                 self.assertEqual(result, 1)
                 self.assertIn(message, evidence)
 
+    def test_documented_api_reasons_pass(self):
+        declarations = {
+            "FileTimestamp": ["DDA9.1", "C617.1", "3B52.1", "0A2A.1"],
+            "SystemBootTime": ["35F9.1", "8FFB.1", "3D61.1"],
+            "DiskSpace": ["85F4.1", "E174.1", "7D9E.1", "B728.1"],
+            "ActiveKeyboards": ["3EC4.1", "54BD.1"],
+            "UserDefaults": ["CA92.1", "1C8F.1", "C56D.1", "AC6B.1"],
+        }
+        write_plist(self.app / privacy.MANIFEST, {
+            **EMPTY_MANIFEST, "NSPrivacyAccessedAPITypes": [
+                {
+                    "NSPrivacyAccessedAPIType": f"NSPrivacyAccessedAPICategory{category}",
+                    "NSPrivacyAccessedAPITypeReasons": reasons,
+                }
+                for category, reasons in declarations.items()
+            ],
+        })
+        result, evidence = self.run_check()
+        self.assertEqual(result, 0, evidence)
+        self.assertIn("Host app manifest verified", evidence)
+
+    def test_unsupported_api_categories_and_reasons_fail(self):
+        for category, reasons in (
+            ("Invented", ["CA92.1"]),
+            ("UserDefaults", ["FFFF.9"]),
+            ("UserDefaults", ["CA92.1", "DDA9.1"]),
+        ):
+            with self.subTest(category=category, reasons=reasons):
+                write_plist(self.app / privacy.MANIFEST, {
+                    **EMPTY_MANIFEST, "NSPrivacyAccessedAPITypes": [{
+                        "NSPrivacyAccessedAPIType": f"NSPrivacyAccessedAPICategory{category}",
+                        "NSPrivacyAccessedAPITypeReasons": reasons,
+                    }],
+                })
+                result, evidence = self.run_check()
+                self.assertEqual(result, 1, evidence)
+                self.assertIn("Invalid required-reason API declaration for host app", evidence)
+
     def test_bad_signature_fails_without_exposing_tool_output(self):
         self.bad_signature = "Cordova.xcframework"
         result, evidence = self.run_check()

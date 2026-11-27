@@ -80,6 +80,10 @@ All three signed app runs include the CryptoKit digest comparison (1), Capacitor
 
 ## W-03 ground-device proof
 
+Before dispatch, verify that the ground device is registered in the Apple Developer account for G0. Automatic archive signing can create a development provisioning profile before the Apple Distribution export. [Owner steps](OWNER_STEPS.md#4-a-ground-tester)
+
 In GitHub Actions, open **iOS release → Run workflow** on `main` and enter the Apple Developer Team ID as `team_id`. Approve the `ios-release` deployment. When Apple finishes processing, assign the build to the internal TestFlight group in App Store Connect. [Release workflow](../../.github/workflows/ios-release.yml)
+
+Get the signed build from TestFlight. The signed job publishes a `snap-release-evidence` artifact with redacted phase summaries, signing facts and the SDK privacy check result. The archive and IPA stay on the runner.
 
 Use the in-app controls to run and export the proof on each signed app target. Follow the ground checklist for exit and relaunch, WebContent recovery, the ten-minute memory trace and Safari on iPad. Record the build, delivery channel or browser version, device model, OS version and check results here. [Ground checklist](W-03-GROUND-CHECKLIST.md) · [W-03 work package](WORK_PLAN.md#w-03-signed-host-proof-on-a-ground-device-s)

@@ -58,12 +58,24 @@ def environment_name(job):
     return value.get("name") if isinstance(value, dict) else value
 
 
+def contains_reserved_name(text):
+    return SECRET in text.upper() or ENVIRONMENT in text.lower()
+
+
 def check(directory):
     errors = []
     for path in sorted(directory.iterdir()):
         if path.suffix in (".yaml", ".yml") and path.name != RELEASE:
-            text = path.read_text(encoding="utf-8")
-            if SECRET in text.upper() or ENVIRONMENT in text.lower():
+            try:
+                text = path.read_text(encoding="utf-8")
+                scalars = [
+                    event.value for event in yaml.parse(text, Loader=yaml.BaseLoader)
+                    if isinstance(event, yaml.ScalarEvent)
+                ]
+            except (OSError, ValueError, yaml.YAMLError):
+                errors.append(f"{path.name}: invalid workflow YAML")
+                continue
+            if contains_reserved_name(text) or any(contains_reserved_name(value) for value in scalars):
                 errors.append(f"{path.name}: contains a reserved signing name")
 
     try:

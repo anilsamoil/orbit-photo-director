@@ -127,14 +127,35 @@ def validate_geometry(geometry):
         raise ValueError("Check 5 is missing ISS zoom 12 raster evidence")
     for name in ("horizon", "nadir"):
         sample = geometry[name]
+        applied = object_field(sample, "applied")
         measures = ("verticalFovDeg", "pitchDeg", "analyticPitchDeg", "maxPitchDeg",
-                    "radiusErrorM", "subpointErrorDeg", "earthFraction")
+                    "radiusErrorM", "subpointErrorDeg", "earthFraction", "expectedZoom")
         if (
             sample.get("preset") != name or sample.get("appliedPose") is not True
             or not all(finite_number(sample.get(key)) for key in measures)
-            or (name == "horizon" and not finite_number(sample.get("limbErrorDeg")))
         ):
             raise ValueError(f"Check 5 is missing measured ISS camera pose for {name}")
+        zoom = applied.get("zoom")
+        roll = applied.get("roll")
+        if (
+            not finite_number(zoom) or abs(zoom - sample["expectedZoom"]) >= 0.001
+            or not finite_number(roll) or abs((roll % 360) - 180) >= 0.01
+        ):
+            raise ValueError(f"Check 5 applied zoom or roll is outside tolerance for {name}")
+        if abs(sample["verticalFovDeg"] - 81.20259) >= 0.02:
+            raise ValueError(f"Check 5 field of view is outside tolerance for {name}")
+        if abs(sample["pitchDeg"] - sample["analyticPitchDeg"]) >= 0.5 or sample["maxPitchDeg"] < 90:
+            raise ValueError(f"Check 5 pitch is outside tolerance for {name}")
+        if abs(sample["radiusErrorM"]) >= 2_000:
+            raise ValueError(f"Check 5 camera radius error is outside tolerance for {name}")
+        if not 0 <= sample["subpointErrorDeg"] < 0.05:
+            raise ValueError(f"Check 5 sub-point error is outside tolerance for {name}")
+
+    limb_error = geometry["horizon"].get("limbErrorDeg")
+    if not finite_number(limb_error) or abs(limb_error) >= 1:
+        raise ValueError("Check 5 requires a measured horizon limb error below 1 degree")
+    if not 0.98 < geometry["nadir"]["earthFraction"] <= 1:
+        raise ValueError("Check 5 requires nadir Earth coverage above 98%")
 
 
 def validate_bridge(evidence):
@@ -164,16 +185,16 @@ def validate_tile_routes(evidence):
     rate = evidence.get("tilesPerSecond")
     paths = evidence.get("observedPaths")
     if (
-        not integer_at_least(count, 100)
+        type(count) is not int or count != 100
         or not isinstance(paths, list) or len(paths) != count
         or paths != [f"/__g1/tiles/{index}.png" for index in range(count)]
         or not integer_at_least(evidence.get("witnessedPaths"), count) or evidence["witnessedPaths"] != count
         or not integer_at_least(evidence.get("bytesPerTile"), 1)
         or evidence.get("route") != "/__g1/tiles/<index>.png" or evidence.get("cache") != "no-store"
-        or not finite_number(elapsed) or elapsed <= 0
+        or not finite_number(elapsed) or not 0 < elapsed <= count * 1000 / 50
         or not finite_number(rate) or rate < 50 or not math.isclose(rate * elapsed, count * 1000)
     ):
-        raise ValueError("Check 7 is missing per-path native tile observations or 50 tiles/s throughput")
+        raise ValueError("Check 7 requires 100 per-path native tile observations and at least 50 tiles/s throughput")
 
 
 def validate_lifecycle(number, evidence):

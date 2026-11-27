@@ -39,6 +39,21 @@ class WorkflowGuardTests(unittest.TestCase):
                 (self.root / "other.yaml").write_text(text, encoding="utf-8")
                 self.assertIn("contains a reserved signing name", self.validate()[0])
 
+    def test_rejects_decoded_signing_names_in_other_workflows(self):
+        for text in (
+            r'env: {"\x41PP_STORE_CONNECT_KEY_ID": fixture}',
+            r'env: {FIXTURE: "\x41PP_STORE_CONNECT_KEY_ID"}',
+            'jobs:\n  deploy:\n    environment:\n      name: "ios-\\\n        release"\n',
+            "jobs:\n  deploy:\n    environment: >-\n      ios-release\n",
+        ):
+            with self.subTest(text=text):
+                (self.root / "other.yaml").write_text(text, encoding="utf-8")
+                self.assertIn("other.yaml: contains a reserved signing name", self.validate())
+
+    def test_rejects_invalid_yaml_in_other_workflows(self):
+        (self.root / "other.yml").write_text("env: [fixture\n", encoding="utf-8")
+        self.assertIn("other.yml: invalid workflow YAML", self.validate())
+
     def test_rejects_other_events(self):
         for event in ("push", "pull_request", "pull_request_target", "workflow_run"):
             with self.subTest(event=event):

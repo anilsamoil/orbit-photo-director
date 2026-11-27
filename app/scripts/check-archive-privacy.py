@@ -22,6 +22,13 @@ VENDOR_REQUIREMENT = (
     'and certificate leaf[subject.OU] = "9YN2HU59K8"'
 )
 MANIFEST = "PrivacyInfo.xcprivacy"
+APPROVED_API_REASONS = {
+    "NSPrivacyAccessedAPICategoryFileTimestamp": {"DDA9.1", "C617.1", "3B52.1", "0A2A.1"},
+    "NSPrivacyAccessedAPICategorySystemBootTime": {"35F9.1", "8FFB.1", "3D61.1"},
+    "NSPrivacyAccessedAPICategoryDiskSpace": {"85F4.1", "E174.1", "7D9E.1", "B728.1"},
+    "NSPrivacyAccessedAPICategoryActiveKeyboards": {"3EC4.1", "54BD.1"},
+    "NSPrivacyAccessedAPICategoryUserDefaults": {"CA92.1", "1C8F.1", "C56D.1", "AC6B.1"},
+}
 
 
 def read_plist(path, description):
@@ -65,10 +72,9 @@ def validate_manifest(path, description):
         category = record.get("NSPrivacyAccessedAPIType")
         reasons = record.get("NSPrivacyAccessedAPITypeReasons")
         if (
-            not isinstance(category, str) or not category.startswith("NSPrivacyAccessedAPICategory")
+            not isinstance(category, str) or category not in APPROVED_API_REASONS
             or not isinstance(reasons, list) or not reasons
-            or not all(isinstance(reason, str) and re.fullmatch(r"[0-9A-F]{4}\.[1-9][0-9]*", reason)
-                       for reason in reasons)
+            or not all(isinstance(reason, str) and reason in APPROVED_API_REASONS[category] for reason in reasons)
         ):
             raise ValueError(f"Invalid required-reason API declaration for {description}")
     return manifest

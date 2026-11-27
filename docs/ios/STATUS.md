@@ -4,7 +4,7 @@ Kept by the organizer. Short enough to read on a phone.
 
 Last updated: 2026-11-27
 
-- **G0 signing prerequisites met.** The developer membership is active, the app record exists, and the three signing secrets were verified in `ios-release` at 17:20 UTC on 2026-11-26.
+- **G0 device registration unverified.** The developer membership is active, the app record exists, and the three signing secrets were verified in `ios-release` at 17:20 UTC on 2026-11-26. Confirm at least one ground device is registered before dispatch. [Owner steps](OWNER_STEPS.md#4-a-ground-tester)
 - **G1 on-device gate OPEN.** Checks 2–5, 9 and 10 and iPad check 7 still need on-device proof before W-03 is complete. [Required device and Safari runs](G1-HOST-PROOF.md#on-device-proof-required)
 - **Done:** W-01 merged as #381 (`26746c9`). iOS run 45870433702 passed OPDKit and both iOS 26.5 launches on iPad Pro 11-inch (M5) and iPhone 17 Pro. Both xcresults show Success and both SNAP-launch screenshots were checked. [W-01 verification](W-01-VERIFICATION.md)
 - **W-02 merged** as #383 (`cb0bbd2`). Scoped hosted run 45896800677 passed checks 1, 6 and 8 on both simulators and check 7 on iPhone. Each leg marked its remaining checks “not-run (on-device required)”. [Run 45896800677](https://github.com/anilsamoil/orbit-photo-director/actions/runs/45896800677) · [G1 checks](G1-HOST-PROOF.md#checks)

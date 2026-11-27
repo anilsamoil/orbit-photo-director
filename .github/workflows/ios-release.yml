@@ -70,7 +70,7 @@ jobs:
           path: ${{ runner.temp }}/snap-proof-web
           include-hidden-files: true
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
 
   sign:
     name: Sign and upload SNAP HostProof
@@ -97,8 +97,7 @@ jobs:
           set -euo pipefail
           python3 app/scripts/release-support.py restore-assets app/ios/App/App "$RUNNER_TEMP/snap-proof-web"
           sudo xcode-select -s /Applications/Xcode_26.6.app/Contents/Developer
-          version=$(xcodebuild -version)
-          if [[ "$version" != $'Xcode 26.6\nBuild version 17F113' ]]; then
+          if ! version=$(xcodebuild -version 2>/dev/null) || [[ "$version" != $'Xcode 26.6\nBuild version 17F113' ]]; then
             printf '%s\n' 'The selected Xcode version does not match the release pin.' >&2
             exit 1
           fi
@@ -142,14 +141,16 @@ jobs:
           run_xcode() {
             local phase=$1 status=0
             shift
-            xcodebuild "$@" "${authentication[@]}" 2>&1 | tee "$raw_logs/$phase.log" >/dev/null || status=$?
+            xcodebuild "$@" "${authentication[@]}" > "$raw_logs/$phase.log" 2>&1 || status=$?
             APP_STORE_CONNECT_KEY_ID="$APP_STORE_CONNECT_KEY_ID" \
               APP_STORE_CONNECT_ISSUER_ID="$APP_STORE_CONNECT_ISSUER_ID" \
               APP_STORE_CONNECT_PRIVATE_KEY="$APP_STORE_CONNECT_PRIVATE_KEY" \
-              python3 "$support" redact "$raw_logs/$phase.log" "$logs/$phase.log" "$key"
-            rm -- "$raw_logs/$phase.log"
+              python3 "$support" redact "$raw_logs/$phase.log" "$logs/$phase.log" "$key" "$phase" "$status"
             if (( status != 0 )); then
-              printf 'Xcode %s failed. See the redacted release logs.\n' "$phase" >&2
+              if [[ "$phase" == archive ]] && grep -Eqi 'no devices|no profiles for' "$logs/$phase.log"; then
+                printf '%s\n' 'Xcode archive signing failed. Check the G0 device registration prerequisite in docs/ios/OWNER_STEPS.md (steps 3 and 4).' >&2
+              fi
+              printf 'Xcode %s failed. See the redacted release evidence.\n' "$phase" >&2
             fi
             return "$status"
           }
@@ -162,10 +163,19 @@ jobs:
             -clonedSourcePackagesDirPath "$packages" \
             CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM="$TEAM_ID" CURRENT_PROJECT_VERSION="$build"
           python3 "$support" verify-signing "$archive/Products/Applications/App.app" "$build" archive \
-            > "$logs/archive-signing.log" 2>&1
-          python3 app/scripts/check-archive-privacy.py --archive "$archive" \
+            > "$logs/archive-signing.log" 2> "$raw_logs/archive-signing.log" || {
+              printf '%s\n' 'Archive signing verification failed.' >&2
+              exit 1
+            }
+          if python3 app/scripts/check-archive-privacy.py --archive "$archive" \
             --package-resolved "$project/project.xcworkspace/xcshareddata/swiftpm/Package.resolved" \
-            --source-packages "$packages" --output "$logs/privacy-check.log"
+            --source-packages "$packages" --output "$raw_logs/privacy-check.log" \
+            > "$raw_logs/privacy-command.log" 2>&1; then
+            printf '%s\n' 'SDK privacy check passed.' > "$logs/privacy-check.log"
+          else
+            printf '%s\n' 'SDK privacy check failed.' | tee "$logs/privacy-check.log" >&2
+            exit 1
+          fi
 
           run_xcode export -exportArchive -archivePath "$archive" \
             -exportOptionsPlist "$options/export.plist" -exportPath "$export_dir"
@@ -175,40 +185,34 @@ jobs:
             printf '%s\n' 'The export did not produce exactly one IPA.' >&2
             exit 1
           fi
-          mv -- "${ipa[0]}" "$files/SNAP.ipa"
           inspection="$RUNNER_TEMP/snap-release-inspect"
-          ditto -x -k "$files/SNAP.ipa" "$inspection"
+          ditto -x -k "${ipa[0]}" "$inspection"
           python3 "$support" verify-signing "$inspection/Payload/App.app" "$build" export \
-            > "$logs/export-signing.log" 2>&1
-          ditto -c -k --keepParent "$archive" "$files/SNAP.xcarchive.zip"
-          python3 "$support" scan "$logs" "$files/SNAP.xcarchive.zip" "$files/SNAP.ipa"
+            > "$logs/export-signing.log" 2> "$raw_logs/export-signing.log" || {
+              printf '%s\n' 'Export signing verification failed.' >&2
+              exit 1
+            }
+          python3 "$support" scan "$logs" "$archive" "${ipa[0]}"
 
           run_xcode upload -exportArchive -archivePath "$archive" \
             -exportOptionsPlist "$options/upload.plist" -exportPath "$RUNNER_TEMP/snap-release-upload"
-      - name: Check redacted log artifacts
-        id: check-logs
+      - name: Check redacted release evidence
+        id: check-evidence
         if: always() && steps.release.outcome != 'skipped'
         run: python3 app/scripts/release-support.py scan "$RUNNER_TEMP/snap-release-logs"
-      - name: Upload redacted release logs
-        if: always() && steps.check-logs.outcome == 'success'
+      - name: Upload redacted release evidence
+        if: always() && steps.check-evidence.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: snap-release-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          name: snap-release-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/snap-release-logs/*.log
           if-no-files-found: warn
           retention-days: 14
-      - name: Upload verified archive and IPA
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: snap-host-proof-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/snap-release-output/SNAP.xcarchive.zip
-            ${{ runner.temp }}/snap-release-output/SNAP.ipa
-          if-no-files-found: error
-          retention-days: 14
-      - name: Remove temporary signing credentials and raw logs
+      - name: Remove temporary signing credentials, raw logs and signed products
         if: always()
         run: |
           rm -rf -- "$RUNNER_TEMP/snap-release-auth" "$RUNNER_TEMP/snap-release-private-logs" \
+            "$RUNNER_TEMP/snap-release-output" "$RUNNER_TEMP/snap-release-export" \
+            "$RUNNER_TEMP/snap-release-inspect" "$RUNNER_TEMP/snap-release-upload" \
             "$RUNNER_TEMP/private_keys" "$GITHUB_WORKSPACE/private_keys" \
             "$HOME/.appstoreconnect" "$HOME/private_keys" "$HOME/.private_keys"
