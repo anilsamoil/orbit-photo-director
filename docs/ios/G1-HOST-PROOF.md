@@ -50,7 +50,7 @@ With `G1_CHECKS` unset, the proof runs all ten checks. In a full simulator run, 
 
 For simulator check 9, the report requires a native observer receipt linking the observed WebContent PID to the SIGTERM and observed process exit. The observation, signal and exit timestamps must be in order on the observer's monotonic clock. The WebKit callback and same-tab reload are separate required evidence.
 
-For simulator check 10, the observer samples RSS every 250 ms. The report requires at least one successful RSS sample, zero missing samples and a longest gap of at most 2,000 ms, including the time from the final sample to the end of observation. A recovered process-table read error may remain in the trace if the gap stays within that limit.
+For simulator check 10, the observer samples RSS every 250 ms. The report requires at least two successful RSS samples and zero missing samples. The observed duration must be at least 600,000 ms and at least the actual stress duration rounded down to a whole millisecond. It must be at most the sample count times the longest gap. The gap calculation includes the time from the final sample to the end of observation. The longest gap must be positive and at most 2,000 ms. A recovered process-table read error may remain in the trace if the gap stays within that limit.
 
 XCTest and artifact export each check for the tab's raster color in the central canvas region of the screenshot, green for Map and orange for ISS. Whenever the corresponding probe passes, the exported row requires that screenshot even if XCTest fails overall. A missing or invalid screenshot fails the row. The placeholder launch test retains its dark-background and light-text check.
 

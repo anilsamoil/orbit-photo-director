@@ -516,6 +516,22 @@ class HostProofExportTests(unittest.TestCase):
                 self.assertIn("| 10 | Scripted pan and zoom, peak memory | fail |", table)
                 self.assertIn(expected, table)
 
+    def test_stress_rss_trace_covers_actual_duration_at_millisecond_precision(self):
+        for elapsed, observed, expected in (
+            (630_000, 600_000, (1, "fail")),
+            (630_000.75, 630_000, (0, "pass")),
+        ):
+            with self.subTest(elapsed=elapsed, observed=observed):
+                evidence = passing_evidence()[10]
+                evidence["actualDurationMs"] = elapsed
+                evidence["sessions"][1]["elapsedMs"] = elapsed - 300_000
+                evidence["memory"]["observedDurationMs"] = observed
+                process, report, table = self.export(
+                    "success", {}, checks="10", performed_checks=(10,), evidence_overrides={10: evidence},
+                )
+                self.assertEqual((process.returncode, report["results"][9]["status"]), expected, process.stderr)
+                self.assertIn(f"| 10 | Scripted pan and zoom, peak memory | {expected[1]} |", table)
+
     def test_stress_duration_and_rss_without_regular_raster_frames_does_not_pass(self):
         stress = passing_evidence()[10]
         stress["sessions"][0]["verifiedMoveTimesMs"][1] = 60_000

@@ -270,6 +270,8 @@ def validate_stress(evidence):
         or type(evidence.get("webProcessTerminations")) is not int or evidence["webProcessTerminations"] != 0
     ):
         raise ValueError("Check 10 is missing full-duration stress or WebContent peak RSS evidence")
+    if memory["observedDurationMs"] < math.floor(elapsed):
+        raise ValueError("Check 10 RSS trace is shorter than the actual stress duration")
     samples = memory.get("samples")
     if not integer_at_least(samples, 2):
         raise ValueError("Check 10 requires at least two RSS samples")
