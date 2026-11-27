@@ -9,7 +9,8 @@ Profile holds the signed-in astronaut, the distance threshold, personal targets,
 - `profile-add` adds a target named Verify Harbor.
 - `profile-hidden` shows Hidden curated targets. Restore removes `verify-mesa` from that list, the GET drops that id, and a new Chrome profile shows the card again.
 - `profile-lookup` resolves the fixture timestamp and drops a lookup pin on the map. It then resolves a last-good TLE at that TLE's own epoch, and a 2035 timestamp. A 2035 time that still propagates shows `low confidence — TLE age` and `ISS at`. A 2035 time where every element set fails SGP4 shows `orbit data is out of date, reconnect to refresh`.
-- `profile-hydration` is #374 (`c431fc4`). A verified account profile whose name starts with `u-` loads personal targets from `GET /api/browser/profiles/<name>/targets`. A failed read does not latch. The next Profile open, with no reload, fetches again. A distance-slider change during that read keeps the new threshold and the server rows. A local target edit during that read keeps the edit and does not add a server-only row. A signed-out 401 shows `Please sign in again to open your own profile. Your saved data has been kept.` and does not fetch targets. An anonymous `?u=` adoption (`isVerified` false) does not fetch. Crew roster targets remain read-only. Josh Kutryk can show labelled account targets when the verified session includes `josh`.
+- `profile-hydration` is #374 (`c431fc4`). A verified account profile whose name starts with `u-` loads personal targets from `GET /api/browser/profiles/<name>/targets`. A failed read does not latch. The next Profile open, with no reload, fetches again. A distance-slider change during that read keeps the new threshold and the server rows. A local target edit during that read keeps the edit and does not add a server-only row. A signed-out 401 shows `Please sign in again to open your own profile. Your saved data has been kept.` and does not fetch targets. An anonymous `?u=` adoption (`isVerified` false) does not fetch. Crew roster targets remain read-only.
+- `profile-roster-link` is #386 (`c65abb2b431f7d042f226bdd0a5ee3b4a7623caf`). `data/crew-roster/roster.json` sets `accountProfile` to `josh` on the Kutryk row only. A verified session whose `profiles` include `josh` shows that account's targets on the Kutryk roster. Watkins and Delaney stay bundled-only. `ACCESS_PROFILE_GRANTS` is an owner step outside this repo. This skill does not set it and does not fetch a public host.
 
 ## How to get to it (user POV)
 
@@ -86,6 +87,31 @@ In both cases, open `/?e2e` without a `u` parameter. Open the top-bar profile ba
 1. Return HTTP 200 with `ok: true` and the same synthetic viewer in `profile` and as the sole entry in `profiles`. Return an error if the linked endpoint is called, and count that request.
 2. Follow the top-bar steps. Verify that **Crew roster sites** lists 11 bundled sites and that `#profile-roster-account-targets` is hidden.
 3. Open **Map** and check that the `my-targets` source contains only the 11 bundled sites. Confirm that the linked request count is zero across the menu switch and both tabs.
+
+The same zero-request result holds for the default verify session (it never lists `josh`), a 401 on `/?u=kutryk`, and a grant whose name is not `josh`. `#profile-roster-account-targets` stays hidden. The heading uses U+2019: `Josh Kutryk’s account profile`. The popup line is `From Josh Kutryk’s account profile`. The row has no button. `handleAdd` on that roster answers `read-only`.
+
+### Revocation and a public 503
+
+`ROSTER_SESSION_RECHECK_MS` in `frontend/src/profile-session.ts` is 60 seconds. `refresh` calls `pollLinkedRosterTargets` when the browser is online and the sign-in banner is not held. After that window, a session whose `profiles` no longer include `josh` drops the scope. `clearLinkedRosterTargets` removes the row, the map ring, and the open popup. The page does not reload. The linked GET count stays at the one read from the grant. A second session GET is the recheck, not another targets GET.
+
+A `GET /manifest.json` that answers 503 after a snapshot is on screen throws in `fetchManifest`. `renderOfflineBanner` calls `setLinkedRosterTargetsOffline(true)`. That clears the same row and ring and paints the LOS banner from the snapshot age. While that latch is set, `pollLinkedRosterTargets` returns before the session read, so a still-valid grant stays hidden until a later successful refresh calls `setLinkedRosterTargetsOffline(false)`. That pause is the Astra r4 P3 in `follow-ups.md`. Do not fail the 503 case for it.
+
+### Worker gate and pins
+
+`handleProfilesRequest` in `worker/src/profiles.ts` authenticates first. A missing `cf-access-jwt-assertion`, when Access is configured, is 401 `{error: unauthorized}` before the profile list is read. An Access JWT whose `resolved.profiles` does not include the path name is 403 `{error: profile_forbidden}` at `resolved.profiles.some(...)`. Use synthetic `example.com` identities in the worker file. Do not copy a mailbox into this skill.
+
+```bash
+cd frontend && bunx vitest run test/profile-roster-link.test.ts
+cd frontend && bunx vitest run test/main-integration.test.ts -t "clears revoked linked rows, rings and popup while the public feed has a 503"
+cd worker && bunx vitest run test/browser-identity.test.ts
+```
+
+`profile-roster-link.test.ts` is 23 tests, including `suppresses the roster overlay with zero target requests when ungranted` and `clears the mounted overlay when the grant is revoked`. `browser-identity.test.ts` is 19 tests. These files mock `profile-session` and must export `invalidateRosterReadScope`: `frontend/test/map-import-failure.test.ts`, `profile-hydration.test.ts`, `account-storage.test.ts`, `iss-view-nav-race.test.ts`, `iss-view-nav.test.ts`, and `log-load-state.test.ts`.
+
+Two mutants must go red. Restore the file after each one. Do not commit either edit.
+
+- In `frontend/src/profile-session.ts`, set `granted` from the roster `accountProfile` alone and skip `authorizedProfiles?.some(...)`. `suppresses the roster overlay with zero target requests when ungranted` then requests `/api/browser/profiles/josh/targets`.
+- Make `clearLinkedRosterTargets` return before it clears `state`. `clears the mounted overlay when the grant is revoked` keeps the linked row, and the main-integration 503 case keeps the ring.
 
 ## Gotchas
 

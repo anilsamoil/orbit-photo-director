@@ -206,6 +206,9 @@ rm -rf app/ios/App/App/public app/ios/App/App/capacitor.config.json app/ios/App/
 node --test app/host-proof/proof.test.mjs
 python3 -B app/scripts/test_export_host_proof.py
 python3 -B app/scripts/test_observe_host_proof.py
+cd frontend && bunx vitest run test/profile-roster-link.test.ts
+cd frontend && bunx vitest run test/main-integration.test.ts -t "clears revoked linked rows, rings and popup while the public feed has a 503"
+cd worker && bunx vitest run test/browser-identity.test.ts
 ```
 
 `check` confirms every feature file is linked from `features/README.md`, uses the four headings below, and names both iPhone and iPad. Run it after editing the map. A feature file that omits iPhone or iPad fails `check`.
@@ -261,6 +264,10 @@ From the repo root, `node --test app/host-proof/proof.test.mjs`, `python3 -B app
 ## Night lights
 
 #357 (`0d1fdcce`) is the night-side city-light overlay. The recipe is `features/night-lights.md`. Prove it with the vitest files named there. Those files use the MapLibre double and synthetic tile bytes. They do not fetch NASA. `drive map` only checks that `#toggle-night-lights` becomes `active`. The opacity stops are `[2, 0.95, 4, 0.95, 6, 0.85, 8, 0.74]`, so zoom 8 over zoom 4 is `0.74 / 0.95`, about 0.779. A Chrome 1280 zoom-8 pixel sample must wait for the tile to paint and the view to settle before sampling, and it is not a substitute for that paint assertion. The night fill welds 2° bands, paints at opacity 0.30, and sets `fill-antialias` false. Catalog order is fill, then VIIRS, then lightning, then the ISS track. The VIIRS cache stores a 200 body only after decode succeeds: a bad 200, then a good 200, is two fetches.
+
+## Crew roster account targets
+
+#386 (`c65abb2b431f7d042f226bdd0a5ee3b4a7623caf`) links the Kutryk roster to account profile `josh`. The recipe is `features/profile.md`. The default verify session has no `josh` grant, so `drive profile` and `drive map` keep that roster bundled-only and do not GET `/api/browser/profiles/josh/targets`. A stubbed session that lists `josh` shows the read-only heading `Josh Kutryk’s account profile` (U+2019) and the popup line `From Josh Kutryk’s account profile`, from one linked GET. A viewer-only list, a 401 on `?u=kutryk`, and a grant for another name hide `#profile-roster-account-targets` and make zero linked requests. The Worker answers 401 with no Access JWT and 403 `{error: profile_forbidden}` when `resolved.profiles` omits the path name. The 60s grant poll clears the row, the ring, and the open popup through `clearLinkedRosterTargets`, with no reload and no extra targets GET. A public `manifest.json` 503 after the snapshot loads calls `setLinkedRosterTargetsOffline` from `renderOfflineBanner`, clears the row and ring, and shows the LOS banner. Polling then stays stopped until a later successful refresh. That pause is the Astra r4 P3 in `follow-ups.md`. Identities in this check are synthetic. `ACCESS_PROFILE_GRANTS` stays an owner step outside the repo.
 
 ## Maintenance
 

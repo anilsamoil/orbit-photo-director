@@ -70,6 +70,12 @@ Recorded after #370 (`d9516ca`).
 
 Recorded after #383 (`cb0bbd2b35a829e13ac8923e49ef0d3624a3169d`).
 
+## P3: grant polling stops after a public 503 (Astra r4)
+
+A `GET /manifest.json` 503 after the snapshot is on screen throws in `fetchManifest`. `renderOfflineBanner` calls `setLinkedRosterTargetsOffline(true)`, which clears the linked Kutryk row and ring and paints the LOS banner. `pollLinkedRosterTargets` then returns before the session read, because `reverifyLinkedRosterTargets` returns while that latch is set. A grant that is still valid stays hidden until a later successful refresh calls `setLinkedRosterTargetsOffline(false)`. The 503 case in `frontend/test/main-integration.test.ts` proves the clear. It does not prove that the 60s poll restores the row by itself. This skill does not edit `frontend/src/main.ts`.
+
+Recorded after #386 (`c65abb2b431f7d042f226bdd0a5ee3b4a7623caf`).
+
 ## P3: D-1 still describes a full simulator proof (W-03)
 
 `docs/designs/ios-app.md` line 91 says G1 is a simulator proof in W-02, then the same proof signed on a ground device in W-03, and that host-dependent packages start after the simulator step. `docs/ios/DECISIONS.md` line 41 keeps checks 2, 3, 4, 5, 9 and 10, and check 7 on iPad, as an open on-device gate before W-03 can be called done or anything ships. Updating that sentence is W-03. This skill does not edit the design doc.
