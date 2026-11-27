@@ -1,4 +1,5 @@
 import { rosterProfiles, type RosterProfile } from './crew-roster';
+import { isOnline } from './network-status';
 
 export interface AccountProfile {
   name: string;
@@ -18,7 +19,7 @@ export class SessionSignInRequired extends Error {
 const CACHE_KEY = 'opd-account-session-v1';
 let account: AccountProfile | null = null;
 let signedInAccount: AccountProfile | null = null;
-let authorizedProfiles: AccountProfile[] = [];
+let authorizedProfiles: AccountProfile[] | undefined;
 
 /** Active profile; all personal caches, writes and ratings use this scope. */
 export function getAccountProfile(): AccountProfile | null { return account; }
@@ -26,10 +27,19 @@ export function getAccountProfile(): AccountProfile | null { return account; }
 export function getSignedInAccountProfile(): AccountProfile | null { return signedInAccount; }
 /** Offline cache never supplies permissions to switch into another profile. */
 export function getAuthorizedProfiles(): AccountProfile[] {
-  return authorizedProfiles.map((profile) => ({ ...profile }));
+  return (authorizedProfiles ?? (signedInAccount ? [signedInAccount] : [])).map((profile) => ({ ...profile }));
 }
 export function canSelectProfile(name: string): boolean {
-  return account?.isVerified === true && authorizedProfiles.some((profile) => profile.name === name);
+  return account?.isVerified === true && (authorizedProfiles ?? [account]).some((profile) => profile.name === name);
+}
+
+export function getRosterReadScope(name: string) {
+  if (account?.name !== name || !signedInAccount?.isVerified || signedInAccount.localOnly || !isOnline()) return;
+  const roster = rosterProfiles().find((profile) => profile.name === name);
+  const profileName = roster?.accountProfile;
+  if (profileName && authorizedProfiles?.some((profile) => profile.name === profileName)) {
+    return { account, profileName, displayName: roster.displayName };
+  }
 }
 
 const LOCAL_NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
@@ -46,7 +56,6 @@ function adoptLocalProfile(name: string): AccountProfile {
   const profile: AccountProfile = { name, displayName: name, isVerified: false, localOnly: true };
   account = profile;
   signedInAccount = profile;
-  authorizedProfiles = [profile];
   try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(profile)); } catch { /* storage disabled */ }
   return profile;
 }
@@ -90,7 +99,6 @@ function resumeOfflineProfile(): AccountProfile | null {
   };
   if (account.localOnly) {
     signedInAccount = account;
-    authorizedProfiles = [account];
   }
   return account;
 }
@@ -151,7 +159,7 @@ function sessionHref(urlHref: string): string {
 async function resolveSessionProfile(urlHref: string): Promise<AccountProfile> {
   account = null;
   signedInAccount = null;
-  authorizedProfiles = [];
+  authorizedProfiles = undefined;
   // Tab-local storage avoids selecting another account merely because it used
   // this browser previously. Never resume a cache after an HTTP/auth failure.
   if (navigator.onLine === false) {
@@ -214,7 +222,7 @@ async function resolveSessionProfile(urlHref: string): Promise<AccountProfile> {
     try { requested = new URL(urlHref).searchParams.get('u'); } catch { /* use own profile */ }
     account = profiles.find((profile) => profile.name === requested) ?? own;
     signedInAccount = own;
-    authorizedProfiles = profiles;
+    authorizedProfiles = body.profiles === undefined ? undefined : profiles;
     try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(account)); } catch { /* storage disabled */ }
     return account;
   } catch (error) {

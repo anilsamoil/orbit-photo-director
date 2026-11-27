@@ -45,6 +45,7 @@ const PIN_FILES = [
   'test/orbit-sight.test.ts',
   'src/map/features/lightning/lightning.test.ts',
   'src/map/features/targets/targets.test.ts',
+  'test/profile-roster-link.test.ts',
   'src/map/features/launch-corridor/launch-corridor.test.ts',
   'test/launch-map-schedule.test.ts',
   'test/launch-hazards.test.ts',
@@ -339,6 +340,12 @@ const MUTATIONS = [
     file: TARGETS,
     find: '    const onEdit = props.is_personal && props.target_id && !isRosterProfile(parseProfileFromURL(window.location.href))',
     replace: '    const onEdit = props.is_personal && props.target_id',
+  },
+  {
+    contract: 'a linked roster target popup credits the account profile',
+    file: TARGETS,
+    find: '        ...(linkedIds.has(target.id) && { account_profile_label: linked?.label }),',
+    replace: '',
   },
   {
     contract: 'a scheduled Watch launch remains a map pin without a photography chance',

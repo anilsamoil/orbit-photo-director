@@ -1,8 +1,12 @@
 # Follow-ups
 
-Defects and stale documentation found while writing `ARCHITECTURE_NOW.md`. None of these are fixed in the structural work, because a behavior change hidden inside a refactor cannot be reviewed. Each entry names the evidence so a later change can start from a failing test.
+Open defects and stale documentation from architecture and feature work. Each entry names the evidence so a later change can start from a failing test.
 
 ## Behavior defects
+
+**The Worker and frontend disagree on whitespace-only target names.** The Worker accepts a name that the frontend rejects after trimming. A stored row with such a name can block hydration of the full list. See `worker/src/profiles.ts` and `frontend/src/profile.ts`.
+
+**The Add target toast promises an hourly update for profiles outside the generator list.** Those profiles can show the new map ring, but the generator does not publish a scored queue for them. See `frontend/src/profile-crud.ts` and `generator/config.py`.
 
 **The 1 Hz countdown tick overwrites the offline banner.** `rerenderCountdowns` at `main.ts:643` ends with an unconditional `setBanner(bannerWithLaunchesOverlay(bannerFromManifest(...)))`. It ignores `currentlyOffline` and it ignores the tappable "sign in again" banner that `doRefresh` sets when the Access session has expired. Once a manifest exists, either banner survives for at most one second. Pin the offline banner first, then fix.
 

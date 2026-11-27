@@ -22,6 +22,7 @@ export interface TargetPopupProps {
   priority?: number;
   has_pass?: boolean;
   is_personal?: boolean;
+  account_profile_label?: string;
   shot_count?: number;
   category?: string;
   angle_off_nadir_deg?: number;
@@ -83,6 +84,10 @@ export function buildTargetPopupContent(
   const nameEl = document.createElement('strong');
   nameEl.textContent = props.target_name ?? 'unknown';
   body.appendChild(nameEl);
+
+  if (props.account_profile_label) {
+    addRow('map-popup-row', `From ${props.account_profile_label}`, 'margin-top:2px');
+  }
 
   const paint = categoryPaint(props.category);
   if (paint) {

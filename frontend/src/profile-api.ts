@@ -3,7 +3,8 @@
  * edits roll back instead of being acknowledged without server persistence.
  */
 import type { PersonalTarget } from './profile';
-import { getAccountProfile } from './profile-session';
+import { isRosterProfile } from './crew-roster';
+import { getAccountProfile, getRosterReadScope } from './profile-session';
 
 const SESSION_REQUEST: RequestInit = {
   credentials: 'same-origin', redirect: 'manual', cache: 'no-store',
@@ -41,11 +42,15 @@ export interface ProfileTargetsBody {
 export async function getProfileTargets(
   profileName: string,
   baseUrl = '',
+  signal?: AbortSignal,
 ): Promise<ApiResult<ProfileTargetsBody>> {
-  const denied = accountGuard(profileName); if (denied) return denied;
+  const denied = accountGuard(profileName);
+  const activeName = denied ? getAccountProfile()?.name : undefined;
+  if (denied && (!activeName || !isRosterProfile(activeName)
+    || getRosterReadScope(activeName)?.profileName !== profileName)) return denied;
   try {
     const resp = await fetch(`${baseUrl}/api/browser/profiles/${profileName}/targets`, {
-      ...SESSION_REQUEST, method: 'GET',
+      ...SESSION_REQUEST, method: 'GET', ...(signal && { signal }),
     });
     const parsed = await parseJsonResult<ProfileTargetsBody>(resp, false);
     if (!parsed.ok) return parsed;

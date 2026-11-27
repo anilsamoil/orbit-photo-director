@@ -166,6 +166,7 @@
   "test/profile-json-import.test.ts": 1.135,
   "test/profile-json-io.test.ts": 0.463,
   "test/profile-menu.test.ts": 0.551,
+  "test/profile-roster-link.test.ts": 0.75,
   "test/profile-session.test.ts": 0.442,
   "test/profile-shot-badge.test.ts": 0.516,
   "test/profile-ui.test.ts": 0.739,

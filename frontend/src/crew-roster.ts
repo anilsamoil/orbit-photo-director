@@ -11,17 +11,17 @@ export type RosterName = string & { readonly __brand: 'RosterName' };
 export interface RosterProfile {
   readonly name: RosterName;
   readonly displayName: string;
+  readonly accountProfile?: string;
 }
 
-interface RosterEntry {
-  readonly displayName: string;
+interface RosterEntry extends Omit<RosterProfile, 'name'> {
   readonly sites: readonly PersonalTarget[];
 }
 
 let registry: ReadonlyMap<string, RosterEntry> | undefined;
 
 export function rosterProfiles(): readonly RosterProfile[] {
-  return [...readRegistry()].flatMap(([name, entry]) => (isRosterProfile(name) ? [{ name, displayName: entry.displayName }] : []));
+  return [...readRegistry()].flatMap(([name, { sites: _sites, ...entry }]) => (isRosterProfile(name) ? [{ name, ...entry }] : []));
 }
 
 export function isRosterProfile(name: string): name is RosterName {
@@ -40,25 +40,37 @@ function readRegistry(): ReadonlyMap<string, RosterEntry> {
 function buildRegistry(): Map<string, RosterEntry> {
   const csvByName = new Map(Object.entries(siteCsvByPath).map(([path, csv]) => [path.slice(path.lastIndexOf('/') + 1, -'.csv'.length), csv]));
   const entries = new Map<string, RosterEntry>();
-  for (const { name, displayName } of parseRosterJson(rosterJson)) {
+  const roster = parseRosterJson(rosterJson);
+  const names = new Set(roster.map(({ name }) => name));
+  for (const { name, ...entry } of roster) {
     const csv = csvByName.get(name);
     if (csv === undefined) throw new Error(`crew roster: ${name} has no ${name}.csv`);
     if (entries.has(name)) throw new Error(`crew roster: ${name} is listed twice in roster.json`);
-    entries.set(name, { displayName, sites: parseSites(name, csv) });
+    if (entry.accountProfile && names.has(entry.accountProfile)) {
+      throw new Error(`crew roster: ${name} has an invalid accountProfile`);
+    }
+    entries.set(name, { ...entry, sites: parseSites(name, csv) });
   }
   const orphan = [...csvByName.keys()].find((name) => !entries.has(name));
   if (orphan !== undefined) throw new Error(`crew roster: ${orphan}.csv has no roster.json entry`);
   return entries;
 }
 
-function parseRosterJson(text: string): { name: string; displayName: string }[] {
+function parseRosterJson(text: string): (Omit<RosterProfile, 'name'> & { name: string })[] {
   const entries: unknown = JSON.parse(text);
   if (!Array.isArray(entries)) throw new Error('crew roster: roster.json is not an array');
   return entries.map((entry: unknown) => {
-    const { name, displayName } = (entry ?? {}) as { name?: unknown; displayName?: unknown };
+    const fields = entry && typeof entry === 'object' ? entry : {};
+    const name = 'name' in fields ? fields.name : undefined;
     if (typeof name !== 'string' || !isValidProfileName(name)) throw new Error(`crew roster: invalid profile name ${JSON.stringify(name)}`);
+    const displayName = 'displayName' in fields ? fields.displayName : undefined;
     if (typeof displayName !== 'string' || displayName.trim() === '') throw new Error(`crew roster: ${name} has no displayName`);
-    return { name, displayName };
+    if (!('accountProfile' in fields)) return { name, displayName };
+    const { accountProfile } = fields;
+    if (typeof accountProfile !== 'string' || !isValidProfileName(accountProfile)) {
+      throw new Error(`crew roster: ${name} has an invalid accountProfile`);
+    }
+    return { name, displayName, accountProfile };
   });
 }
 

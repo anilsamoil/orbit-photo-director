@@ -55,6 +55,7 @@ import { getCurrentManifest } from './main';
 import { geocode, type GeocodeResult } from './profile-geocode';
 import { getAccountProfile } from './profile-session';
 import { isRosterProfile, rosterSites, type RosterName } from './crew-roster';
+import { hydrateLinkedRosterTargets, linkedRosterTargets } from './profile-roster-targets';
 import { markProfileTargetsChanged, profileTargetsChanged, profileTargetRevision, resetProfileTargetSyncForTests } from './profile-target-sync';
 
 /** App version stamped into export envelopes. Injected by Vite's `define`
@@ -164,9 +165,32 @@ function buildRosterSection(profileName: RosterName): HTMLElement {
   const desc = document.createElement('p');
   desc.textContent = 'These sites come with the app and cannot be edited here. Tap their pins on the Map to see upcoming ISS passes.';
 
+  section.append(heading, desc, buildRosterList(rosterSites(profileName)), buildLinkedRosterList(profileName),
+    buildCuratedRemovedSection(profileName));
+  return section;
+}
+
+function buildLinkedRosterList(profileName: RosterName): HTMLElement {
+  const section = document.createElement('div');
+  section.id = 'profile-roster-account-targets';
+  const linked = linkedRosterTargets(profileName);
+  section.hidden = !linked?.targets.length;
+  if (linked?.targets.length) {
+    const heading = document.createElement('h3');
+    heading.textContent = linked.label;
+    section.append(heading, buildRosterList(linked.targets));
+  }
+  return section;
+}
+
+export function refreshLinkedRosterList(profileName: RosterName): void {
+  document.getElementById('profile-roster-account-targets')?.replaceWith(buildLinkedRosterList(profileName));
+}
+
+function buildRosterList(sites: readonly PersonalTarget[]): HTMLUListElement {
   const ul = document.createElement('ul');
   ul.className = 'profile-crud-ul';
-  for (const site of rosterSites(profileName)) {
+  for (const site of sites) {
     const li = document.createElement('li');
     li.className = 'profile-crud-row';
     li.dataset.targetId = site.id;
@@ -180,8 +204,7 @@ function buildRosterSection(profileName: RosterName): HTMLElement {
     ul.appendChild(li);
   }
 
-  section.append(heading, desc, ul, buildCuratedRemovedSection(profileName));
-  return section;
+  return ul;
 }
 
 const hydratedProfiles = new Set<string>();
@@ -217,6 +240,7 @@ const shotCountsFetched = new Set<string>();
  * targets. Once-per-load UI callers share one pending GET. Local mutations
  * defer hydration until reload; this is deliberately not bidirectional sync. */
 export function hydratePersonalTargets(profileName: string): Promise<void> {
+  if (isRosterProfile(profileName)) return hydrateLinkedRosterTargets(profileName);
   const pending = hydrationInFlight.get(profileName);
   if (pending) return pending;
   const task = hydrateUnchangedProfile(profileName).finally(() => { hydrationInFlight.delete(profileName); });

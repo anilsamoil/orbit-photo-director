@@ -9,7 +9,8 @@ import {
   type Profile,
 } from './profile';
 import { subscribeProfileChanged } from './profile-events';
-import { buildCrudSection } from './profile-crud';
+import { buildCrudSection, refreshLinkedRosterList } from './profile-crud';
+import { hydrateLinkedRosterTargets, LINKED_ROSTER_TARGETS_CHANGED } from './profile-roster-targets';
 import { isRosterProfile } from './crew-roster';
 import {
   canSelectProfile,
@@ -52,18 +53,24 @@ function bindProfileChangedSubscriber(): void {
   subscribeProfileChanged(() => {
     refreshPickerFromExternalChange();
   });
+  window.addEventListener(LINKED_ROSTER_TARGETS_CHANGED, () => {
+    const name = readActiveProfileName();
+    if (isRosterProfile(name)) refreshLinkedRosterList(name);
+  });
   profileChangedBound = true;
 }
 
 export function renderProfilePane(): void {
   const container = document.getElementById('profile-body');
   if (!container) return;
+  const name = readActiveProfileName();
   container.replaceChildren(
     buildPickerSection(),
     buildThresholdSection(),
-    buildCrudSection(readActiveProfileName()),
+    buildCrudSection(name),
   );
   bindProfileChangedSubscriber();
+  if (isRosterProfile(name)) void hydrateLinkedRosterTargets(name);
 }
 
 function discoverProfileKeys(): string[] {

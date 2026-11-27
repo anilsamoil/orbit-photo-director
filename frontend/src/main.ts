@@ -43,6 +43,7 @@ import { initSunWidget } from './sun';
 import { loadOrCreateProfileFromURL, loadProfile, removePersonalTarget, saveProfile, toggleCuratedRemoved, type Profile } from './profile';
 import { EDIT_TARGET_EVENT, subscribeProfileChanged } from './profile-events';
 import { getAccountProfile, resolveAccountProfile } from './profile-session';
+import { clearLinkedRosterTargets, setLinkedRosterTargetsOffline } from './profile-roster-targets';
 import { isRosterProfile } from './crew-roster';
 import { mountProfileMenu } from './profile-menu';
 import { deleteProfileTarget, putRemovedCuratedIds } from './profile-api';
@@ -238,6 +239,7 @@ async function maybeFlagExpiredSession(generatedAtIso: string): Promise<boolean>
     return false;
   }
   if (await isAccessSessionExpired()) {
+    clearLinkedRosterTargets();
     setAuthBanner(bannerAuthExpired(ageMin));
     return true;
   }
@@ -354,6 +356,7 @@ async function doRefresh(): Promise<void> {
     currentlyOffline = Number.isFinite(ageMin) && ageMin >= EMPTY_HINT_THRESHOLD_MIN
       ? !(await probeConnectivity())  // dedicated /__opd_probe path — never SW-cached
       : false;
+    setLinkedRosterTargetsOffline(currentlyOffline);
 
     // Persist atomically AFTER all artifacts loaded successfully — but ONLY
     // when the manifest version is STRICTLY NEWER than what's on disk AND we're
@@ -662,6 +665,7 @@ function bootFromSnapshot(): boolean {
  *  When there's no snapshot AND no network, this still renders something
  *  useful instead of leaving the previous banner stuck. */
 function renderOfflineBanner(): void {
+  setLinkedRosterTargetsOffline(true);
   const snap = readSnapshot();
   if (!snap) {
     setBanner(bannerError('offline — no cached data'));
@@ -2051,6 +2055,7 @@ async function init(): Promise<void> {
   }
   bindTabs(!sessionFailed);
   if (sessionFailed) return;
+  window.addEventListener('offline', clearLinkedRosterTargets);
   // Slot 11 — subscribe via the central event bus (in-tab CustomEvent +
   // cross-tab storage event, debounced 150ms). Re-read currentProfile on
   // each fire so the slot 7 distance filter reflects the just-saved
@@ -2105,11 +2110,8 @@ async function init(): Promise<void> {
         currentManifest ? fetchCupolaWindows(currentManifest, '') : Promise.resolve([]),
     });
   }
-  // Hydrate this profile's server-side targets into localStorage on load so
-  // the my-targets map rings (and the Profile list) reflect them without
-  // needing a Profile-tab visit first. Uses the signed-in Google session and
-  // stays retryable until one is set. saveProfile fires 'profile-changed', so
-  // an already-open map picks the rings up. Fire-and-forget.
+  // Load server-side targets for the map and Profile list on boot. Account
+  // profiles hydrate localStorage. Authorized roster links stay in page memory.
   // Dynamic import (boot-slim review 2026-06-11): the static import dragged
   // ~37KB of profile-CRUD machinery (geocode, CSV parse, JSON IO, API) into
   // the boot chunk — 28% of boot JS for a background hydrate that isn't
