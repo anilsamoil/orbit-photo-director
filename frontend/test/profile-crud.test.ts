@@ -403,6 +403,35 @@ describe('optimistic add flow', () => {
   });
 });
 
+describe('optimistic edit flow', () => {
+  it('saves an edit when the fresh server list contains a legacy whitespace-only name', async () => {
+    const target = makeTarget();
+    const legacy = makeTarget({ name: ' \t\n ' });
+    const serverOnly = makeTarget({ name: '  From another device  ' });
+    const edited = { ...target, name: 'Edited target' };
+    saveProfile(addPersonalTarget(createDefaultProfile(PROFILE), target));
+
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method !== 'PUT') {
+        return Response.json({ targets: [serverOnly, legacy, target] });
+      }
+      const { targets }: { targets: PersonalTarget[] } = JSON.parse(String(init.body));
+      const index = targets.findIndex((row) => row.name.trim() === '');
+      if (index !== -1) {
+        return Response.json({ error: 'invalid_targets', errors: [{ index, error: 'name_empty' }] }, { status: 400 });
+      }
+      return Response.json({ ok: true, count: targets.length });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(await _test.handleEdit(PROFILE, edited)).toBe('ok');
+
+    const put = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT');
+    expect(JSON.parse(String(put?.[1]?.body))).toEqual({ targets: [serverOnly, edited] });
+    expect(loadProfile(PROFILE)?.additions).toEqual([edited]);
+  });
+});
+
 describe.each([
   [PROFILE, {
     add: 'Added "Test target" — appears on the map & queue after the next hourly update',
