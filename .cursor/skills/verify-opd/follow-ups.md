@@ -76,6 +76,18 @@ A `GET /manifest.json` 503 after the snapshot is on screen throws in `fetchManif
 
 Recorded after #386 (`c65abb2b431f7d042f226bdd0a5ee3b4a7623caf`).
 
+## P3: a zero-width-only target name is accepted
+
+`validateTarget` uses `name.trim()`. U+200B is not whitespace, so a name that is only U+200B has length 1 after trim and POST and PUT accept it. The client trim does the same. A product test should reject that name. This skill does not edit `worker/src/profiles.ts`.
+
+Recorded after #388 (`15573790a0f73c83d414b4e4064211fa76d7438d`).
+
+## Deploy note: the whitespace 400 is not checked live
+
+The 400 `name_empty` cases run against the in-memory worker in `worker/test/profiles.test.ts`. A live POST or PUT needs an Access session. This skill does not fetch `https://map.astroanil.dev` or `https://map.expedition75.com` and does not send a credential.
+
+Recorded after #388 (`15573790a0f73c83d414b4e4064211fa76d7438d`).
+
 ## P3: D-1 still describes a full simulator proof (W-03)
 
 `docs/designs/ios-app.md` line 91 says G1 is a simulator proof in W-02, then the same proof signed on a ground device in W-03, and that host-dependent packages start after the simulator step. `docs/ios/DECISIONS.md` line 41 keeps checks 2, 3, 4, 5, 9 and 10, and check 7 on iPad, as an open on-device gate before W-03 can be called done or anything ships. Updating that sentence is W-03. This skill does not edit the design doc.
