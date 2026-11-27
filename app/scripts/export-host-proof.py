@@ -157,6 +157,13 @@ def validate_geometry(geometry):
         raise ValueError("Check 5 requires a measured horizon limb error below 1 degree")
     if not 0.98 < geometry["nadir"]["earthFraction"] <= 1:
         raise ValueError("Check 5 requires nadir Earth coverage above 98%")
+    if geometry["nadir"].get("nested") != "object":
+        raise ValueError("Check 5 requires a nested object rendered at nadir")
+    nasa_tiles = object_field(geometry, "nasaTiles")
+    for name in ("blue", "black"):
+        tile = object_field(nasa_tiles, name)
+        if tile.get("width") != 256 or tile.get("height") != 256:
+            raise ValueError(f"Check 5 requires a decoded 256x256 {name} NASA tile")
 
 
 def validate_bridge(evidence):
@@ -263,17 +270,20 @@ def validate_stress(evidence):
         or type(evidence.get("webProcessTerminations")) is not int or evidence["webProcessTerminations"] != 0
     ):
         raise ValueError("Check 10 is missing full-duration stress or WebContent peak RSS evidence")
-    if not integer_at_least(memory.get("samples"), 1):
-        raise ValueError("Check 10 requires a positive RSS sample count")
+    samples = memory.get("samples")
+    if not integer_at_least(samples, 2):
+        raise ValueError("Check 10 requires at least two RSS samples")
     missing_samples = memory.get("missingSamples")
     if type(missing_samples) is not int or missing_samples != 0:
         raise ValueError("Check 10 requires zero missing RSS samples")
     gap = memory.get("maxSampleGapMs")
     if (
-        not integer_at_least(gap, 0) or gap > MAX_RSS_SAMPLE_GAP_MS
+        not integer_at_least(gap, 1) or gap > MAX_RSS_SAMPLE_GAP_MS
         or memory.get("maxAllowedSampleGapMs") != MAX_RSS_SAMPLE_GAP_MS
     ):
-        raise ValueError(f"Check 10 requires an RSS sampling gap no greater than {MAX_RSS_SAMPLE_GAP_MS} ms")
+        raise ValueError(f"Check 10 requires a positive RSS sampling gap no greater than {MAX_RSS_SAMPLE_GAP_MS} ms")
+    if memory["observedDurationMs"] > samples * gap:
+        raise ValueError("Check 10 observed RSS duration exceeds the sample count times the maximum gap")
     sessions = evidence.get("sessions")
     half_ms = FULL_STRESS_MS / 2
     max_gap_ms = 30_000

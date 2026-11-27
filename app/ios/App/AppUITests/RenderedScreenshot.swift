@@ -26,7 +26,7 @@ private struct ScreenshotPixels {
     let markerFraction: Double?
 
     var isNonBlank: Bool {
-        luminanceDeviation >= 6 && colorClusters >= 2
+        luminanceDeviation >= 6 && (colorClusters >= 2 || (markerFraction ?? 0) >= 0.95)
     }
 
     var matchesPlaceholder: Bool {

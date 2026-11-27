@@ -103,13 +103,13 @@ export async function measureGeometry({ map, track, when, preset, pixels, tileFr
       holdCamera(false);
       if (map.getLayer(projectionLayer)) map.jumpTo({ zoom: nadir.applied.zoom });
     }
-    const { blue, black } = await decodePair(subsolarPoint(new Date(when)));
+    const { blue, black, nasaTiles } = await decodePair(subsolarPoint(new Date(when)));
     const checks = checksFor(horizon, nadir, zoom12.projection, blue, black);
     checks.push(
       { name: 'horizon and nadir poses applied', pass: horizon.appliedPose && nadir.appliedPose },
       { name: 'zoom 12 applied', pass: Math.abs(zoom12.applied.zoom - 12) < 0.001 },
     );
-    const evidence = { horizon, nadir, zoom12, checks };
+    const evidence = { horizon, nadir, zoom12, nasaTiles, checks };
     if (!checks.every(({ pass }) => pass)) {
       throw Object.assign(new Error('Visible ISS geometry assertion failed'), { evidence });
     }

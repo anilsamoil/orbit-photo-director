@@ -17,6 +17,12 @@ TRACE = re.compile(
     r"(?:-[A-Za-z]*x[A-Za-z]*\b|-o[ \t]+xtrace\b)"
 )
 SECRET_REFERENCE = re.compile(r"\bsecrets(?:\s*\.\s*|\s*\[\s*['\"])APP_STORE_CONNECT_", re.IGNORECASE)
+DISPATCH_MAIN_GATE = re.compile(
+    r'^[ \t]*if \[\[ "\$GITHUB_REF" != refs/heads/main \]\]; then[ \t]*\n'
+    r'(?:[ \t]*printf [^\n]*\n)?[ \t]*exit 1[ \t]*\n[ \t]*fi[ \t]*$',
+    re.MULTILINE,
+)
+CREDENTIAL_REMOVAL = re.compile(r'^[ \t]*rm -rf -- "\$RUNNER_TEMP/snap-release-auth"(?=[ \t]|$)', re.MULTILINE)
 
 
 class WorkflowLoader(yaml.BaseLoader):
@@ -95,7 +101,17 @@ def check(directory):
     jobs = workflow.get("jobs")
     if not isinstance(jobs, dict) or any(not isinstance(job, dict) for job in jobs.values()):
         return errors + [f"{RELEASE}: missing or invalid jobs"]
+    dispatch_steps = jobs.get("dispatch", {}).get("steps", [])
+    if not isinstance(dispatch_steps, list) or not any(
+        isinstance(step, dict) and "if" not in step and isinstance(step.get("run"), str)
+        and DISPATCH_MAIN_GATE.search(step["run"])
+        for step in dispatch_steps
+    ):
+        errors.append(f"{RELEASE}: dispatch job must reject refs other than refs/heads/main")
+
     signed = jobs.get("sign", {})
+    if signed.get("if") != "github.ref == 'refs/heads/main'":
+        errors.append(f"{RELEASE}: sign job must run only on refs/heads/main")
     if environment_name(signed) != ENVIRONMENT:
         errors.append(f"{RELEASE}: sign job must use the protected environment")
     if any(str(environment_name(job)).lower() == ENVIRONMENT for name, job in jobs.items() if name != "sign"):
@@ -106,6 +122,13 @@ def check(directory):
     signed_steps = signed.get("steps", [])
     if not isinstance(signed_steps, list) or any(not isinstance(step, dict) for step in signed_steps):
         return errors + [f"{RELEASE}: invalid signing steps"]
+    if not any(
+        step.get("if") == "always()" and isinstance(step.get("run"), str)
+        and CREDENTIAL_REMOVAL.search(step["run"])
+        for step in signed_steps
+    ):
+        errors.append(f"{RELEASE}: signing credential cleanup must run with if: always()")
+
     permitted_envs = {id(step.get("env")) for step in signed_steps if isinstance(step.get("env"), dict)}
     for mapping in nodes(workflow):
         if id(mapping) not in permitted_envs and any(

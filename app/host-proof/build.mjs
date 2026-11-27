@@ -113,11 +113,15 @@ export async function buildProof() {
         if (id.endsWith('/map/adapters/maplibre/iss-g1-page.ts')) {
           return replaceRequired(source, 'void main();', 'export { checksFor, decodePair };');
         }
+        if (id.endsWith('/src/map/index.ts')) {
+          return replaceRequired(source, 'core = createMapCore(vendor, clock);',
+            "core = createMapCore(Reflect.get(window, '__opdG1').guardMapCamera(vendor), clock);");
+        }
         if (id.endsWith('/src/iss-view/index.ts')) {
           // The proof owns the camera during scripted jumps. Preset clicks
           // and normal ISS rendering continue to use the real scene.
           return replaceRequired(source, "void paint('timer');",
-            "if (!Reflect.get(window, '__opdG1')?.holdIssCamera) void paint('timer');");
+            "if (Reflect.get(window, '__opdG1')?.heldCamera !== 'iss') void paint('timer');");
         }
       },
     }, {

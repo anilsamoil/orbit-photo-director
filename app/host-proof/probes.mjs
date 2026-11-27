@@ -136,9 +136,12 @@ function matchesMove(camera, center, zoom) {
 }
 
 export function verifyMove(before, after, center, zoom) {
-  requireValue(matchesMove(after, center, zoom)
+  if (matchesMove(after, center, zoom)
     && (longitudeError(before.lng, after.lng) > 0.001 || Math.abs(before.lat - after.lat) > 0.001)
-    && Math.abs(before.zoom - after.zoom) > 0.001, 'Scripted pan and zoom did not reach the requested camera');
+    && Math.abs(before.zoom - after.zoom) > 0.001) return;
+  throw Object.assign(new Error('Scripted pan and zoom did not reach the requested camera'), {
+    evidence: { before, actual: after, requested: { center, zoom } },
+  });
 }
 
 async function verifyOfflineEgress(rawFetch, includeNative = true) {
@@ -396,7 +399,16 @@ export function createProof({ rawFetch, tile, workers, localTiles, offline, fixt
     }
   };
   const proof = {
-    fixtureSHA256: fixture?.fixtureSHA256, documentId, checks: CHECKS, holdIssCamera: false,
+    fixtureSHA256: fixture?.fixtureSHA256, documentId, checks: CHECKS, heldCamera: null,
+    guardMapCamera(vendor) {
+      for (const method of ['setCenter', 'setBearing', 'easeTo']) {
+        const write = vendor[method];
+        vendor[method] = (value) => {
+          if (proof.heldCamera !== 'map') write(value);
+        };
+      }
+      return vendor;
+    },
     prepareRelaunch() { localStorage.setItem(storageKey, hex(crypto.getRandomValues(new Uint8Array(24)))); return state(); },
     state,
     async select(tab) {
@@ -440,11 +452,11 @@ export function createProof({ rawFetch, tile, workers, localTiles, offline, fixt
           for (const tab of ['map', 'iss']) {
             const map = await selectRenderer(tab);
             if (tab === 'iss') await preset(map, 'nadir');
-            const restore = tab === 'map' ? mapFixture(map) : () => { proof.holdIssCamera = false; };
-            proof.holdIssCamera = tab === 'iss';
+            const restore = tab === 'map' ? mapFixture(map) : undefined;
             const start = performance.now();
             const session = { tab, elapsedMs: 0, moves: 0, tileFrames: 0, minimumTilePixels: 64, verifiedMoveTimesMs: [] };
             sessions.push(session);
+            proof.heldCamera = tab;
             try {
               map.jumpTo({ center: [0, 0], zoom: 2, pitch: 0 });
               while (performance.now() - start < halfMs) {
@@ -463,13 +475,14 @@ export function createProof({ rawFetch, tile, workers, localTiles, offline, fixt
               }
             } finally {
               session.elapsedMs = performance.now() - start;
-              restore();
+              proof.heldCamera = null;
+              restore?.();
             }
           }
           return verifyStress(sessions, durationMs);
         } catch (error) {
           const actualDurationMs = sessions.reduce((sum, item) => sum + item.elapsedMs, 0);
-          throw Object.assign(error, { evidence: { sessions, actualDurationMs } });
+          throw Object.assign(error, { evidence: { ...error.evidence, sessions, actualDurationMs } });
         }
       }, { timeoutMs: FULL_STRESS_MS + 60_000, tabs: ['map', 'iss'] });
     },
@@ -540,7 +553,7 @@ export function createProof({ rawFetch, tile, workers, localTiles, offline, fixt
         const geometry = await measureGeometry({
           map, track, when: fixture.now, preset, pixels,
           tileFrame: () => freshTileFrame('iss', map),
-          holdCamera: (hold) => { proof.holdIssCamera = hold; },
+          holdCamera: (hold) => { proof.heldCamera = hold ? 'iss' : null; },
         });
         return { ...await tileProbe('iss', map), geometry };
       },

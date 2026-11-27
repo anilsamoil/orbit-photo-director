@@ -414,6 +414,60 @@ test('stress reports a renderer failure', async () => {
   }
 });
 
+test('Map stress keeps its requested camera while a zoom-out waits for tiles', async (t) => {
+  const { makeProof } = createProofHarness(t);
+  const proof = makeProof();
+  const map = window.__opdMap;
+  const jumpTo = map.jumpTo;
+  const repaint = map.triggerRepaint;
+  const issCenter = [-97, 28];
+  let bearingWrites = 0;
+  const camera = proof.guardMapCamera({
+    setCenter: (center) => jumpTo({ center, zoom: map.getZoom() }),
+    easeTo: ({ center }) => jumpTo({ center, zoom: map.getZoom() }),
+    setBearing: () => { bearingWrites++; },
+  });
+  let zoomOutFrames = null;
+  t.mock.method(map, 'jumpTo', (next) => {
+    if (zoomOutFrames === null && map.getZoom() === 4.9 && next.zoom === 3) {
+      zoomOutFrames = 0;
+      map.blankNextFrame();
+    }
+    jumpTo(next);
+  });
+  t.mock.method(map, 'triggerRepaint', () => {
+    if (zoomOutFrames !== null && zoomOutFrames++ === 1) {
+      camera.setCenter(issCenter);
+      camera.easeTo({ center: issCenter });
+      camera.setBearing(0);
+    }
+    repaint();
+  });
+
+  const result = await proof.stress(600_000);
+  assert.equal(result.status, 'pass', JSON.stringify(result.evidence));
+  assert.ok(zoomOutFrames >= 2);
+  assert.equal(bearingWrites, 0);
+  camera.setCenter(issCenter);
+  assert.deepEqual(map.getCenter(), { lng: -97, lat: 28 });
+});
+
+test('failed stress retains the rendered and requested camera evidence', async (t) => {
+  const { makeProof } = createProofHarness(t);
+  const proof = makeProof();
+  t.mock.method(window.__opdMap, 'getCenter', () => ({ lng: 0, lat: 0 }));
+
+  const { status, evidence } = await proof.stress(600_000);
+  assert.equal(status, 'fail');
+  assert.match(evidence.error, /requested camera/);
+  assert.deepEqual(evidence.sessions.map(({ tab, moves }) => ({ tab, moves })), [{ tab: 'map', moves: 0 }]);
+  assert.equal(evidence.before.zoom, 2);
+  assert.equal(evidence.actual.zoom, 3);
+  assert.deepEqual([evidence.actual.lng, evidence.actual.lat], [0, 0]);
+  assert.equal(evidence.requested.zoom, 3);
+  assert.notDeepEqual(evidence.requested.center, [0, 0]);
+});
+
 test('stress rejects a shortened or increased duration', async (t) => {
   const { makeProof } = createProofHarness(t);
   const proof = makeProof();
@@ -437,7 +491,10 @@ test('rendered stress frames must match the requested pan and zoom', () => {
   const before = { lng: 0, lat: 0, zoom: 3 };
   const after = { lng: 12, lat: 15, zoom: 4 };
   assert.doesNotThrow(() => verifyMove(before, after, [12, 15], 4));
-  assert.throws(() => verifyMove(before, before, [12, 15], 4), /requested camera/);
+  assert.throws(() => verifyMove(before, before, [12, 15], 4), {
+    message: /requested camera/,
+    evidence: { before, actual: before, requested: { center: [12, 15], zoom: 4 } },
+  });
   assert.throws(() => verifyMove(before, { ...after, zoom: 3 }, [12, 15], 3), /requested camera/);
   assert.throws(() => verifyMove(before, { ...after, lng: 0, lat: 0 }, [0, 0], 4), /requested camera/);
   assert.equal(CHECKS.length, 10);

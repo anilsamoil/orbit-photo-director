@@ -4,12 +4,27 @@ import unittest
 
 from check_release_workflow_guard import check, RELEASE
 
+DISPATCH_MAIN_CHECK = """\
+          if [[ "$GITHUB_REF" != refs/heads/main ]]; then
+            exit 1
+          fi
+"""
+SIGN_MAIN_CHECK = "    if: github.ref == 'refs/heads/main'\n"
+CLEANUP_CONDITION = "        if: always()\n"
+
 VALID = """\
 name: signing fixture
 on:
   workflow_dispatch:
 jobs:
+  dispatch:
+    steps:
+      - name: Require main
+        run: |
+          set -euo pipefail
+""" + DISPATCH_MAIN_CHECK + """\
   sign:
+""" + SIGN_MAIN_CHECK + """\
     environment: ios-release
     steps:
       - uses: example/action@0123456789abcdef0123456789abcdef01234567 # v1
@@ -19,6 +34,10 @@ jobs:
         run: |
           set -euo pipefail
           release
+      - name: Remove temporary signing credentials, raw logs and signed products
+""" + CLEANUP_CONDITION + """\
+        run: |
+          rm -rf -- "$RUNNER_TEMP/snap-release-auth"
 """
 
 
@@ -63,7 +82,8 @@ class WorkflowGuardTests(unittest.TestCase):
     def test_rejects_credentials_in_workflow_or_job_env(self):
         workflow_env = "env: { RELEASE_KEY: '${{ secrets.APP_STORE_CONNECT_KEY_ID }}' }\n"
         job_env = "    env: { APP_STORE_CONNECT_KEY_ID: fixture }\n"
-        for changed in (workflow_env + VALID, VALID.replace("    steps:", job_env + "    steps:")):
+        signed_job_env = VALID.replace(SIGN_MAIN_CHECK, SIGN_MAIN_CHECK + job_env)
+        for changed in (workflow_env + VALID, signed_job_env):
             with self.subTest(changed=changed):
                 self.assertIn("must use step-level env", self.validate(changed)[0])
 
@@ -89,6 +109,15 @@ class WorkflowGuardTests(unittest.TestCase):
             with self.subTest(revision=revision):
                 changed = VALID.replace("0123456789abcdef0123456789abcdef01234567", revision)
                 self.assertIn("full commit SHA", self.validate(changed)[0])
+
+    def test_rejects_cleanup_without_always(self):
+        errors = self.validate(VALID.replace(CLEANUP_CONDITION, ""))
+        self.assertIn(f"{RELEASE}: signing credential cleanup must run with if: always()", errors)
+
+    def test_rejects_removed_main_ref_checks(self):
+        errors = self.validate(VALID.replace(DISPATCH_MAIN_CHECK, "").replace(SIGN_MAIN_CHECK, ""))
+        self.assertIn(f"{RELEASE}: dispatch job must reject refs other than refs/heads/main", errors)
+        self.assertIn(f"{RELEASE}: sign job must run only on refs/heads/main", errors)
 
     def test_rejects_duplicate_keys(self):
         changed = VALID.replace("  workflow_dispatch:", "  push:\non:\n  workflow_dispatch:")

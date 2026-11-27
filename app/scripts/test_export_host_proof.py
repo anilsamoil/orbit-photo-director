@@ -36,8 +36,9 @@ def passing_evidence():
     }
     geometry = {
         "horizon": {**pose, "preset": "horizon", "limbErrorDeg": -0.999},
-        "nadir": {**pose, "preset": "nadir", "limbErrorDeg": None},
+        "nadir": {**pose, "preset": "nadir", "limbErrorDeg": None, "nested": "object"},
         "zoom12": {**projected, "applied": {"zoom": 12}, "tilePixels": 24},
+        "nasaTiles": {name: {"width": 256, "height": 256} for name in ("blue", "black")},
         "checks": [{"name": name, "pass": True} for name in (
             "projection", "field of view", "pitch clamp", "camera radius", "sub-point", "limb", "nadir filled",
             "nested property", "nasa tiles", "horizon and nadir poses applied", "zoom 12 applied",
@@ -92,13 +93,12 @@ def passing_evidence():
     }
 
 
-def fixture_png(marker):
+def fixture_png(marker, *, background=(16, 24, 33)):
     def chunk(kind, data):
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
 
-    dark = bytes((16, 24, 33))
-    edge = b"\0" + dark * 32
-    middle = b"\0" + dark * 8 + bytes(marker) * 16 + dark * 8
+    edge = b"\0" + bytes(background) * 32
+    middle = b"\0" + bytes(background) * 8 + bytes(marker) * 16 + bytes(background) * 8
     scanlines = edge * 8 + middle * 16 + edge * 8
     return (
         b"\x89PNG\r\n\x1a\n"
@@ -149,6 +149,16 @@ class HostProofExportTests(unittest.TestCase):
             report = json.loads(report_path.read_text(encoding="utf-8")) if report_path.exists() else None
             table = table_path.read_text(encoding="utf-8") if table_path.exists() else None
         return process, report, table
+
+    def test_map_screenshot_accepts_two_fixture_greens_in_one_color_cluster(self):
+        for name, png, expected in (
+            ("two greens", fixture_png(MAP_MARKER, background=(0, 225, 0)), (0, "pass")),
+            ("solid marker", fixture_png(MAP_MARKER, background=MAP_MARKER), (1, "fail")),
+            ("blank", fixture_png((0, 0, 0), background=(0, 0, 0)), (1, "fail")),
+        ):
+            with self.subTest(frame=name):
+                process, report, _ = self.export("success", {"G1-map": png}, checks="4", performed_checks=(4,))
+                self.assertEqual((process.returncode, report["results"][3]["status"]), expected, process.stderr)
 
     def test_failed_xctest_marks_passing_rows_with_missing_or_invalid_png(self):
         process, report, table = self.export("failure", {"G1-iss": fixture_png(MAP_MARKER)})
@@ -216,6 +226,26 @@ class HostProofExportTests(unittest.TestCase):
                 self.assertIn(expected, row["evidence"]["evidenceError"])
                 self.assertIn("| 5 | ISS pixels and vertical-perspective geometry | fail |", table)
                 self.assertIn(expected, table)
+
+    def test_passing_geometry_flags_cannot_override_nested_property_or_tile_dimensions(self):
+        undersized = {"width": 128, "height": 128}
+        for nested, tiles, expected in (
+            ("missing", {"blue": undersized, "black": undersized}, "nested object"),
+            ("object", {"blue": undersized}, "blue NASA tile"),
+            ("object", {"black": undersized}, "black NASA tile"),
+        ):
+            with self.subTest(nested=nested, tiles=tiles):
+                evidence = passing_evidence()[5]
+                evidence["geometry"]["nadir"]["nested"] = nested
+                evidence["geometry"]["nasaTiles"].update(tiles)
+                process, report, table = self.export(
+                    "success", {"G1-iss": fixture_png(ISS_MARKER)}, checks="5",
+                    performed_checks=(5,), evidence_overrides={5: evidence},
+                )
+                row = report["results"][4]
+                self.assertEqual((process.returncode, row["status"]), (1, "fail"), process.stderr)
+                self.assertIn(expected, row["evidence"]["evidenceError"])
+                self.assertIn("| 5 | ISS pixels and vertical-perspective geometry | fail |", table)
 
     def test_full_mode_still_requires_egress_and_stress_evidence(self):
         process, report, table = self.export(
@@ -427,11 +457,13 @@ class HostProofExportTests(unittest.TestCase):
 
     def test_stress_requires_rss_sample_counts_and_bounded_gaps(self):
         for field, value, expected in (
-            ("samples", 0, "positive RSS sample count"),
-            ("samples", None, "positive RSS sample count"),
+            ("samples", 0, "at least two RSS samples"),
+            ("samples", 1, "at least two RSS samples"),
+            ("samples", None, "at least two RSS samples"),
             ("missingSamples", 1, "zero missing RSS samples"),
             ("missingSamples", 900, "zero missing RSS samples"),
             ("missingSamples", None, "zero missing RSS samples"),
+            ("maxSampleGapMs", 0, "positive RSS sampling gap no greater than 2000 ms"),
             ("maxSampleGapMs", 2001, "RSS sampling gap no greater than 2000 ms"),
             ("maxSampleGapMs", 600_000, "RSS sampling gap no greater than 2000 ms"),
             ("maxSampleGapMs", None, "RSS sampling gap no greater than 2000 ms"),
@@ -448,6 +480,21 @@ class HostProofExportTests(unittest.TestCase):
                 self.assertIn(expected, row["evidence"]["evidenceError"])
                 self.assertIn("| 10 | Scripted pan and zoom, peak memory | fail |", table)
                 self.assertIn(expected, table)
+
+    def test_stress_rejects_impossible_rss_coverage(self):
+        for samples, gap, expected in (
+            (1, 0, "at least two RSS samples"),
+            (299, 2000, "observed RSS duration exceeds the sample count times the maximum gap"),
+        ):
+            with self.subTest(samples=samples, gap=gap):
+                evidence = passing_evidence()[10]
+                evidence["memory"].update(samples=samples, maxSampleGapMs=gap)
+                process, report, _ = self.export(
+                    "success", {}, checks="10", performed_checks=(10,), evidence_overrides={10: evidence},
+                )
+                row = report["results"][9]
+                self.assertEqual((process.returncode, row["status"]), (1, "fail"), process.stderr)
+                self.assertIn(expected, row["evidence"]["evidenceError"])
 
     def test_stress_requires_full_duration_for_each_renderer_and_memory_trace(self):
         short_renderer = passing_evidence()[10]

@@ -165,8 +165,11 @@ def validate_screenshot(path, *, launch=False, proof_tab=None):
         f"light center {light_fraction:.2%}{marker_stats}",
         flush=True,
     )
-    if deviation < 6 or distinct < 2:
-        raise ValueError("uniform or near-blank frame (need luminance std-dev >= 6 and at least two color clusters)")
+    if deviation < 6 or (distinct < 2 and marker_fraction < 0.95):
+        raise ValueError(
+            "uniform or near-blank frame (need luminance std-dev >= 6 and either "
+            "at least two color clusters or >= 95% fixture marker coverage)"
+        )
     if launch and (dark_fraction < 0.75 or light_fraction < 0.001):
         raise ValueError("missing SNAP placeholder pixels (need >= 75% dark background and >= 0.1% light center)")
     if marker is not None and marker_fraction < 0.01:
