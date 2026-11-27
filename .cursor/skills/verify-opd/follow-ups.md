@@ -64,11 +64,17 @@ A clear-point tap or click on a published hazard polygon is recorded and is not 
 
 Recorded after #370 (`d9516ca`).
 
-## P2: passing checks 6 and 8 skip evidence content (W-03)
+## Open: iOS 27.2 simulator results are not G1 sign-off
 
-`validate_passing_evidence` in `app/scripts/export-host-proof.py` checks content for checks 1 and 9 (egress denial), check 10 (full stress duration and peak RSS), and checks 4 and 5 (screenshot pixels). A row whose status is `pass` and whose evidence is a nonempty dict is kept for checks 6 and 8 with no further read. Check 6 is the bridge receipts. Check 8 is the relaunch token. `test_passing_selected_row_with_invalid_evidence_fails` rejects a non-dict for check 6 and leaves check 8 passing on `{"probe": "check 8"}`. A product test should require the bridge bytes for 6 and the relaunch comparison for 8. Check 7 has the same fall-through. This skill does not edit the exporter.
+The owner's Mac has iOS 27.2 simulators from Xcode 27.2. Those simulators can run G1 checks 2, 3, 4, 5, 9 and 10 on a real GPU. A result labelled `iOS 27.2 simulator` is evidence. It does not close the on-device gate in `docs/ios/DECISIONS.md` under `## G1 on-device gate`. This skill reads hosted `ios.yml` artifacts from Linux and cannot read that local simulator. Check 5 on iPad, including a null horizon limb, stays open, with checks 2, 3, 4, 9 and 10 and iPad check 7. `ios-release` dispatch still waits on the owner's G0 device registration and team ID. This skill does not dispatch that workflow.
 
-Recorded after #383 (`cb0bbd2b35a829e13ac8923e49ef0d3624a3169d`).
+Recorded after #390 (`309049acf2f49485da92777e2906958d6127a72d`).
+
+## P3: the release decision says the proof artifact is kept one day
+
+`docs/ios/DECISIONS.md` says the unsigned `snap-proof-web` artifact is kept for one day. `.github/workflows/ios-release.yml` sets `retention-days: 3` on that artifact. The owner-approval window in `docs/ios/OWNER_STEPS.md` is three days. This skill follows the workflow. It does not edit the decision.
+
+Recorded after #390 (`309049acf2f49485da92777e2906958d6127a72d`).
 
 ## P3: grant polling stops after a public 503 (Astra r4)
 
@@ -94,19 +100,29 @@ The 400 `name_empty` cases run against the in-memory worker in `worker/test/prof
 
 Recorded after #388 (`15573790a0f73c83d414b4e4064211fa76d7438d`).
 
-## P3: D-1 still describes a full simulator proof (W-03)
+## Resolved
 
-`docs/designs/ios-app.md` line 91 says G1 is a simulator proof in W-02, then the same proof signed on a ground device in W-03, and that host-dependent packages start after the simulator step. `docs/ios/DECISIONS.md` line 41 keeps checks 2, 3, 4, 5, 9 and 10, and check 7 on iPad, as an open on-device gate before W-03 can be called done or anything ships. Updating that sentence is W-03. This skill does not edit the design doc.
+### P2: passing checks 6 and 8 skip evidence content (W-03)
+
+`validate_passing_evidence` in `app/scripts/export-host-proof.py` now calls `validate_bridge` for check 6 and `validate_lifecycle` for check 8. Check 7 calls `validate_tile_routes`. Check 5 requires nadir `nested` `object` and 256 by 256 NASA tiles. Check 10 requires the RSS sample, gap, and duration rules. `test_passing_selected_row_with_invalid_evidence_fails` no longer accepts a placeholder dict for those rows.
 
 Recorded after #383 (`cb0bbd2b35a829e13ac8923e49ef0d3624a3169d`).
 
-## Resolved
+Resolved by #390 (`309049acf2f49485da92777e2906958d6127a72d`).
+
+### P3: D-1 still describes a full simulator proof (W-03)
+
+`docs/designs/ios-app.md` line 91 now says the hosted simulators lose WebGL, and that W-03 verifies checks 2 through 5, 9, 10, and iPad check 7 on signed devices. The open gate remains `docs/ios/DECISIONS.md` under `## G1 on-device gate`.
+
+Recorded after #383 (`cb0bbd2b35a829e13ac8923e49ef0d3624a3169d`).
+
+Resolved by #390 (`309049acf2f49485da92777e2906958d6127a72d`).
 
 ### Verification gap: the merge-SHA iPad launch PNG is white
 
 `iOS unsigned` run `45877212976` on `26746c9e51b523c0dca4efb25ad7cf5c71429ee2` attached a 1668 by 2420 white iPad PNG while the job stayed green. The export step only required a nonempty file.
 
-#383 calls `validate_screenshot(png, launch=True)` in `.github/workflows/ios.yml`. A frame with luminance standard deviation under 6, or only one color cluster, raises `uniform or near-blank frame`. A 64 by 64 white PNG exits 1 with `luminance std-dev 0.00, color clusters 1`. That white frame now fails the launch job.
+#383 calls `validate_screenshot(png, launch=True)` in `.github/workflows/ios.yml`. #390 aligns that test with `RenderedScreenshot.swift`: luminance standard deviation at least 6, and either two color clusters or at least 95% fixture-marker coverage. A launch frame has no marker, so one cluster still fails. A 64 by 64 white PNG exits 1 with `luminance std-dev 0.00, color clusters 1`. That white frame fails the launch job.
 
 Recorded after #381 (`26746c9e51b523c0dca4efb25ad7cf5c71429ee2`).
 
@@ -122,7 +138,7 @@ Resolved by #383 (`cb0bbd2b35a829e13ac8923e49ef0d3624a3169d`).
 
 ### Deferred: template code-sign identity in the Xcode project
 
-`project.pbxproj` no longer sets `CODE_SIGN_IDENTITY = "iPhone Developer"`. The configurations use `CODE_SIGN_STYLE = Automatic`. `docs/ios/DECISIONS.md` leaves the resolved signing identity to W-03. The hosted test still passes `CODE_SIGNING_ALLOWED=NO`.
+`project.pbxproj` no longer sets `CODE_SIGN_IDENTITY = "iPhone Developer"`. The configurations use `CODE_SIGN_STYLE = Automatic`. #390 checks the signed archive's team and requires `ITSAppUsesNonExemptEncryption` false. The hosted test still passes `CODE_SIGNING_ALLOWED=NO`.
 
 Recorded after #381 (`26746c9e51b523c0dca4efb25ad7cf5c71429ee2`).
 
