@@ -4,10 +4,6 @@ Open defects and stale documentation from architecture and feature work. Each en
 
 ## Behavior defects
 
-**The Worker and frontend disagree on whitespace-only target names.** The Worker accepts a name that the frontend rejects after trimming. A stored row with such a name can block hydration of the full list. See `worker/src/profiles.ts` and `frontend/src/profile.ts`.
-
-**The Add target toast promises an hourly update for profiles outside the generator list.** Those profiles can show the new map ring, but the generator does not publish a scored queue for them. See `frontend/src/profile-crud.ts` and `generator/config.py`.
-
 **The 1 Hz countdown tick overwrites the offline banner.** `rerenderCountdowns` at `main.ts:643` ends with an unconditional `setBanner(bannerWithLaunchesOverlay(bannerFromManifest(...)))`. It ignores `currentlyOffline` and it ignores the tappable "sign in again" banner that `doRefresh` sets when the Access session has expired. Once a manifest exists, either banner survives for at most one second. Pin the offline banner first, then fix.
 
 **Map pin filtering and queue filtering can disagree for a signed-in crew member.** `readActiveDistanceThresholdKm` in `map.ts` resolves the profile with `parseProfileFromURL` only. `main.ts` filters the queue from `currentProfile`, which comes from `resolveAccountProfile`. When those two resolve to different profiles, the map and the queue show different passes for the same operator. The structural work made this visible rather than fixing it: both callers now share one predicate in `pass-filter.ts`, and each still reads its own threshold. `queueDistanceThresholdKm` in `main.ts` is the other half. Deciding which read is correct is a product call.

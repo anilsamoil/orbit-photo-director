@@ -403,6 +403,52 @@ describe('optimistic add flow', () => {
   });
 });
 
+describe.each([
+  [PROFILE, {
+    add: 'Added "Test target" — appears on the map & queue after the next hourly update',
+    edit: 'Updated "Edited target" — map & queue refresh on the next hourly update',
+    import: 'Imported 2 targets — they appear on the map & queue after the next hourly update.',
+  }],
+  ['u-0123456789abcdef0123456789ab', {
+    add: 'Saved "Test target" — shows on the map.',
+    edit: 'Saved "Edited target" — shows on the map.',
+    import: 'Imported 2 targets — saved and shown on the map.',
+  }],
+])('target success toasts for %s', (profileName, copy) => {
+  it('shows the add confirmation', async () => {
+    saveProfile(createDefaultProfile(profileName));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"ok":true,"count":1}')));
+
+    await _test.handleAdd(profileName, makeTarget({ id: makePersonalTargetId(profileName) }));
+
+    expect(document.getElementById('toast')?.textContent).toBe(copy.add);
+  });
+
+  it('shows the edit confirmation', async () => {
+    const target = makeTarget({ id: makePersonalTargetId(profileName) });
+    saveProfile(addPersonalTarget(createDefaultProfile(profileName), target));
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) =>
+      new Response(init?.method === 'PUT' ? '{"ok":true,"count":1}' : JSON.stringify({ targets: [target] })),
+    ));
+
+    await _test.handleEdit(profileName, { ...target, name: 'Edited target' });
+
+    expect(document.getElementById('toast')?.textContent).toBe(copy.edit);
+  });
+
+  it('shows the CSV import confirmation', async () => {
+    saveProfile(createDefaultProfile(profileName));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"ok":true,"count":1}')));
+
+    await _test.handleCsvImport(profileName, [
+      { line: 2, name: 'One', lat: 1, lon: 1, priority: 5 },
+      { line: 3, name: 'Two', lat: 2, lon: 2, priority: 5 },
+    ]);
+
+    expect(document.getElementById('toast')?.textContent).toBe(copy.import);
+  });
+});
+
 describe('optimistic delete flow', () => {
   let existing: PersonalTarget;
   beforeEach(() => {
