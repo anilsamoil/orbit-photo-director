@@ -27,6 +27,7 @@ CHECK_IDS = tuple(range(1, len(CHECKS) + 1))
 DEVICE_REQUIRED = {"reason": "Requires on-device proof before W-03 can be called done", "gate": "G1-device"}
 TEST = "HostProofTests/testOfflineHostProof()"
 FULL_STRESS_MS = 600_000
+MAX_RSS_SAMPLE_GAP_MS = 2_000
 BLOCKED_HOSTS = ["g1-fetch.invalid", "g1-websocket.invalid", "g1-xhr.invalid"]
 SCREENSHOT_TABS = {4: "map", 5: "iss"}
 FIXTURE_DIGEST = hashlib.sha256(bytes(range(256)) * 16).hexdigest()
@@ -197,6 +198,29 @@ def validate_tile_routes(evidence):
         raise ValueError("Check 7 requires 100 per-path native tile observations and at least 50 tiles/s throughput")
 
 
+def validate_recovery_process(evidence):
+    process = object_field(evidence, "process")
+    pids = [process.get(key) for key in ("pid", "appPID", "launchdPID")]
+    observed = process.get("observedAtMs")
+    if (
+        process.get("process") != "WebContent"
+        or not all(integer_at_least(pid, 2) for pid in pids) or len(set(pids)) != len(pids)
+        or not integer_at_least(observed, 1)
+        or object_field(evidence, "native").get("process") != process
+    ):
+        raise ValueError("Check 9 requires the observer's WebContent process observation")
+
+    termination = object_field(process, "termination")
+    signaled = termination.get("signaledAtMs")
+    exited = termination.get("exitedAtMs")
+    if (
+        not integer_at_least(termination.get("pid"), 2) or termination["pid"] != process["pid"]
+        or termination.get("signal") != "SIGTERM"
+        or not integer_at_least(signaled, observed) or not integer_at_least(exited, signaled)
+    ):
+        raise ValueError("Check 9 requires a valid WebContent termination receipt")
+
+
 def validate_lifecycle(number, evidence):
     before = object_field(evidence, "before")
     after = object_field(evidence, "after")
@@ -224,6 +248,7 @@ def validate_lifecycle(number, evidence):
             or not integer_at_least(evidence.get("reloads"), 1)
         ):
             raise ValueError("Check 9 requires a native termination callback and reload on the ISS tab")
+        validate_recovery_process(evidence)
         validate_tile_pixels(object_field(evidence, "tiles"), "iss")
 
 
@@ -238,6 +263,17 @@ def validate_stress(evidence):
         or type(evidence.get("webProcessTerminations")) is not int or evidence["webProcessTerminations"] != 0
     ):
         raise ValueError("Check 10 is missing full-duration stress or WebContent peak RSS evidence")
+    if not integer_at_least(memory.get("samples"), 1):
+        raise ValueError("Check 10 requires a positive RSS sample count")
+    missing_samples = memory.get("missingSamples")
+    if type(missing_samples) is not int or missing_samples != 0:
+        raise ValueError("Check 10 requires zero missing RSS samples")
+    gap = memory.get("maxSampleGapMs")
+    if (
+        not integer_at_least(gap, 0) or gap > MAX_RSS_SAMPLE_GAP_MS
+        or memory.get("maxAllowedSampleGapMs") != MAX_RSS_SAMPLE_GAP_MS
+    ):
+        raise ValueError(f"Check 10 requires an RSS sampling gap no greater than {MAX_RSS_SAMPLE_GAP_MS} ms")
     sessions = evidence.get("sessions")
     half_ms = FULL_STRESS_MS / 2
     max_gap_ms = 30_000

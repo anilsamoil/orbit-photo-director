@@ -70,7 +70,7 @@ jobs:
           path: ${{ runner.temp }}/snap-proof-web
           include-hidden-files: true
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 3
 
   sign:
     name: Sign and upload SNAP HostProof
@@ -141,13 +141,10 @@ jobs:
           run_xcode() {
             local phase=$1 status=0
             shift
-            xcodebuild "$@" "${authentication[@]}" > "$raw_logs/$phase.log" 2>&1 || status=$?
-            APP_STORE_CONNECT_KEY_ID="$APP_STORE_CONNECT_KEY_ID" \
-              APP_STORE_CONNECT_ISSUER_ID="$APP_STORE_CONNECT_ISSUER_ID" \
-              APP_STORE_CONNECT_PRIVATE_KEY="$APP_STORE_CONNECT_PRIVATE_KEY" \
-              python3 "$support" redact "$raw_logs/$phase.log" "$logs/$phase.log" "$key" "$phase" "$status"
+            TMPDIR="$raw_logs/" xcodebuild "$@" "${authentication[@]}" > "$raw_logs/$phase.log" 2>&1 || status=$?
+            python3 "$support" summarize-xcode "$raw_logs/$phase.log" "$logs/$phase.json" "$phase" "$status"
             if (( status != 0 )); then
-              if [[ "$phase" == archive ]] && grep -Eqi 'no devices|no profiles for' "$logs/$phase.log"; then
+              if [[ "$phase" == archive ]] && grep -Eq '"code": "(NO_REGISTERED_DEVICES|NO_MATCHING_PROFILE)"' "$logs/$phase.json"; then
                 printf '%s\n' 'Xcode archive signing failed. Check the G0 device registration prerequisite in docs/ios/OWNER_STEPS.md (steps 3 and 4).' >&2
               fi
               printf 'Xcode %s failed. See the redacted release evidence.\n' "$phase" >&2
@@ -169,11 +166,12 @@ jobs:
             }
           if python3 app/scripts/check-archive-privacy.py --archive "$archive" \
             --package-resolved "$project/project.xcworkspace/xcshareddata/swiftpm/Package.resolved" \
-            --source-packages "$packages" --output "$raw_logs/privacy-check.log" \
+            --source-packages "$packages" --output "$logs/privacy-check.json" \
+            --markdown-output "$logs/privacy-check.md" \
             > "$raw_logs/privacy-command.log" 2>&1; then
-            printf '%s\n' 'SDK privacy check passed.' > "$logs/privacy-check.log"
+            printf '%s\n' 'SDK privacy check passed.'
           else
-            printf '%s\n' 'SDK privacy check failed.' | tee "$logs/privacy-check.log" >&2
+            printf '%s\n' 'SDK privacy check failed. See the redacted release evidence.' >&2
             exit 1
           fi
 
@@ -205,7 +203,10 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: snap-release-evidence-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/snap-release-logs/*.log
+          path: |
+            ${{ runner.temp }}/snap-release-logs/*.json
+            ${{ runner.temp }}/snap-release-logs/*.log
+            ${{ runner.temp }}/snap-release-logs/*.md
           if-no-files-found: warn
           retention-days: 14
       - name: Remove temporary signing credentials, raw logs and signed products
@@ -214,5 +215,6 @@ jobs:
           rm -rf -- "$RUNNER_TEMP/snap-release-auth" "$RUNNER_TEMP/snap-release-private-logs" \
             "$RUNNER_TEMP/snap-release-output" "$RUNNER_TEMP/snap-release-export" \
             "$RUNNER_TEMP/snap-release-inspect" "$RUNNER_TEMP/snap-release-upload" \
+            "$RUNNER_TEMP/snap-release-derived" "$RUNNER_TEMP/snap-release-swiftpm" \
             "$RUNNER_TEMP/private_keys" "$GITHUB_WORKSPACE/private_keys" \
             "$HOME/.appstoreconnect" "$HOME/private_keys" "$HOME/.private_keys"

@@ -58,7 +58,8 @@ class ArchivePrivacyTests(unittest.TestCase):
 
         self.bad_signature = None
         self.checkout_revision = privacy.REVISION
-        self.output = self.root / "privacy-check.log"
+        self.output = self.root / "privacy-check.json"
+        self.markdown = self.root / "privacy-check.md"
         self.patch = patch.object(privacy, "command", self.verify_tool)
         self.patch.start()
         self.addCleanup(self.patch.stop)
@@ -84,46 +85,97 @@ class ArchivePrivacyTests(unittest.TestCase):
         with patch.object(sys, "argv", [
             "check-archive-privacy.py", "--archive", str(self.archive), "--package-resolved", str(self.lock),
             "--source-packages", str(self.source_packages), "--output", str(self.output),
+            "--markdown-output", str(self.markdown),
         ]):
             result = privacy.main()
-        evidence = self.output.read_text(encoding="utf-8")
-        self.assertNotIn(str(self.root), evidence)
-        return result, evidence
+        report = self.output.read_text(encoding="utf-8")
+        summary = self.markdown.read_text(encoding="utf-8")
+        for output in (report, summary):
+            self.assertNotIn(str(self.root), output)
+        return result, json.loads(report), summary
 
     def test_pinned_binary_sdks_and_archive_build(self):
-        result, evidence = self.run_check()
+        result, evidence, summary = self.run_check()
         self.assertEqual(result, 0, evidence)
-        self.assertIn("SNAP archive build 101", evidence)
-        self.assertIn(f"capacitor-swift-pm 8.6.2 revision {privacy.REVISION}", evidence)
-        for sdk in privacy.SDK_BUNDLE_IDS:
-            self.assertIn(f"{sdk} 8.6.2 XCFramework vendor signature verified", evidence)
-            self.assertIn(f"Frameworks/{sdk}.framework/{privacy.MANIFEST}", evidence)
-        self.assertIn("SDK privacy check passed", evidence)
+        self.assertEqual(evidence, {
+            "outcome": "succeeded",
+            "archive_build_number": "101",
+            "binary_dependencies": "present",
+            "sdks": [
+                {
+                    "name": sdk,
+                    "version": "8.6.2",
+                    "revision": "b945758eaf3f034cea377e3138a60611cb40a88b",
+                    "binary_framework": f"{sdk}.xcframework",
+                    "vendor_signature": "verified",
+                    "manifests": [{
+                        "path": f"Products/Applications/App.app/Frameworks/{sdk}.framework/PrivacyInfo.xcprivacy",
+                        "accessed_api_types": [],
+                    }],
+                } for sdk in ("Capacitor", "Cordova")
+            ],
+            "host_manifest": None,
+        })
+        self.assertIn("Archive build 101", summary)
+        self.assertIn("SDK privacy check passed", summary)
+        self.assertIn("Capacitor 8.6.2 vendor signature verified", summary)
 
     def test_sdk_manifest_in_a_top_level_resource_bundle(self):
         target = self.app / "Capacitor_Capacitor.bundle" / "Resources" / privacy.MANIFEST
         target.parent.mkdir(parents=True)
         (self.framework("Capacitor") / privacy.MANIFEST).rename(target)
-        result, evidence = self.run_check()
+        result, evidence, _ = self.run_check()
         self.assertEqual(result, 0, evidence)
-        self.assertIn("Capacitor_Capacitor.bundle/Resources/PrivacyInfo.xcprivacy", evidence)
+        self.assertEqual(evidence["sdks"][0]["manifests"][0]["path"],
+                         "Products/Applications/App.app/Capacitor_Capacitor.bundle/Resources/PrivacyInfo.xcprivacy")
+
+    def test_manifest_path_outside_archive_is_rejected(self):
+        manifest = self.framework("Cordova") / privacy.MANIFEST
+        outside = self.root / "outside" / privacy.MANIFEST
+        outside.parent.mkdir()
+        manifest.rename(outside)
+        manifest.symlink_to(outside)
+        result, evidence, summary = self.run_check()
+        self.assertEqual(result, 1)
+        self.assertEqual(evidence["sdks"][1]["manifests"], [])
+        self.assertNotIn("outside", json.dumps(evidence) + summary)
+
+    def test_unreviewed_path_component_is_not_published(self):
+        unreviewed = "fixture-value-outside-reviewed-layout"
+        target = self.framework("Cordova") / unreviewed / privacy.MANIFEST
+        target.parent.mkdir()
+        (self.framework("Cordova") / privacy.MANIFEST).rename(target)
+        result, evidence, summary = self.run_check()
+        self.assertEqual(result, 1)
+        self.assertEqual(evidence["sdks"][1]["manifests"], [])
+        self.assertNotIn(unreviewed, json.dumps(evidence) + summary)
+
+    def test_invalid_archive_build_is_not_published(self):
+        path = self.app / "Info.plist"
+        info = plistlib.loads(path.read_bytes())
+        info["CFBundleVersion"] = "1..4"
+        write_plist(path, info)
+        result, evidence, summary = self.run_check()
+        self.assertEqual(result, 1)
+        self.assertIsNone(evidence["archive_build_number"])
+        self.assertNotIn("1..4", json.dumps(evidence) + summary)
 
     def test_manifest_in_an_unrelated_bundle_does_not_cover_an_sdk(self):
         (self.framework("Cordova") / privacy.MANIFEST).unlink()
         write_plist(self.app / "Other.bundle" / privacy.MANIFEST, EMPTY_MANIFEST)
-        result, evidence = self.run_check()
+        result, evidence, _ = self.run_check()
         self.assertEqual(result, 1)
-        self.assertIn("Missing archived SDK privacy manifest for Cordova", evidence)
+        self.assertEqual(evidence["failure"], "Missing archived SDK privacy manifest for Cordova")
 
     def test_missing_required_keys_and_broken_plist_fail(self):
         manifest = self.framework("Cordova") / privacy.MANIFEST
         for data in (plistlib.dumps({"NSPrivacyTracking": False}), b"<?xml version='1.0'?><plist><dict>"):
             with self.subTest(data=data):
                 manifest.write_bytes(data)
-                result, evidence = self.run_check()
+                result, evidence, _ = self.run_check()
                 self.assertEqual(result, 1)
-                self.assertIn("FAILED:", evidence)
-                self.assertIn("archived Cordova SDK", evidence)
+                self.assertEqual(evidence["outcome"], "failed")
+                self.assertIn("archived Cordova SDK", evidence["failure"])
 
     def test_missing_reasons_and_changed_declarations_fail(self):
         for reasons, message in (([], "Invalid required-reason API declaration"), (["CA92.1"], "declarations differ")):
@@ -134,9 +186,9 @@ class ArchivePrivacyTests(unittest.TestCase):
                         "NSPrivacyAccessedAPITypeReasons": reasons,
                     }],
                 })
-                result, evidence = self.run_check()
+                result, evidence, _ = self.run_check()
                 self.assertEqual(result, 1)
-                self.assertIn(message, evidence)
+                self.assertIn(message, evidence["failure"])
 
     def test_documented_api_reasons_pass(self):
         declarations = {
@@ -155,9 +207,37 @@ class ArchivePrivacyTests(unittest.TestCase):
                 for category, reasons in declarations.items()
             ],
         })
-        result, evidence = self.run_check()
+        result, evidence, _ = self.run_check()
         self.assertEqual(result, 0, evidence)
-        self.assertIn("Host app manifest verified", evidence)
+        self.assertEqual(evidence["host_manifest"], {
+            "path": "Products/Applications/App.app/PrivacyInfo.xcprivacy",
+            "accessed_api_types": [
+                {"category": f"NSPrivacyAccessedAPICategory{category}", "reasons": sorted(reasons)}
+                for category, reasons in sorted(declarations.items())
+            ],
+        })
+
+    def test_public_manifests_contain_only_validated_category_and_reason_values(self):
+        unpublished = "unreviewed-fixture-value"
+        manifest = {
+            **EMPTY_MANIFEST,
+            "NSPrivacyTracking": True,
+            "NSPrivacyTrackingDomains": [unpublished],
+            "NSPrivacyAccessedAPITypes": [{
+                "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategoryUserDefaults",
+                "NSPrivacyAccessedAPITypeReasons": ["CA92.1"],
+                "AdditionalField": unpublished,
+            }],
+        }
+        source = self.source_packages / "artifacts" / privacy.PACKAGE / "Cordova"
+        write_plist(source / "Cordova.xcframework/ios-arm64/Cordova.framework" / privacy.MANIFEST, manifest)
+        write_plist(self.framework("Cordova") / privacy.MANIFEST, manifest)
+        result, evidence, summary = self.run_check()
+        self.assertEqual(result, 0, evidence)
+        self.assertEqual(evidence["sdks"][1]["manifests"][0]["accessed_api_types"], [
+            {"category": "NSPrivacyAccessedAPICategoryUserDefaults", "reasons": ["CA92.1"]},
+        ])
+        self.assertNotIn(unpublished, json.dumps(evidence) + summary)
 
     def test_unsupported_api_categories_and_reasons_fail(self):
         for category, reasons in (
@@ -172,43 +252,44 @@ class ArchivePrivacyTests(unittest.TestCase):
                         "NSPrivacyAccessedAPITypeReasons": reasons,
                     }],
                 })
-                result, evidence = self.run_check()
+                result, evidence, _ = self.run_check()
                 self.assertEqual(result, 1, evidence)
-                self.assertIn("Invalid required-reason API declaration for host app", evidence)
+                self.assertEqual(evidence["failure"], "Invalid required-reason API declaration for host app")
 
     def test_bad_signature_fails_without_exposing_tool_output(self):
         self.bad_signature = "Cordova.xcframework"
-        result, evidence = self.run_check()
+        result, evidence, summary = self.run_check()
         self.assertEqual(result, 1)
-        self.assertIn("Cordova 8.6.2 vendor signature failed", evidence)
-        self.assertNotIn("/private/path/verification-detail", evidence)
-        self.assertNotIn("check passed", evidence)
+        self.assertEqual(evidence["sdks"][1]["vendor_signature"], "failed")
+        self.assertIn("Cordova 8.6.2 vendor signature failed", summary)
+        self.assertNotIn("/private/path/verification-detail", json.dumps(evidence) + summary)
+        self.assertNotIn("check passed", summary)
 
     def test_wrong_archive_sdk_binary_fails(self):
         (self.framework("Capacitor") / "Capacitor").write_text(DIFFERENT_UUID, encoding="utf-8")
-        result, evidence = self.run_check()
+        result, evidence, _ = self.run_check()
         self.assertEqual(result, 1)
-        self.assertIn("Archived Capacitor binary does not match the resolved SDK", evidence)
+        self.assertIn("Archived Capacitor binary does not match the resolved SDK", evidence["failure"])
 
     def test_wrong_checkout_revision_fails(self):
         self.checkout_revision = "0" * 40
-        result, evidence = self.run_check()
+        result, evidence, _ = self.run_check()
         self.assertEqual(result, 1)
-        self.assertIn("checkout does not match Package.resolved", evidence)
+        self.assertIn("checkout does not match Package.resolved", evidence["failure"])
 
     def test_unknown_package_requires_inventory_review(self):
         lock = json.loads(self.lock.read_bytes())
         lock["pins"].append({"identity": "unknown"})
         self.lock.write_text(json.dumps(lock), encoding="utf-8")
-        result, evidence = self.run_check()
+        result, evidence, _ = self.run_check()
         self.assertEqual(result, 1)
-        self.assertIn("Package.resolved differs from the reviewed SDK inventory", evidence)
+        self.assertEqual(evidence["failure"], "Package.resolved differs from the reviewed SDK inventory")
 
     def test_unreviewed_embedded_framework_requires_inventory_review(self):
         self.framework("Unexpected").mkdir()
-        result, evidence = self.run_check()
+        result, evidence, _ = self.run_check()
         self.assertEqual(result, 1)
-        self.assertIn("Embedded frameworks differ from the reviewed SDK inventory", evidence)
+        self.assertEqual(evidence["failure"], "Embedded frameworks differ from the reviewed SDK inventory")
 
 
 if __name__ == "__main__":

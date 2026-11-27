@@ -64,6 +64,10 @@ def passing_evidence():
     before = {**state, "documentId": "first-doc"}
     after = {**state, "documentId": "second-doc"}
     move_times = list(range(29_000, 300_000, 29_000))
+    process = {
+        "process": "WebContent", "pid": 30, "launchdPID": 10, "appPID": 20, "observedAtMs": 9_900,
+        "termination": {"pid": 30, "signal": "SIGTERM", "signaledAtMs": 9_901, "exitedAtMs": 10_000},
+    }
     return {
         1: {"localOrigin": origin, "isSecureContext": True, "web": digest, "native": digest, "bytes": 4096, "egress": egress},
         2: {"workers": [{"url": f"{origin}/assets/maplibre-gl-worker-fixture.js", "type": "module"}],
@@ -77,9 +81,11 @@ def passing_evidence():
             "route": "/__g1/tiles/<index>.png", "cache": "no-store"},
         8: {"before": before, "after": after, "beforeLaunchId": "first-app", "afterLaunchId": "second-app",
             "beforeAppPID": 10, "afterAppPID": 20, "appQuitObserved": True},
-        9: {"before": before, "after": after, "terminationCallbacks": 1, "reloads": 1, "egress": egress, "tiles": iss_pixels},
+        9: {"before": before, "after": after, "terminationCallbacks": 1, "reloads": 1,
+            "egress": egress, "tiles": iss_pixels, "process": process, "native": {"process": process}},
         10: {"requestedDurationMs": 600_000, "actualDurationMs": 600_000, "webProcessTerminations": 0,
-             "memory": {"observedDurationMs": 600_000, "peakBytes": 123_456},
+             "memory": {"observedDurationMs": 600_000, "peakBytes": 123_456, "samples": 2400, "missingSamples": 0,
+                        "maxSampleGapMs": 2000, "maxAllowedSampleGapMs": 2000},
              "sessions": [{"tab": tab, "elapsedMs": 300_000, "moves": len(move_times),
                            "tileFrames": len(move_times), "minimumTilePixels": 8, "verifiedMoveTimesMs": move_times}
                           for tab in ("map", "iss")]},
@@ -231,17 +237,21 @@ class HostProofExportTests(unittest.TestCase):
         self.assertIn("| 10 | Scripted pan and zoom, peak memory | fail |", table)
 
     def test_scoped_success_requires_only_selected_checks(self):
-        process, report, table = self.export("success", {}, checks="8, 6, 1, 8", performed_checks=(1, 6, 8))
-        self.assertEqual(process.returncode, 0, process.stderr)
-        self.assertEqual(report["selectedChecks"], [1, 6, 8])
-        self.assertEqual(report["evidenceExportErrors"], [])
-        for row in report["results"]:
-            if row["id"] in (1, 6, 8):
-                self.assertEqual(row["status"], "pass")
-            else:
-                self.assertEqual(row["status"], "not-run")
-                self.assertEqual(row["evidence"], DEVICE_REQUIRED)
-        self.assertEqual(table.count("| not-run (on-device required) |"), 7)
+        for checks, selected in (
+            ("8, 6, 1, 8", (1, 6, 8)), ("1,6,8", (1, 6, 8)), ("1,6,7,8", (1, 6, 7, 8)),
+        ):
+            with self.subTest(checks=checks):
+                process, report, table = self.export("success", {}, checks=checks, performed_checks=selected)
+                self.assertEqual(process.returncode, 0, process.stderr)
+                self.assertEqual(report["selectedChecks"], list(selected))
+                self.assertEqual(report["evidenceExportErrors"], [])
+                for row in report["results"]:
+                    if row["id"] in selected:
+                        self.assertEqual(row["status"], "pass")
+                    else:
+                        self.assertEqual(row["status"], "not-run")
+                        self.assertEqual(row["evidence"], DEVICE_REQUIRED)
+                self.assertEqual(table.count("| not-run (on-device required) |"), 10 - len(selected))
 
     def test_scoped_success_requires_check_1_egress_evidence(self):
         process, report, table = self.export(
@@ -384,6 +394,60 @@ class HostProofExportTests(unittest.TestCase):
                 )
                 self.assertEqual((process.returncode, report["results"][6]["status"]), (1, "fail"), process.stderr)
                 self.assertIn("| 7 | Bundled tiles at 50 tiles per second | fail |", table)
+
+    def test_recovery_requires_an_observed_process_and_matching_termination_receipt(self):
+        for field, value, expected in (
+            ("process", {}, "observer's WebContent process observation"),
+            ("native", {}, "observer's WebContent process observation"),
+            ("pid", True, "observer's WebContent process observation"),
+            ("appPID", 30, "observer's WebContent process observation"),
+            ("observedAtMs", None, "observer's WebContent process observation"),
+            ("termination", {}, "valid WebContent termination receipt"),
+            ("termination.pid", 31, "valid WebContent termination receipt"),
+            ("termination.signal", "SIGHUP", "valid WebContent termination receipt"),
+            ("termination.signaledAtMs", 9_899, "valid WebContent termination receipt"),
+            ("termination.exitedAtMs", 9_900, "valid WebContent termination receipt"),
+        ):
+            with self.subTest(field=field):
+                evidence = passing_evidence()[9]
+                if field in ("process", "native"):
+                    evidence[field] = value
+                elif field.startswith("termination."):
+                    evidence["process"]["termination"][field.split(".")[1]] = value
+                else:
+                    evidence["process"][field] = value
+                process, report, table = self.export(
+                    "success", {}, checks="9", performed_checks=(9,), evidence_overrides={9: evidence},
+                )
+                row = report["results"][8]
+                self.assertEqual((process.returncode, row["status"]), (1, "fail"), process.stderr)
+                self.assertIn(expected, row["evidence"]["evidenceError"])
+                self.assertIn("| 9 | WebContent termination and same-tab recovery | fail |", table)
+                self.assertIn(expected, table)
+
+    def test_stress_requires_rss_sample_counts_and_bounded_gaps(self):
+        for field, value, expected in (
+            ("samples", 0, "positive RSS sample count"),
+            ("samples", None, "positive RSS sample count"),
+            ("missingSamples", 1, "zero missing RSS samples"),
+            ("missingSamples", 900, "zero missing RSS samples"),
+            ("missingSamples", None, "zero missing RSS samples"),
+            ("maxSampleGapMs", 2001, "RSS sampling gap no greater than 2000 ms"),
+            ("maxSampleGapMs", 600_000, "RSS sampling gap no greater than 2000 ms"),
+            ("maxSampleGapMs", None, "RSS sampling gap no greater than 2000 ms"),
+            ("maxAllowedSampleGapMs", 600_000, "RSS sampling gap no greater than 2000 ms"),
+        ):
+            with self.subTest(field=field, value=value):
+                evidence = passing_evidence()[10]
+                evidence["memory"][field] = value
+                process, report, table = self.export(
+                    "success", {}, checks="10", performed_checks=(10,), evidence_overrides={10: evidence},
+                )
+                row = report["results"][9]
+                self.assertEqual((process.returncode, row["status"]), (1, "fail"), process.stderr)
+                self.assertIn(expected, row["evidence"]["evidenceError"])
+                self.assertIn("| 10 | Scripted pan and zoom, peak memory | fail |", table)
+                self.assertIn(expected, table)
 
     def test_stress_requires_full_duration_for_each_renderer_and_memory_trace(self):
         short_renderer = passing_evidence()[10]

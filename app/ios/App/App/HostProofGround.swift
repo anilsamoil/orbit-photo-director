@@ -268,10 +268,10 @@ final class HostProofGround {
         var items: [UIBarButtonItem] = []
         if let url = try? persist(), let data = try? Data(contentsOf: url) {
             text.text = summary + "\n\n" + String(decoding: data, as: UTF8.self)
-            let shareButton = UIBarButtonItem(title: "Share", primaryAction: UIAction { [weak controller] _ in
-                guard let controller else { return }
+            let shareButton = UIBarButtonItem(primaryAction: UIAction(title: "Share") { [weak controller] _ in
+                guard let controller, let anchor = controller.navigationItem.rightBarButtonItem else { return }
                 let share = UIActivityViewController(activityItems: [url], applicationActivities: nil)
-                share.popoverPresentationController?.barButtonItem = controller.navigationItem.rightBarButtonItem
+                share.popoverPresentationController?.barButtonItem = anchor
                 controller.present(share, animated: true)
             })
             items.append(shareButton)
@@ -291,7 +291,7 @@ final class HostProofGround {
         }
         controller.navigationItem.rightBarButtonItems = items
         controller.view = text
-        controller.navigationItem.leftBarButtonItem = UIBarButtonItem(title: "Done", primaryAction: UIAction { [weak controller] _ in
+        controller.navigationItem.leftBarButtonItem = UIBarButtonItem(primaryAction: UIAction(title: "Done") { [weak controller] _ in
             controller?.dismiss(animated: true)
         })
         host.present(UINavigationController(rootViewController: controller), animated: true)

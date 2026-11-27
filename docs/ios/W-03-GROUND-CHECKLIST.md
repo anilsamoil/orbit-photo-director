@@ -4,6 +4,8 @@ Repeat the signed app run on iPhone 17 Pro, iPad M4 (11-inch), and the 3rd-gen i
 
 Before the release dispatch, confirm that at least one ground device is registered in the Apple Developer account for G0. Xcode's automatic archive signing can create a development profile before the Apple Distribution export. [Owner steps](OWNER_STEPS.md#4-a-ground-tester)
 
+The owner must approve the `ios-release` deployment within three days of the unsigned proof asset upload. If the artifact expires, dispatch a fresh run from `main`.
+
 1. Install the internal TestFlight build. Open SNAP and tap **Run Proof**. Keep SNAP visible while checks 1–7 run.
 2. When SNAP asks you to reopen it, swipe its card away in the app switcher. Open SNAP from its icon. Check 8 compares the saved storage token and the old and new app and WebView identities.
 3. Connect the device to a trusted Mac with Xcode. Use Instruments on that device or `xcrun devicectl device info processes` to identify SNAP's WebContent process. If the tethered tools can terminate that specific process, tap **Check Recovery**, then **Arm Recovery**. Wait for **Armed for two minutes**. Trigger termination while SNAP stays open. Record the process observation and keep the app's callback and reload evidence. If process attribution or termination is unavailable, tap **Trigger Unavailable**. Check 9 stays blocked. A page reload alone cannot exercise this check.

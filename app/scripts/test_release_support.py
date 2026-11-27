@@ -5,7 +5,8 @@ import io
 import json
 from pathlib import Path
 import plistlib
-from subprocess import CompletedProcess
+from subprocess import CompletedProcess, run
+import sys
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import call, patch
@@ -73,57 +74,79 @@ class ReleaseSupportTests(unittest.TestCase):
                 "testFlightInternalTestingOnly": True,
             })
 
-    def test_summary_keeps_only_redacted_diagnostics_markers_and_outcome(self):
+    def test_published_summary_contains_only_fixed_codes_and_counts(self):
         source = self.root / "raw.log"
-        output = self.root / "safe.log"
-        auth = self.root / "work" / "AuthKey"
-        env = {
-            "TEAM_ID": "TEAMID0000",
-            "APP_STORE_CONNECT_KEY_ID": "FIXTURE_KEY_IDENTIFIER",
-            "APP_STORE_CONNECT_ISSUER_ID": "FIXTURE_ISSUER_IDENTIFIER",
-            "APP_STORE_CONNECT_PRIVATE_KEY": "FIXTURE_KEY_BYTES\nFIXTURE_NEXT_LINE",
-        }
+        output = self.root / "archive.json"
         encoded = b64encode(b"synthetic credential data").decode("ascii")
-        uuid = "01234567-89ab-cdef-0123-456789abcdef"
         source.write_text("\n".join([
-            f"credential: {encoded}",
-            "Build phase detail",
-            f'warning: could not read "{auth}" or alternate/AuthKey_fixture',
-            f'/Users/fixture-account/project/file.swift: error: No profiles for {support.BUNDLE_ID}',
-            'warning: Your team "FIXTURE_TEAM_NAME" has no devices',
-            "warning: Your team 'FIXTURE_TEAM_NAME' has no devices",
-            'warning: configuration at "/home/fixture-account/path with spaces/settings"',
-            'warning: configuration at "~/path with spaces/settings"',
-            'warning: configuration at “/Users/fixture-account/path with spaces/settings”',
-            'warning: configuration at /Users/fixture-account/path with spaces/settings',
-            f"error: fixture@example.invalid {uuid} 01234567-89abcdef01234567",
-            *[f"error: rejected {value}" for secret in env.values() for value in secret.splitlines()],
-            *[f"error: {identity}: FIXTURE_CERTIFICATE (TEAMID0000) was rejected" for identity in (
-                "Apple", "Apple Development", "Apple Distribution", "Apple Distribution Managed",
-            )],
-            "error: Could not load Apple Distribution: FIXTURE_CERTIFICATE",
+            f"error: transport refused {encoded}",
+            f"/Users/fixture-account/file.swift:2:1: error: No profiles for test.fixture {encoded}",
+            'warning: Your team "FIXTURE_TEAM" has no devices from which to generate a provisioning profile',
+            "warning: configuration at /home/fixture-account/settings",
+            "error: another unmatched failure",
+            "error: No profiles for test.fixture",
             "** ARCHIVE FAILED **",
         ]))
-        support.redact_log(source, output, auth, "archive", 65, env)
-        filtered = output.read_text()
-        for forbidden in (
-            str(auth), "AuthKey", "FIXTURE", "TEAMID0000", "@", uuid, "01234567-89abcdef01234567",
-            "fixture-account", "path with spaces", encoded, "credential:", "Build phase detail",
+        result = run([sys.executable, SPEC.origin, "summarize-xcode", source, output, "archive", "65"],
+                     capture_output=True, check=True, text=True)
+        published = output.read_text()
+        self.assertNotIn(encoded, published + result.stdout + result.stderr)
+        self.assertEqual(json.loads(published), {
+            "phase": "archive",
+            "outcome": "failed",
+            "exit_status": 65,
+            "diagnostics": [
+                {"code": "NO_MATCHING_PROFILE"},
+                {"code": "NO_REGISTERED_DEVICES"},
+                {"code": "UNCLASSIFIED_ERROR", "count": 2},
+            ],
+        })
+
+    def test_recognizes_signing_build_and_upload_failures(self):
+        source = self.root / "raw.log"
+        output = self.root / "release.json"
+        for message, expected in (
+            ('error: exportArchive No signing certificate "iOS Distribution" found', "NO_SIGNING_CERTIFICATE"),
+            ("error: Authentication credentials are missing or invalid", "AUTH_KEY_REJECTED"),
+            ('error: No Accounts: Add an account in Accounts settings.', "ACCOUNT_NOT_FOUND"),
+            ("error: Failed to register bundle identifier", "BUNDLE_ID_NOT_REGISTERED"),
+            ("error: No suitable application records were found", "APP_RECORD_MISSING"),
+            ("error: The license agreement must be signed", "AGREEMENT_PENDING"),
+            ("error: The build number has already been used", "BUILD_NUMBER_IN_USE"),
+            ("Validation failed (409)", "UPLOAD_VALIDATION_FAILED"),
+            ("xcodebuild: error: Could not resolve package dependencies:", "PACKAGE_RESOLUTION_FAILED"),
+            ("Command SwiftCompile failed with a nonzero exit code", "COMPILE_FAILED"),
         ):
-            self.assertNotIn(forbidden, filtered)
-        self.assertTrue(filtered.startswith("Xcode archive: failed (exit 65)\n"))
-        self.assertIn(f"error: No profiles for {support.BUNDLE_ID}", filtered)
-        self.assertEqual(filtered.count("warning: Your team [redacted] has no devices"), 2)
-        self.assertEqual(filtered.count("Apple Distribution: [redacted] was rejected"), 4)
-        self.assertIn("error: Could not load Apple Distribution: [redacted]", filtered)
-        self.assertIn("** ARCHIVE FAILED **", filtered)
+            with self.subTest(code=expected):
+                source.write_text(message)
+                support.summarize_xcode(source, output, "upload", 65)
+                self.assertEqual(json.loads(output.read_text())["diagnostics"], [{"code": expected}])
+
+    def test_success_markers_depend_on_phase_and_exit_status(self):
+        source = self.root / "raw.log"
+        output = self.root / "release.json"
+        for phase, marker, expected in (
+            ("archive", "ARCHIVE", "ARCHIVE_SUCCEEDED"),
+            ("export", "EXPORT", "EXPORT_SUCCEEDED"),
+            ("upload", "EXPORT", "UPLOAD_SUCCEEDED"),
+            ("upload", "UPLOAD", "UPLOAD_SUCCEEDED"),
+        ):
+            with self.subTest(phase=phase, marker=marker):
+                source.write_text(f"** {marker} SUCCEEDED **\n")
+                support.summarize_xcode(source, output, phase, 0)
+                self.assertEqual(json.loads(output.read_text()), {
+                    "phase": phase, "outcome": "succeeded", "exit_status": 0,
+                    "diagnostics": [{"code": expected}],
+                })
+                support.summarize_xcode(source, output, phase, 65)
+                self.assertEqual(json.loads(output.read_text())["diagnostics"], [])
 
     def test_summary_refuses_private_key_marker_even_on_discarded_line(self):
         source = self.root / "raw.log"
         source.write_bytes(support.PRIVATE_MARKER)
         with self.assertRaisesRegex(support.ReleaseError, "marker found"):
-            support.redact_log(source, self.root / "refused.log", self.root / "key", "archive", 0, {})
-        self.assertFalse((self.root / "refused.log").exists())
+            support.summarize_xcode(source, self.root / "refused.json", "archive", 0)
+        self.assertFalse((self.root / "refused.json").exists())
 
     def test_entitlements_request_codesign_xml(self):
         app = self.root / "App.app"

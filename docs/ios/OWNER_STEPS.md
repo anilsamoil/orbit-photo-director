@@ -34,6 +34,8 @@ The key authenticates Xcode on the hosted runner. Xcode provisions the build and
 
 Before dispatching the release, confirm the G0 device registration in step 4. Xcode's automatic archive signing can create a development provisioning profile before the distribution export. That profile requires at least one registered device.
 
+Approve the `ios-release` deployment within three days of the unsigned proof asset upload. If the artifact expires, dispatch a fresh run from `main`.
+
 ## 4. A ground tester
 
 Arrange a tester on Earth with an iPad on iPadOS 26 if available. An iPhone on iOS 26 can serve as the ground fallback with the simulator checks in G3. The tester runs W-03, G3 and the App Store upgrade at G6. Share only the ground device model, OS version and test outcome in the public records.

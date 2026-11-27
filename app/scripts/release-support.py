@@ -19,31 +19,48 @@ PROJECT_ASSETS = ("public-proof", "HostProof-Info.plist", "capacitor.config.json
 MANIFEST = "sha256-manifest.json"
 BUNDLE_ID = "dev.astroanil.snap"
 PRIVATE_MARKER = b"BEGIN PRIVATE KEY"
-SECRET_NAMES = (
-    "APP_STORE_CONNECT_KEY_ID",
-    "APP_STORE_CONNECT_ISSUER_ID",
-    "APP_STORE_CONNECT_PRIVATE_KEY",
-)
-XCODE_MARKER = re.compile(r"\*\* [A-Z][A-Z0-9 _-]* (?:SUCCEEDED|FAILED) \*\*")
-XCODE_DIAGNOSTIC = re.compile(r"^warning:|error:", re.IGNORECASE)
-SIGNING_IDENTITY = re.compile(
-    r"\bApple(?: (?:Distribution Managed|Distribution|Development))?:[^\n]*?\([A-Z0-9]{10}\)",
-    re.IGNORECASE,
-)
-BARE_SIGNING_IDENTITY = re.compile(
-    r"\bApple (?:Distribution Managed|Distribution|Development):(?![ \t]*\[redacted\])[^\n]*",
-    re.IGNORECASE,
-)
-HOME_ROOT = r"(?:/Users/|/home/|~/)"
-HOME_PATH = re.compile(
-    rf'''"{HOME_ROOT}[^"\n]+"|'{HOME_ROOT}[^'\n]+'|“{HOME_ROOT}[^”\n]+”|‘{HOME_ROOT}[^’\n]+’'''
-    rf"|{HOME_ROOT}[^\n]+?(?=:(?:\d+:)*[ \t]*(?:error|warning):|$)",
-    re.IGNORECASE | re.MULTILINE,
-)
-UUID_LIKE = re.compile(
-    r"\b(?:[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}|[0-9a-f]{8}-[0-9a-f]{16}"
-    r"|[0-9a-f]{32}|[0-9a-f]{40})\b", re.IGNORECASE,
-)
+XCODE_ERROR = re.compile(r"(?:^|[\s:])(?:fatal )?error:", re.IGNORECASE)
+XCODE_FAILURES = {
+    code: re.compile(pattern, re.IGNORECASE)
+    for code, pattern in {
+        "NO_REGISTERED_DEVICES": (
+            r"\b(?:has no devices|no (?:registered )?devices (?:registered|available)|no registered devices)\b"
+        ),
+        "NO_MATCHING_PROFILE": (
+            r"\b(?:no profiles for|no matching (?:provisioning )?profiles?|requires a provisioning profile)\b"
+        ),
+        "NO_SIGNING_CERTIFICATE": (
+            r"\b(?:no (?:valid )?signing certificate|no (?:iOS|Apple) (?:Development|Distribution) certificate)\b"
+        ),
+        "AUTH_KEY_REJECTED": (
+            r"\b(?:authentication key.*(?:invalid|rejected)|invalid (?:authentication |API )?key|"
+            r"authentication credentials are missing or invalid|unable to authenticate)\b"
+        ),
+        "ACCOUNT_NOT_FOUND": r"\b(?:no accounts|account[^\n]*(?:not found|does not exist))\b",
+        "BUNDLE_ID_NOT_REGISTERED": (
+            r"\b(?:failed to register bundle identifier|(?:bundle|app) (?:identifier|id).*not registered)\b"
+        ),
+        "APP_RECORD_MISSING": (
+            r"\b(?:no suitable application records|no (?:matching )?app record|app record.*(?:not found|does not exist))\b"
+        ),
+        "AGREEMENT_PENDING": (
+            r"\b(?:agreement.*(?:pending|expired|must be signed|not been accepted)|required contracts? (?:is|are) missing)\b"
+        ),
+        "BUILD_NUMBER_IN_USE": (
+            r"\b(?:build number.*(?:already|must be (?:higher|greater))|redundant binary upload|bundle version must be higher)\b"
+        ),
+        "UPLOAD_VALIDATION_FAILED": r"\bvalidation failed\b",
+        "PACKAGE_RESOLUTION_FAILED": (
+            r"\b(?:could not resolve package dependencies|failed to resolve packages|package resolution failed)\b"
+        ),
+        "COMPILE_FAILED": r"\b(?:command \S*compile\S* failed|compiler failed|compilation failed)\b",
+    }.items()
+}
+XCODE_SUCCESS = {
+    "archive": ("ARCHIVE_SUCCEEDED", {"** ARCHIVE SUCCEEDED **"}),
+    "export": ("EXPORT_SUCCEEDED", {"** EXPORT SUCCEEDED **"}),
+    "upload": ("UPLOAD_SUCCEEDED", {"** EXPORT SUCCEEDED **", "** UPLOAD SUCCEEDED **"}),
+}
 
 
 class ReleaseError(ValueError):
@@ -201,34 +218,31 @@ def verify_signing(app, build, phase):
     print(f"Entitlement keys: {', '.join(sorted(entitlements))}")
 
 
-def redact_log(source, output, auth_path, phase, status, environ):
+def summarize_xcode(source, output, phase, status):
     data = source.read_bytes()
     if PRIVATE_MARKER in data:
         raise ReleaseError("Private-key marker found in an Xcode log")
-    lines = (line.strip() for line in data.decode("utf-8", errors="replace").splitlines())
-    log = "\n".join(line for line in lines if XCODE_MARKER.fullmatch(line) or XCODE_DIAGNOSTIC.search(line))
-    log = SIGNING_IDENTITY.sub("Apple Distribution: [redacted]", log)
-    log = BARE_SIGNING_IDENTITY.sub("Apple Distribution: [redacted]", log)
-    log = HOME_PATH.sub("[redacted home path]", log)
-    secrets = [
-        str(auth_path), str(auth_path.parent), environ.get("TEAM_ID", ""),
-        *(environ.get(name, "") for name in SECRET_NAMES),
-    ]
-    literals = {line.strip() for secret in secrets for line in secret.splitlines() if line.strip()}
-    for literal in sorted(literals, key=len, reverse=True):
-        log = re.sub(re.escape(literal), "[redacted]", log, flags=re.IGNORECASE)
-    log = re.sub(r"(?i)[^\s\"'<>]*AuthKey[^\s\"'<>]*", "[redacted key path]", log)
-    log = re.sub(r"(?i)[\w.%+-]+@[\w.-]+\.[a-z]{2,}", "[redacted email]", log)
-    log = re.sub(
-        r"(?i)(Signing Identity:|Provisioning Profile:|Authority=|iPhone Developer:|iPhone Distribution:)"
-        r"(?![ \t]*Apple Distribution: \[redacted\])[^\n]*",
-        r"\1 [redacted signing detail]",
-        log,
-    )
-    log = re.sub(r'''(?i)(\bteam[ \t]+)(?:"[^"\n]+"|'[^'\n]+'|“[^”\n]+”|‘[^’\n]+’)''', r"\1[redacted]", log)
-    log = UUID_LIKE.sub("[redacted UUID]", log)
-    outcome = "succeeded" if status == 0 else f"failed (exit {status})"
-    output.write_text(f"Xcode {phase}: {outcome}\n" + (log + "\n" if log else ""), encoding="utf-8")
+    success_code, success_markers = XCODE_SUCCESS[phase]
+    codes = set()
+    unclassified_errors = 0
+    for line in data.decode("utf-8", errors="replace").splitlines():
+        matches = {code for code, pattern in XCODE_FAILURES.items() if pattern.search(line)}
+        if matches:
+            codes.update(matches)
+        elif status == 0 and line.strip() in success_markers:
+            codes.add(success_code)
+        elif XCODE_ERROR.search(line):
+            unclassified_errors += 1
+    diagnostics = [{"code": code} for code in codes]
+    if unclassified_errors:
+        diagnostics.append({"code": "UNCLASSIFIED_ERROR", "count": unclassified_errors})
+    evidence = {
+        "phase": phase,
+        "outcome": "succeeded" if status == 0 else "failed",
+        "exit_status": status,
+        "diagnostics": sorted(diagnostics, key=lambda diagnostic: diagnostic["code"]),
+    }
+    output.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
 
 
 def scan_stream(file):
@@ -267,12 +281,11 @@ def main():
     signing.add_argument("app", type=Path)
     signing.add_argument("build")
     signing.add_argument("phase", choices=("archive", "export"))
-    redaction = commands.add_parser("redact")
-    redaction.add_argument("source", type=Path)
-    redaction.add_argument("output", type=Path)
-    redaction.add_argument("auth_path", type=Path)
-    redaction.add_argument("phase", choices=("archive", "export", "upload"))
-    redaction.add_argument("status", type=int)
+    summary = commands.add_parser("summarize-xcode")
+    summary.add_argument("source", type=Path)
+    summary.add_argument("output", type=Path)
+    summary.add_argument("phase", choices=XCODE_SUCCESS)
+    summary.add_argument("status", type=int)
     commands.add_parser("scan").add_argument("paths", type=Path, nargs="+")
     args = parser.parse_args()
 
@@ -285,8 +298,8 @@ def main():
             prepare_export(args.directory)
         elif args.command == "verify-signing":
             verify_signing(args.app, args.build, args.phase)
-        elif args.command == "redact":
-            redact_log(args.source, args.output, args.auth_path, args.phase, args.status, os.environ)
+        elif args.command == "summarize-xcode":
+            summarize_xcode(args.source, args.output, args.phase, args.status)
         elif args.command == "scan":
             scan_artifacts(args.paths)
     except ReleaseError as error:

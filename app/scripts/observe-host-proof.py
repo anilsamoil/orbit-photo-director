@@ -14,6 +14,7 @@ APP_ID = "dev.astroanil.snap"
 SAMPLE_PERIOD = 0.25
 PROCESS_TIMEOUT = 10
 SAMPLE_TIMEOUT = 1
+TERMINATION_TIMEOUT = 3
 MAX_SAMPLE_GAP_MS = 2000
 WEB_CONTENT = {"com.apple.WebKit.WebContent", "com.apple.WebKit.WebContent.Development"}
 PROCESS_ERRORS = (OSError, ValueError, subprocess.SubprocessError)
@@ -117,6 +118,15 @@ def write_response(path, payload):
     temporary.replace(path)
 
 
+def wait_for_termination(pid):
+    deadline = time.monotonic() + TERMINATION_TIMEOUT
+    while (remaining := deadline - time.monotonic()) > 0:
+        if pid not in process_table(min(remaining, SAMPLE_TIMEOUT), pid=pid):
+            return time.monotonic_ns() // 1_000_000
+        time.sleep(min(SAMPLE_PERIOD, max(0, deadline - time.monotonic())))
+    raise ValueError("The WebContent exit was not observed after SIGTERM")
+
+
 def handle_operation(command, baseline, sample, manager_pid):
     app_pid = command["appPID"]
     if not isinstance(app_pid, int) or not 1 < app_pid:
@@ -132,9 +142,16 @@ def handle_operation(command, baseline, sample, manager_pid):
         same_parent, candidates = identify_web_content(processes, app_pid, baseline, manager_pid)
         if parent != same_parent or candidates != [pid]:
             raise ValueError("The WebContent process changed before termination")
+        observed_at = time.monotonic_ns() // 1_000_000
         os.kill(pid, signal.SIGTERM)
+        signaled_at = time.monotonic_ns() // 1_000_000
         baseline.add(pid)
-        return {"pid": pid, "launchdPID": parent, "appPID": app_pid, "signal": "SIGTERM"}, None
+        exited_at = wait_for_termination(pid)
+        return {
+            "process": "WebContent", "pid": pid, "launchdPID": parent, "appPID": app_pid,
+            "observedAtMs": observed_at,
+            "termination": {"pid": pid, "signal": "SIGTERM", "signaledAtMs": signaled_at, "exitedAtMs": exited_at},
+        }, None
     if operation == "memoryStart":
         if sample is not None:
             raise ValueError("Memory monitoring was already active")
