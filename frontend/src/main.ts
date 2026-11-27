@@ -43,7 +43,7 @@ import { initSunWidget } from './sun';
 import { loadOrCreateProfileFromURL, loadProfile, removePersonalTarget, saveProfile, toggleCuratedRemoved, type Profile } from './profile';
 import { EDIT_TARGET_EVENT, subscribeProfileChanged } from './profile-events';
 import { getAccountProfile, invalidateRosterReadScope, resolveAccountProfile } from './profile-session';
-import { bindLinkedRosterPageLifecycle, refreshLinkedRosterTargets, setLinkedRosterTargetsOffline } from './profile-roster-targets';
+import { bindLinkedRosterPageLifecycle, pollLinkedRosterTargets, setLinkedRosterTargetsOffline } from './profile-roster-targets';
 import { isRosterProfile } from './crew-roster';
 import { mountProfileMenu } from './profile-menu';
 import { deleteProfileTarget, putRemovedCuratedIds } from './profile-api';
@@ -277,9 +277,11 @@ function isStaleManifest(manifest: Manifest, nowMs: number): boolean {
 }
 
 async function refresh(): Promise<void> {
-  void launchCatalog.refresh(isOnline());
+  const online = isOnline();
+  if (online && !sessionBannerHeld) pollLinkedRosterTargets();
+  void launchCatalog.refresh(online);
   if (refreshInFlight) return refreshInFlight;
-  refreshInFlight = Promise.all([launchStore.refresh(isOnline()), doRefresh()]).then(() => {}).finally(() => {
+  refreshInFlight = Promise.all([launchStore.refresh(online), doRefresh()]).then(() => {}).finally(() => {
     refreshInFlight = null;
   });
   return refreshInFlight;
@@ -460,12 +462,16 @@ async function doRefresh(): Promise<void> {
     });
 
     renderQueue();
+    const accessWasExpired = sessionBannerHeld;
     if (currentlyOffline) {
       // Stale data + failed probe = LOS. Show the "LOS" framing (snapshot-age
       // based, via renderOfflineBanner) rather than blaming the generator.
       renderOfflineBanner();
     } else if (!(await maybeFlagExpiredSession(manifest.generated_at))) {
-      if (!currentlyOffline && isOnline()) refreshLinkedRosterTargets();
+      if (!currentlyOffline && isOnline()) {
+        setLinkedRosterTargetsOffline(false);
+        if (accessWasExpired) pollLinkedRosterTargets();
+      }
       // Not an expired Access session, so the ordinary staleness banner is
       // honest. When it IS expired, maybeFlagExpiredSession has already put the
       // tappable sign-in banner up and we must not overwrite it — a "STALE"
@@ -2170,7 +2176,6 @@ async function init(): Promise<void> {
   subscribeLaunchSlots(renderQueue);
   await launchStore.restore();
   renderQueue();
-  await refresh();
 
   // Visibility-aware polling: pause while the tab is hidden, fetch
   // immediately on visible-again. Saves ISS bandwidth on tabs nobody is
@@ -2181,6 +2186,7 @@ async function init(): Promise<void> {
     intervalMs: REFRESH_MS,
     onPoll: () => void refresh(),
   });
+  await refresh();
   // Per-second countdown updates without re-fetching the manifest
   stopCountdown();
   countdownTimer = window.setInterval(rerenderCountdowns, COUNTDOWN_TICK_MS);

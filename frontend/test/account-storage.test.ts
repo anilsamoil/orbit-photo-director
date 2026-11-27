@@ -3,7 +3,10 @@ import type { CalibPayload, PassEntry } from '../src/types';
 import type { Snapshot } from '../src/snapshot';
 
 const session = vi.hoisted(() => ({ account: null as { name: string; displayName: string; isVerified?: boolean } | null }));
-vi.mock('../src/profile-session', () => ({ getAccountProfile: () => session.account }));
+vi.mock('../src/profile-session', () => ({
+  getAccountProfile: () => session.account,
+  invalidateRosterReadScope: vi.fn(),
+}));
 vi.mock('../src/main', () => ({ getCurrentProfile: () => null }));
 
 import { clearSnapshot, readSnapshot, saveSnapshot } from '../src/snapshot';

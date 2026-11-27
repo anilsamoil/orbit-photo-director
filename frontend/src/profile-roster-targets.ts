@@ -59,9 +59,8 @@ export function setLinkedRosterTargetsOffline(isOffline: boolean): void {
   }
 }
 
-export function refreshLinkedRosterTargets(): void {
-  if (offline) setLinkedRosterTargetsOffline(false);
-  else reverifyLinkedRosterTargets('poll');
+export function pollLinkedRosterTargets(): void {
+  reverifyLinkedRosterTargets('poll');
 }
 
 export function bindLinkedRosterPageLifecycle(): void {
