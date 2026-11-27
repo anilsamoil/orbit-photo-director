@@ -208,7 +208,9 @@ python3 -B app/scripts/test_export_host_proof.py
 python3 -B app/scripts/test_observe_host_proof.py
 cd frontend && bunx vitest run test/profile-roster-link.test.ts
 cd frontend && bunx vitest run test/main-integration.test.ts -t "clears revoked linked rows, rings and popup while the public feed has a 503"
-cd worker && bunx vitest run test/browser-identity.test.ts
+cd frontend && bunx vitest run test/profile-crud.test.ts -t "target success toasts"
+cd worker && bunx vitest run test/profiles.test.ts -t "rejects a target named"
+cd frontend && bunx vitest run test/track-inset-labels.test.ts -t "hides a vector name only when the drawn reference tile shows that complete name"
 ```
 
 `check` confirms every feature file is linked from `features/README.md`, uses the four headings below, and names both iPhone and iPad. Run it after editing the map. A feature file that omits iPhone or iPad fails `check`.
@@ -268,6 +270,10 @@ From the repo root, `node --test app/host-proof/proof.test.mjs`, `python3 -B app
 ## Crew roster account targets
 
 #386 (`c65abb2b431f7d042f226bdd0a5ee3b4a7623caf`) links the Kutryk roster to account profile `josh`. The recipe is `features/profile.md`. The default verify session has no `josh` grant, so `drive profile` and `drive map` keep that roster bundled-only and do not GET `/api/browser/profiles/josh/targets`. A stubbed session that lists `josh` shows the read-only heading `Josh Kutryk’s account profile` (U+2019) and the popup line `From Josh Kutryk’s account profile`, from one linked GET. A viewer-only list, a 401 on `?u=kutryk`, and a grant for another name hide `#profile-roster-account-targets` and make zero linked requests. The Worker answers 401 with no Access JWT and 403 `{error: profile_forbidden}` when `resolved.profiles` omits the path name. The 60s grant poll clears the row, the ring, and the open popup through `clearLinkedRosterTargets`, with no reload and no extra targets GET. A public `manifest.json` 503 after the snapshot loads calls `setLinkedRosterTargetsOffline` from `renderOfflineBanner`, clears the row and ring, and shows the LOS banner. Polling then stays stopped until a later successful refresh. That pause is the Astra r4 P3 in `follow-ups.md`. Identities in this check are synthetic. `ACCESS_PROFILE_GRANTS` stays an owner step outside the repo.
+
+## Target names
+
+#388 (`15573790a0f73c83d414b4e4064211fa76d7438d`) rejects a whitespace-only target name and changes the opaque-profile toast. The recipe is `features/profile.md`. POST and PUT return 400 `name_empty` on `/api/profiles` and `/api/browser/profiles` when `name.trim()` is empty. The set is empty, space, tab, newline, NBSP, U+2003, U+3000, U+2028, and U+FEFF. ` Boston ` is stored as ` Boston `. GET does not revalidate. CSV import trims and drops a blank or NBSP-only line. `isOpaqueProfileName` is `/^u-[a-f0-9]{28}$/`. That exact name toasts `shows on the map` with no hourly sentence. `jack`, a 27-hex `u-` name, a 29-hex `u-` name, and an uppercase hex digit keep the hourly sentence. Removing the trim check makes `rejects a target named ""` and `rejects a target named " \t\n "` green. Forcing `isOpaqueProfileName` false makes the opaque toast tests expect `hourly update` and go red. A name of only U+200B is still accepted. The 400 has not been checked on the live hosts. Both notes are in `follow-ups.md`.
 
 ## Maintenance
 

@@ -55,7 +55,29 @@ Stub `GET /api/browser/session` and `/api/browser/profiles/<name>/targets` on th
 
 Stdout is `profile hydration signed-out 401 sign-in message targets 0`, `profile hydration anonymous ?u= targets 0`, `profile hydration retry reads <n> harbor kept`, `profile hydration slider 800 km harbor kept`, and `profile hydration local edit kept server-only absent`. Shots are `profile-hydration-signed-out.png`, `profile-hydration-anonymous.png`, `profile-hydration-retry.png`, `profile-hydration-slider.png`, and `profile-hydration-edit.png`.
 
-Known issues, not passes: a server target whose name is only whitespace fails `validatePersonalTargetInput` (`name_empty` after trim) and `hydrateUnchangedProfile` returns before adding any row, so that one field blocks the list. `handleAdd` still toasts `after the next hourly update` for a `u-` profile. Do not treat either as a green check.
+Known issue, not a pass: a server target whose name is only whitespace fails `validatePersonalTargetInput` (`name_empty` after trim) and `hydrateUnchangedProfile` returns before adding any row, so that one field blocks the list. #388 (`1557379`) stops a new write of that name and drops the hourly-update sentence on an opaque `u-` profile. The details are below.
+
+## Target names and opaque toasts
+
+#388 (`15573790a0f73c83d414b4e4064211fa76d7438d`) is the #374 name P3s. `validateTarget` in `worker/src/profiles.ts` returns `name_empty` when `name.trim().length === 0`. POST and PUT on `/api/profiles/<name>/targets` and `/api/browser/profiles/<name>/targets` both use that function. The browser path is rewritten onto the same handler. A whitespace-only name is 400. PUT answers `{error: invalid_targets, errors: [{index, error: name_empty}]}`. POST answers `{error: invalid_target, detail: name_empty}`. The trim set is `''`, a space, a tab, a newline, NBSP (U+00A0), U+2003, U+3000, U+2028, and U+FEFF. A name with spaces around a letter is stored unchanged. ` Boston ` comes back as ` Boston `. GET returns the stored list and does not call `validateTarget`. This skill does not send a live authenticated request. That live gap is in `follow-ups.md`.
+
+The client trims before it stores. `validatePersonalTargetInput` in `frontend/src/profile.ts` sets `name` to `input.name.trim()` and returns `name_empty` when that is empty. `parseTargetCsv` in `frontend/src/csv-parse.ts` skips a line whose `trim()` is empty, which drops a blank line and a line that is only NBSP. A row that still has coordinates and a whitespace-only name is an error row with `name_empty`, not a silent import. The imported name is the trimmed value.
+
+`isOpaqueProfileName` in `frontend/src/profile-crud.ts` is `/^u-[a-f0-9]{28}$/`. Add, edit, and CSV import use it. An exact match toasts without the hourly sentence: `Saved "<name>" — shows on the map.` and `Imported N targets — saved and shown on the map.` Any other profile name keeps the hourly sentence, including `jack`, `u-` plus 27 hex digits, `u-` plus 29 hex digits, and `u-` plus an `A-F` character. The pin profile is `u-0123456789abcdef0123456789ab`.
+
+```bash
+cd worker && bunx vitest run test/profiles.test.ts -t "rejects a target named"
+cd frontend && bunx vitest run test/profile-crud.test.ts -t "target success toasts"
+```
+
+The worker titles are `rejects a target named ""` and `rejects a target named " \t\n "`, once on PUT and once on POST. The toast cases are `shows the add confirmation`, `shows the edit confirmation`, and `shows the CSV import confirmation` for `jack` and for the opaque name.
+
+Two mutants must go red. Restore the file after each one.
+
+- Delete `if (v.name.trim().length === 0) return 'name_empty';` in `worker/src/profiles.ts`. Both `rejects a target named` cases then accept the blank name.
+- Make `isOpaqueProfileName` return false. The opaque toast cases then contain `hourly update`.
+
+A name that is only U+200B has `trim().length === 1`, so POST and PUT accept it. That is the P3 in `follow-ups.md`.
 
 ## Josh roster link on a local Vite server
 
