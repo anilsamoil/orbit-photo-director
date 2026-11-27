@@ -1,5 +1,5 @@
 import { fetchLiveCloud } from '../../../cloud';
-import { isRosterProfile } from '../../../crew-roster';
+import { isRosterProfile, rosterProfiles } from '../../../crew-roster';
 import { getMapLaunchMode } from '../../../map-launch-mode';
 import { isLaunchPass } from '../../../launch-selectors';
 import { DEFAULT_DISTANCE_THRESHOLD_KM, filterPassesByDistance, filterRemovedCurated } from '../../../pass-filter';
@@ -257,17 +257,30 @@ export function bindTargetInteractions(host: MapCore): void {
     const priorityLayers = (['ascent-pad-layer', 'lookup-pin-layer', 'dropped-pin-layer'] as const)
       .filter((id) => core.hasLayer(id));
     if (priorityLayers.length > 0 && core.queryAt(bbox, priorityLayers).length > 0) return;
-    const feats = core.queryAt(bbox, layers);
-    if (feats.length === 0) return;
+    const profileName = parseProfileFromURL(window.location.href);
+    const isRoster = isRosterProfile(profileName);
+    const linkedProfileName = rosterProfiles().find((profile) => profile.name === profileName)?.accountProfile;
+    const linkedPrefix = linkedProfileName && `personal:${linkedProfileName}:`;
+    const linked = linkedRosterTargets(profileName);
+    const feats = core.queryAt(bbox, layers).filter(({ properties }) => {
+      const id = properties?.target_id;
+      const isLinkedTarget = properties?.account_profile_label
+        || (linkedPrefix && typeof id === 'string' && id.startsWith(linkedPrefix));
+      return !isLinkedTarget
+        || linked?.targets.some((target) => target.id === id);
+    });
     const hit = pickTargetAtTap(feats, { x: event.point.x, y: event.point.y }, (lngLat) => core.project(lngLat));
     if (!hit) return;
     const props = hit.props;
+    if (linked?.targets.some((target) => target.id === props.target_id)) {
+      props.account_profile_label = linked.label;
+    }
     if (props.target_id) {
       const shot = getShotCount(props.target_id);
       if (shot > 0) props.shot_count = shot;
     }
     let popup: PopupHandle | null = null;
-    const onEdit = props.is_personal && props.target_id && !isRosterProfile(parseProfileFromURL(window.location.href))
+    const onEdit = props.is_personal && props.target_id && !isRoster
       ? (id: string) => {
           popup?.remove();
           window.dispatchEvent(new CustomEvent(EDIT_TARGET_EVENT, { detail: { targetId: id } }));
@@ -281,6 +294,7 @@ export function bindTargetInteractions(host: MapCore): void {
       linkedPopup.onClose(() => {
         if (state.linkedPopup === linkedPopup) state.linkedPopup = null;
       });
+      return;
     }
     const [lon, lat] = hit.lngLat;
     void fetchLiveCloud(lat, lon).then((pct) => {

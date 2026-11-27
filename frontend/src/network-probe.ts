@@ -21,9 +21,6 @@
  *      avoids that entirely.
  *    - Online it returns a real HTTP response (the static host 404s it), so any
  *      status > 0 means reachable. Offline the fetch rejects.
- *
- *  Only called when data is already stale (see EMPTY_HINT_THRESHOLD_MIN), so
- *  the request fires rarely — never on the fresh-data happy path.
  */
 export const PROBE_PATH = '/__opd_probe';
 

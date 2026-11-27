@@ -56,6 +56,37 @@ Stdout is `profile hydration signed-out 401 sign-in message targets 0`, `profile
 
 Known issues, not passes: a server target whose name is only whitespace fails `validatePersonalTargetInput` (`name_empty` after trim) and `hydrateUnchangedProfile` returns before adding any row, so that one field blocks the list. `handleAdd` still toasts `after the next hourly update` for a `u-` profile. Do not treat either as a green check.
 
+## Josh roster link on a local Vite server
+
+Use the verify origin and `isolateSnapRequests`. Create a fresh Chromium context with service workers blocked for each case. Before navigation, stub `GET /api/browser/session` and record all requests to `/api/browser/profiles/josh/targets`.
+
+Use this synthetic viewer in the session responses.
+
+```json
+{"name":"test-viewer","displayName":"Fixture Viewer"}
+```
+
+In both cases, open `/?e2e` without a `u` parameter. Open the top-bar profile badge and choose **Josh Kutryk** (`#profile-menu [data-profile="kutryk"]`). Wait for `u=kutryk`, then open **Profile**.
+
+### Viewer with the grant
+
+1. Return HTTP 200 with `ok: true`, the synthetic viewer in `profile`, and both the viewer and `{"name":"josh","displayName":"Fixture Account"}` in `profiles`.
+2. Return HTTP 200 on the linked GET with this body.
+
+   ```json
+   {"targets":[{"id":"personal:josh:fixture-ridge","name":"Fixture Ridge","lat":12.5,"lon":24.5,"priority":5,"createdAt":"2026-11-16T12:00:00Z"}]}
+   ```
+
+3. Follow the top-bar steps. Verify that **Crew roster sites** lists 11 bundled sites. Check that **Josh Kutryk’s account profile** lists **Fixture Ridge** without an edit button.
+4. Open **Map**. Pan and zoom to the fixture coordinates. With `?e2e`, you can use `window.__opdMap.jumpTo({ center: [24.5, 12.5], zoom: 4 })`. Wait for the ring on `my-targets-layer`, then click it.
+5. Check that the popup shows **Fixture Ridge** and **From Josh Kutryk’s account profile**. Confirm that the request log contains exactly one linked GET.
+
+### Viewer without the grant
+
+1. Return HTTP 200 with `ok: true` and the same synthetic viewer in `profile` and as the sole entry in `profiles`. Return an error if the linked endpoint is called, and count that request.
+2. Follow the top-bar steps. Verify that **Crew roster sites** lists 11 bundled sites and that `#profile-roster-account-targets` is hidden.
+3. Open **Map** and check that the `my-targets` source contains only the 11 bundled sites. Confirm that the linked request count is zero across the menu switch and both tabs.
+
 ## Gotchas
 
 - A denied session (HTTP 401) paints the sign-in footer and does not open this pane. `init` calls `bindTabs(false)` before it returns. `#tab-profile` is `disabled` and `aria-disabled` is `true`. A click does not render stored profiles or personal targets, and it does not delete them. A second `init` after a successful session enables Profile, removes `aria-disabled`, and the pane names that account. The probe stores `opd-calib-queue` as `[{"private":"unsent"}]` and does not write `opd-profile-anil`. A version-0 JSON value at that key throws `failed to load profile "anil"` after the session succeeds. `init` sets its local `sessionFailed` for that call, so Profile stays disabled. The account is already set, so the footer is the red `setBanner` text and not the Sign in recovery. `maybeFlagExpiredSession` in `frontend/src/main.ts` clears `sessionBannerHeld` when the manifest age is under 150 minutes. The footer returns to the update age. The ready banner includes `Last updated` and does not include Sign in. WebKit at 402 by 874 and at 834 by 1210 measured `Last updated 8 min ago`. `frontend/test/account-session.test.ts` is `a denied session keeps Queue and does not render or enable Profile` and `a later sign-in enables Profile after a denied session`. A failed fetch with no saved session takes that same lock. It does not return before the tab clicks are wired. `OPD_VERIFY_LOCK=profile node .cursor/skills/verify-opd/scripts/opd-verify.mjs drive session-lock` is one WebKit process. `OPD_VERIFY_SURFACE=iphone-17-pro OPD_VERIFY_VIEWPORT=402x874` and `OPD_VERIFY_SURFACE=ipad-pro-11 OPD_VERIFY_VIEWPORT=834x1210` are the two drives. The first load uses `opd-verify-session=deny`. The same document then calls `init` again with the cookie cleared. Stdout is `session lock profile <id> locked true after-signin-disabled false view view-profile`. `locked` is the first load. `after-signin-disabled` is `#tab-profile` `disabled` after the later `init`. Shots are `evidence/session-lock-profile-<id>.png` and `evidence/session-lock-profile-ready-<id>.png`. `drive profile` and `drive all` leave this probe out. A non-JSON 404, or a 200 HTML body that contains `id="status-banner"`, opens Profile as a local account.

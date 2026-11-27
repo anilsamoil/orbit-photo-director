@@ -1,6 +1,8 @@
-import { validatePersonalTargetInput, type PersonalTarget } from './profile';
+import { rosterProfiles } from './crew-roster';
+import { parseProfileFromURL, validatePersonalTargetInput, type PersonalTarget } from './profile';
 import { getProfileTargets } from './profile-api';
-import { getRosterReadScope } from './profile-session';
+import { ROSTER_READ_SCOPE_INVALIDATED } from './profile-events';
+import { getRosterReadScope, invalidateRosterReadScope, resolveAccountProfile } from './profile-session';
 
 export const LINKED_ROSTER_TARGETS_CHANGED = 'opd-linked-roster-targets-changed';
 
@@ -17,22 +19,25 @@ type LinkedTargetsState =
 
 let state: LinkedTargetsState | undefined;
 let offline = false;
+let cachedPage = false;
+let lifecycleRevision = 0;
+let revalidation: { revision: number; task: Promise<void> } | undefined;
 
-function sameScope(left: ReadScope, right: ReadScope | undefined): boolean {
-  return right !== undefined && left.account === right.account && left.profileName === right.profileName;
+if (typeof window !== 'undefined') {
+  window.addEventListener(ROSTER_READ_SCOPE_INVALIDATED, clearLinkedRosterTargets);
 }
 
 export function linkedRosterTargets(name: string): LinkedRosterTargets | undefined {
-  if (state?.kind === 'loaded' && sameScope(state.scope, getRosterReadScope(name))) {
+  if (state?.kind === 'loaded' && state.scope === getRosterReadScope(name)) {
     return state.result;
   }
 }
 
 export function hydrateLinkedRosterTargets(name: string): Promise<void> {
-  if (offline) return Promise.resolve();
+  if (offline || cachedPage) return Promise.resolve();
   const scope = getRosterReadScope(name);
   if (!scope) return Promise.resolve();
-  if (state && sameScope(state.scope, scope)) {
+  if (state?.scope === scope) {
     return state.kind === 'pending' ? state.task : Promise.resolve();
   }
 
@@ -44,8 +49,53 @@ export function hydrateLinkedRosterTargets(name: string): Promise<void> {
 }
 
 export function setLinkedRosterTargetsOffline(isOffline: boolean): void {
+  if (offline === isOffline) return;
   offline = isOffline;
-  if (offline) clearLinkedRosterTargets();
+  if (offline) {
+    lifecycleRevision += 1;
+    invalidateRosterReadScope();
+  } else {
+    reverifyLinkedRosterTargets();
+  }
+}
+
+export function bindLinkedRosterPageLifecycle(): void {
+  window.addEventListener('pagehide', onLinkedRosterPageHide);
+  window.addEventListener('pageshow', onLinkedRosterPageShow);
+}
+
+function onLinkedRosterPageHide(event: PageTransitionEvent): void {
+  if (!event.persisted) return;
+  cachedPage = true;
+  lifecycleRevision += 1;
+  invalidateRosterReadScope();
+}
+
+function onLinkedRosterPageShow(event: PageTransitionEvent): void {
+  if (!event.persisted) return;
+  cachedPage = false;
+  reverifyLinkedRosterTargets();
+}
+
+function reverifyLinkedRosterTargets(): void {
+  if (offline || cachedPage || revalidation?.revision === lifecycleRevision) return;
+  const url = window.location.href;
+  const name = parseProfileFromURL(url);
+  if (!rosterProfiles().some((profile) => profile.name === name && profile.accountProfile)) return;
+  invalidateRosterReadScope();
+  const revision = lifecycleRevision;
+  const task = Promise.resolve(revalidation?.task).then(async () => {
+    if (revision !== lifecycleRevision) return;
+    try {
+      await resolveAccountProfile(url);
+    } catch {
+      return;
+    }
+    if (revision === lifecycleRevision) await hydrateLinkedRosterTargets(name);
+  }).finally(() => {
+    if (revalidation?.revision === revision) revalidation = undefined;
+  });
+  revalidation = { revision, task };
 }
 
 export function clearLinkedRosterTargets(): void {
@@ -64,9 +114,8 @@ async function readLinkedRosterTargets(scope: ReadScope, controller: AbortContro
 
   try {
     const result = await Promise.race([getProfileTargets(scope.profileName, '', signal), aborted]).catch(() => undefined);
-    if (!result?.ok || signal.aborted || !sameScope(scope, getRosterReadScope(scope.account.name))) return;
+    if (!result?.ok || signal.aborted || scope !== getRosterReadScope(scope.account.name)) return;
     const targets = validatedTargets(result.data.targets, scope.profileName);
-    if (!targets) return;
     state = { kind: 'loaded', scope, result: { label: `${scope.displayName}’s account profile`, targets } };
     if (targets.length) notifyLinkedTargetsChanged();
   } finally {
@@ -75,7 +124,7 @@ async function readLinkedRosterTargets(scope: ReadScope, controller: AbortContro
   }
 }
 
-function validatedTargets(rows: readonly unknown[], profileName: string): readonly PersonalTarget[] | undefined {
+function validatedTargets(rows: readonly unknown[], profileName: string): readonly PersonalTarget[] {
   const targets = new Map<string, PersonalTarget>();
   for (const row of rows) {
     if (!row || typeof row !== 'object'
@@ -84,10 +133,10 @@ function validatedTargets(rows: readonly unknown[], profileName: string): readon
       || !('lat' in row) || typeof row.lat !== 'number'
       || !('lon' in row) || typeof row.lon !== 'number'
       || !('priority' in row) || typeof row.priority !== 'number'
-      || !('createdAt' in row) || typeof row.createdAt !== 'string') return;
+      || !('createdAt' in row) || typeof row.createdAt !== 'string') continue;
     const { id, name, lat, lon, priority, createdAt } = row;
     const checked = validatePersonalTargetInput({ profileName, id, name, lat, lon, priority, createdAt });
-    if (!checked.ok) return;
+    if (!checked.ok) continue;
     if (!targets.has(id)) targets.set(id, checked.target);
   }
   return [...targets.values()];

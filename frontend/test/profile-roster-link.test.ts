@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { _resetCloudCacheForTest } from '../src/cloud';
 import { isRosterProfile, rosterSites } from '../src/crew-roster';
 import * as rings from '../src/map/features/targets';
 import { createClock } from '../src/map/map-core/clock';
@@ -7,12 +8,10 @@ import { createMapCore } from '../src/map/map-core/core';
 import { loadProfile, type PersonalTarget } from '../src/profile';
 import { deleteProfileTarget, postProfileTarget, putProfileTargets, putRemovedCuratedIds } from '../src/profile-api';
 import { handleAdd, hydratePersonalTargets, rerenderCrudSection } from '../src/profile-crud';
-import { clearLinkedRosterTargets, setLinkedRosterTargetsOffline } from '../src/profile-roster-targets';
-import { resolveAccountProfile } from '../src/profile-session';
+import { bindLinkedRosterPageLifecycle, clearLinkedRosterTargets, setLinkedRosterTargetsOffline } from '../src/profile-roster-targets';
+import { getAccountProfile, resolveAccountProfile } from '../src/profile-session';
 import { renderProfilePane } from '../src/profile-ui';
 import { createVendorDouble } from './vendor-map-double';
-
-vi.mock('../src/cloud', () => ({ fetchLiveCloud: async () => null }));
 
 const viewer = { name: 'test-viewer', displayName: 'Fixture viewer' };
 const josh = { name: 'josh', displayName: 'Fixture account' };
@@ -37,14 +36,17 @@ function installWorker({
   targets?: () => Response | Promise<Response>;
 } = {}) {
   const requests: { url: string; method: string }[] = [];
-  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+  vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET';
     requests.push({ url, method });
     if (url === '/api/browser/session') return session();
     if (url.startsWith('/api/browser/profiles/') && method === 'GET') return targets();
+    if (url.startsWith('/api/cloud?')) return json({ cloud_pct: 42 });
     return new Response(null, { status: 404 });
-  }));
+  });
   return {
+    sessionRequests: () => requests.filter(({ url }) => url === '/api/browser/session'),
+    weatherRequests: () => requests.filter(({ url }) => /^\/api\/(cloud|weather|wx)([/?]|$)/.test(url)),
     targetRequests: () => requests.filter(({ url }) => url.startsWith('/api/browser/profiles/')),
     writes: () => requests.filter(({ method }) => ['POST', 'PUT', 'DELETE'].includes(method)),
   };
@@ -79,16 +81,28 @@ function mountRings() {
     if (source?.type !== 'geojson' || typeof source.data === 'string') throw new Error('Missing target rings');
     return source.data.features;
   }
+  function ring(id: string) {
+    const feature = features().find((row) => row.properties?.target_id === id);
+    if (!feature) throw new Error(`Missing target ring: ${id}`);
+    return feature;
+  }
+
+  function tapFeature(feature: GeoJSON.Feature) {
+    if (feature.geometry.type !== 'Point') throw new Error('Expected a target point');
+    const [lon, lat] = feature.geometry.coordinates;
+    if (lon === undefined || lat === undefined) throw new Error('Missing target coordinates');
+    vendor.queryAt = (_box, layers) => layers.includes('my-targets-layer') ? [feature] : [];
+    const lngLat: [number, number] = [lon, lat];
+    const popupCount = vendor.popups.length;
+    vendor.fire('click', { point: core.project(lngLat), lngLat });
+    return vendor.popups[popupCount]?.content;
+  }
+
   return {
     ids: () => features().map((feature) => feature.properties?.target_id),
-    openLinkedPopup: () => {
-      const feature = features().find((row) => row.properties?.target_id === linkedTarget.id);
-      if (!feature) throw new Error('Missing linked ring');
-      vendor.queryAt = () => [feature];
-      const lngLat: [number, number] = [linkedTarget.lon, linkedTarget.lat];
-      vendor.fire('click', { point: core.project(lngLat), lngLat });
-      return vendor.popups.at(-1)?.content;
-    },
+    ring,
+    tapFeature,
+    openLinkedPopup: () => tapFeature(ring(linkedTarget.id)),
     lastPopupRemoved: () => vendor.popups.at(-1)?.removed,
   };
 }
@@ -98,6 +112,7 @@ function nextTask(): Promise<void> {
 }
 
 beforeEach(() => {
+  _resetCloudCacheForTest();
   localStorage.clear();
   sessionStorage.clear();
   document.body.innerHTML = '<div id="profile-body"></div><div id="toast" hidden></div>';
@@ -142,6 +157,7 @@ describe('read-only roster account targets', () => {
     const list = document.getElementById('profile-crud-section');
     expect(list?.textContent).toMatch(/Josh Kutryk[’']s account (profile|targets)/);
     expect(list?.querySelector('[data-target-id="' + linkedTarget.id + '"] button')).toBeNull();
+    expect(map.ring(linkedTarget.id).properties?.account_profile_label).toMatch(/Josh Kutryk[’']s account profile/);
     const popup = map.openLinkedPopup();
     expect(popup?.textContent).toContain(linkedTarget.name);
     expect(popup?.textContent).toMatch(/From Josh Kutryk[’']s account profile/);
@@ -164,6 +180,47 @@ describe('read-only roster account targets', () => {
     expect(loadProfile('kutryk')?.removedCuratedIds).toEqual([]);
     expect(loadProfile('josh')).toBeNull();
     expect(localStorage.getItem('opd-profile-kutryk')).toBeNull();
+  });
+
+  it('opens a linked pin without a weather row or request and still looks up clouds for a bundled pin', async () => {
+    const worker = installWorker();
+    await resolveAccountProfile();
+    const map = mountRings();
+    await hydratePersonalTargets('kutryk');
+
+    const linkedPopup = map.openLinkedPopup();
+    if (!linkedPopup) throw new Error('Missing linked popup');
+    expect(worker.weatherRequests()).toEqual([]);
+    expect(linkedPopup.querySelector('.map-popup-weather')).toBeNull();
+
+    const bundledPin = map.ring(bundledIds('kutryk')[0]!);
+    const bundledPopup = map.tapFeature(bundledPin);
+    if (!bundledPopup) throw new Error('Missing bundled popup');
+    document.body.append(bundledPopup);
+    expect(bundledPopup.querySelector('.map-popup-weather')?.textContent).toBe('Cloud: checking now…');
+    expect(worker.weatherRequests()).toHaveLength(1);
+    expect(worker.weatherRequests()[0]?.url).toMatch(/^\/api\/cloud\?lat=/);
+    await vi.waitFor(() => {
+      expect(bundledPopup.querySelector('.map-popup-weather')?.textContent).toBe('Cloud: now 42%');
+    });
+  });
+
+  it('ignores a prior linked hit after the authorized target list clears', async () => {
+    const worker = installWorker();
+    await resolveAccountProfile();
+    const map = mountRings();
+    await hydratePersonalTargets('kutryk');
+    const oldFeature = map.ring(linkedTarget.id);
+    expect(map.tapFeature(oldFeature)?.textContent).toContain(linkedTarget.name);
+
+    clearLinkedRosterTargets();
+    expect(map.lastPopupRemoved()).toBe(true);
+    expect(map.tapFeature(oldFeature)).toBeUndefined();
+    expect(map.tapFeature({
+      ...oldFeature,
+      properties: { ...oldFeature.properties, account_profile_label: undefined },
+    })).toBeUndefined();
+    expect(worker.weatherRequests()).toEqual([]);
   });
 
   it.each(['ungranted', 'signed out', 'offline', 'LAN', 'malformed profiles', 'legacy session with no profiles'] as const)(
@@ -208,8 +265,6 @@ describe('read-only roster account targets', () => {
     ['HTTP failure', () => new Response(null, { status: 503 })],
     ['LOS transport failure', () => { throw new TypeError('Connection lost'); }],
     ['malformed list', () => json({ targets: {} })],
-    ['malformed row', () => json({ targets: [linkedTarget, { ...linkedTarget, priority: '5' }] })],
-    ['wrong-profile row', () => json({ targets: [linkedTarget, { ...linkedTarget, id: 'personal:other:fixture' }] })],
   ] as const)('retries a %s on a Profile visit without retrying during passive renders', async (_case, fail) => {
     let reply = fail;
     const worker = installWorker({ targets: () => reply() });
@@ -240,6 +295,30 @@ describe('read-only roster account targets', () => {
     });
     expect(worker.targetRequests()).toHaveLength(3);
     expect(worker.writes()).toEqual([]);
+  });
+
+  it('keeps valid linked rows and quietly drops malformed and wrong-profile rows', async () => {
+    const error = vi.spyOn(console, 'error');
+    const warn = vi.spyOn(console, 'warn');
+    const worker = installWorker({ targets: () => json({ targets: [
+      { ...linkedTarget, id: 'personal:josh:blank', name: '   ' },
+      { ...linkedTarget, id: 'personal:josh:bad-priority', priority: '5' },
+      { ...linkedTarget, id: 'personal:other:foreign' },
+      null,
+      linkedTarget,
+    ] }) });
+    await resolveAccountProfile();
+    const map = mountRings();
+    await hydratePersonalTargets('kutryk');
+    renderProfilePane();
+    await nextTask();
+
+    const expected = [...bundledIds('kutryk'), linkedTarget.id];
+    expect(map.ids()).toEqual(expected);
+    expect(listIds()).toEqual(expected);
+    expect(worker.targetRequests()).toHaveLength(1);
+    expect(error).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it('releases a stalled boot read and ignores its reply after a successful Profile read', async () => {
@@ -290,6 +369,76 @@ describe('read-only roster account targets', () => {
     expect(worker.targetRequests()).toHaveLength(1);
   });
 
+  it.each(['grant is revoked', 'session is denied'])('clears the mounted overlay when the %s', async (reason) => {
+    let session = () => json({ ok: true, profile: viewer, profiles: [viewer, josh] });
+    const worker = installWorker({ session: () => session() });
+    await resolveAccountProfile();
+    const map = mountRings();
+    await hydratePersonalTargets('kutryk');
+    renderProfilePane();
+    expect(listIds()).toContain(linkedTarget.id);
+    expect(map.openLinkedPopup()?.textContent).toContain(linkedTarget.name);
+
+    session = reason === 'grant is revoked'
+      ? () => json({ ok: true, profile: viewer, profiles: [viewer] })
+      : () => new Response(null, { status: 401 });
+    const resolution = resolveAccountProfile();
+    const beforeResolution = { list: listIds(), rings: map.ids(), popupRemoved: map.lastPopupRemoved() };
+    const during = getAccountProfile();
+    if (reason === 'session is denied') await expect(resolution).rejects.toThrow('sign in');
+    else await resolution;
+    expect(beforeResolution).toEqual({
+      list: bundledIds('kutryk'), rings: bundledIds('kutryk'), popupRemoved: true,
+    });
+    expect(during).toMatchObject({ name: 'kutryk', isVerified: false });
+    expect(getAccountProfile()).toMatchObject({ name: 'kutryk', isVerified: false });
+    await hydratePersonalTargets('kutryk');
+    expect(worker.targetRequests()).toHaveLength(1);
+  });
+
+  it.each(['granted', 'ungranted', 'signed out'])('reverifies a cached page before restoring its linked targets (%s)', async (mode) => {
+    let session: () => Response | Promise<Response> = () => json({ ok: true, profile: viewer, profiles: [viewer, josh] });
+    const worker = installWorker({ session: () => session() });
+    bindLinkedRosterPageLifecycle();
+    await resolveAccountProfile();
+    const map = mountRings();
+    await hydratePersonalTargets('kutryk');
+    renderProfilePane();
+    expect(map.openLinkedPopup()?.textContent).toContain(linkedTarget.name);
+
+    window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: false }));
+    await nextTask();
+    expect(worker.sessionRequests()).toHaveLength(1);
+    window.dispatchEvent(Object.assign(new Event('pagehide'), { persisted: true }));
+    expect(listIds()).toEqual(bundledIds('kutryk'));
+    expect(map.ids()).toEqual(bundledIds('kutryk'));
+    expect(map.lastPopupRemoved()).toBe(true);
+
+    let finishSession: (response: Response) => void = () => {};
+    const heldSession = new Promise<Response>((resolve) => { finishSession = resolve; });
+    session = () => heldSession;
+    const show = () => window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true }));
+    show();
+    show();
+    renderProfilePane();
+    await vi.waitFor(() => expect(worker.sessionRequests()).toHaveLength(2));
+    expect(getAccountProfile()).toMatchObject({ name: 'kutryk', isVerified: false });
+    expect(worker.targetRequests()).toHaveLength(1);
+    expect(map.ids()).toEqual(bundledIds('kutryk'));
+    expect(listIds()).toEqual(bundledIds('kutryk'));
+
+    const granted = mode === 'granted';
+    finishSession(mode === 'signed out'
+      ? new Response(null, { status: 401 })
+      : json({ ok: true, profile: viewer, profiles: granted ? [viewer, josh] : [viewer] }));
+    await nextTask();
+    expect(getAccountProfile()).toMatchObject({ name: 'kutryk', isVerified: false });
+    const expected = granted ? [...bundledIds('kutryk'), linkedTarget.id] : bundledIds('kutryk');
+    expect(map.ids()).toEqual(expected);
+    expect(listIds()).toEqual(expected);
+    expect(worker.targetRequests()).toHaveLength(granted ? 2 : 1);
+  });
+
   it('removes linked rows, rings and the open popup during known LOS even when the browser reports online', async () => {
     const worker = installWorker();
     await resolveAccountProfile();
@@ -308,10 +457,10 @@ describe('read-only roster account targets', () => {
     expect(worker.targetRequests()).toHaveLength(1);
 
     setLinkedRosterTargetsOffline(false);
-    await nextTask();
-    expect(worker.targetRequests()).toHaveLength(1);
-    renderProfilePane();
+    setLinkedRosterTargetsOffline(false);
     await vi.waitFor(() => expect(listIds()).toContain(linkedTarget.id));
+    expect(map.ids()).toContain(linkedTarget.id);
+    expect(worker.sessionRequests()).toHaveLength(2);
     expect(worker.targetRequests()).toHaveLength(2);
   });
 

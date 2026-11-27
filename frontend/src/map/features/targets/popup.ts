@@ -125,8 +125,10 @@ export function buildTargetPopupContent(
     );
   }
 
-  const atPass = hasPass && typeof props.cloud_fraction === 'number' ? Math.round(props.cloud_fraction) : null;
-  addRow('map-popup-weather', atPass != null ? `Cloud: at pass ${atPass}%` : 'Cloud: checking now…', 'margin-top:2px');
+  if (!props.account_profile_label) {
+    const atPass = hasPass && typeof props.cloud_fraction === 'number' ? Math.round(props.cloud_fraction) : null;
+    addRow('map-popup-weather', atPass != null ? `Cloud: at pass ${atPass}%` : 'Cloud: checking now…', 'margin-top:2px');
+  }
 
   if (typeof props.shot_count === 'number' && props.shot_count > 0) {
     addRow('map-popup-shot', `✓ shot ${props.shot_count}×`, 'margin-top:4px');

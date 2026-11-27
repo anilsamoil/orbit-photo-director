@@ -44,7 +44,8 @@ vi.mock('../src/profile-api', async () => {
 // These orchestration fixtures exercise the legacy cache migration boundary.
 // Account selection and fail-closed boot are tested in account-session.test.ts.
 const session = vi.hoisted(() => ({ account: null as { name: string; displayName: string; isVerified: boolean } | null }));
-vi.mock('../src/profile-session', () => ({
+vi.mock('../src/profile-session', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../src/profile-session')>(),
   getAccountProfile: () => session.account,
   getSignedInAccountProfile: () => null,
   resolveAccountProfile: async () => session.account ?? { name: 'anil', displayName: 'Anil', isVerified: true },
@@ -1458,4 +1459,37 @@ describe('main.ts: expired session banner holds through the countdown', () => {
     document.getElementById('status-banner')?.click();
     expect(assign).toHaveBeenCalledWith('/api/app');
   });
+});
+
+it('requires an uncached probe to confirm recovery even when the manifest is fresh', async () => {
+  const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+  const { doRefresh } = await import('../src/main');
+  await doRefresh();
+  online.mockReturnValue(true);
+  vi.mocked(manifestModule.fetchManifest).mockResolvedValue(buildManifest({ generated_at: new Date().toISOString() }));
+  vi.mocked(manifestModule.fetchTop5).mockResolvedValue([]);
+  vi.mocked(manifestModule.fetchTop24h).mockResolvedValue([]);
+  vi.mocked(manifestModule.fetchTrack).mockResolvedValue(buildTrack());
+  const aurora = await import('../src/aurora');
+  vi.mocked(aurora.fetchKpData).mockResolvedValue(null);
+  const probes: string[] = [];
+  let reachable = false;
+  vi.stubGlobal('fetch', async (url: string) => {
+    if (!url.startsWith('/__opd_probe?')) return new Response(null, { status: 404 });
+    probes.push(url);
+    if (!reachable) throw new TypeError('Connection lost');
+    return new Response(null, { status: 204 });
+  });
+
+  await doRefresh();
+  expect(document.getElementById('status-banner')?.textContent).toMatch(/offline/i);
+  expect(probes).toHaveLength(1);
+
+  reachable = true;
+  await doRefresh();
+  expect(document.getElementById('status-banner')?.textContent).toContain('Last updated');
+  expect(probes).toHaveLength(2);
+
+  await doRefresh();
+  expect(probes).toHaveLength(2);
 });

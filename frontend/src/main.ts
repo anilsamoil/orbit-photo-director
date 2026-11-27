@@ -42,8 +42,8 @@ import { betaNoticeText, scanBetaForecast } from './beta-angle';
 import { initSunWidget } from './sun';
 import { loadOrCreateProfileFromURL, loadProfile, removePersonalTarget, saveProfile, toggleCuratedRemoved, type Profile } from './profile';
 import { EDIT_TARGET_EVENT, subscribeProfileChanged } from './profile-events';
-import { getAccountProfile, resolveAccountProfile } from './profile-session';
-import { clearLinkedRosterTargets, setLinkedRosterTargetsOffline } from './profile-roster-targets';
+import { getAccountProfile, invalidateRosterReadScope, resolveAccountProfile } from './profile-session';
+import { bindLinkedRosterPageLifecycle, setLinkedRosterTargetsOffline } from './profile-roster-targets';
 import { isRosterProfile } from './crew-roster';
 import { mountProfileMenu } from './profile-menu';
 import { deleteProfileTarget, putRemovedCuratedIds } from './profile-api';
@@ -239,7 +239,7 @@ async function maybeFlagExpiredSession(generatedAtIso: string): Promise<boolean>
     return false;
   }
   if (await isAccessSessionExpired()) {
-    clearLinkedRosterTargets();
+    invalidateRosterReadScope();
     setAuthBanner(bannerAuthExpired(ageMin));
     return true;
   }
@@ -347,16 +347,12 @@ async function doRefresh(): Promise<void> {
     // manifest from cache, and iOS reports navigator.onLine===true in Airplane
     // Mode — so a successful fetch of STALE data does NOT prove we're online.
     // When the data is stale, probe the network (cache-busting) to tell which
-    // it is. Fresh data is itself proof of connectivity, so the happy path
-    // skips the probe entirely. NaN generated_at → treat as online (no claim).
-    // NaN generated_at → not-offline ("no claim"). Note this intentionally
-    // diverges from isStaleManifest, which treats NaN as stale=true; a malformed
-    // timestamp is a generator bug, not an offline signal, so we don't claim LOS.
+    // it is. After a known outage, probe even with a recent manifest because
+    // the service worker can still serve that manifest from cache.
     const ageMin = (Date.now() - Date.parse(manifest.generated_at)) / 60_000;
-    currentlyOffline = Number.isFinite(ageMin) && ageMin >= EMPTY_HINT_THRESHOLD_MIN
-      ? !(await probeConnectivity())  // dedicated /__opd_probe path — never SW-cached
-      : false;
-    setLinkedRosterTargetsOffline(currentlyOffline);
+    const needsProbe = currentlyOffline || (Number.isFinite(ageMin) && ageMin >= EMPTY_HINT_THRESHOLD_MIN);
+    const connected = !needsProbe || await probeConnectivity();
+    currentlyOffline = !connected || !isOnline();
 
     // Persist atomically AFTER all artifacts loaded successfully — but ONLY
     // when the manifest version is STRICTLY NEWER than what's on disk AND we're
@@ -469,6 +465,7 @@ async function doRefresh(): Promise<void> {
       // based, via renderOfflineBanner) rather than blaming the generator.
       renderOfflineBanner();
     } else if (!(await maybeFlagExpiredSession(manifest.generated_at))) {
+      if (!currentlyOffline && isOnline()) setLinkedRosterTargetsOffline(false);
       // Not an expired Access session, so the ordinary staleness banner is
       // honest. When it IS expired, maybeFlagExpiredSession has already put the
       // tappable sign-in banner up and we must not overwrite it — a "STALE"
@@ -502,6 +499,11 @@ async function doRefresh(): Promise<void> {
       setBanner(bannerError((e as Error).message));
     }
   }
+}
+
+function onOffline(): void {
+  currentlyOffline = true;
+  setLinkedRosterTargetsOffline(true);
 }
 
 /** Drop passes whose closest_approach has already happened. The generator
@@ -2055,7 +2057,8 @@ async function init(): Promise<void> {
   }
   bindTabs(!sessionFailed);
   if (sessionFailed) return;
-  window.addEventListener('offline', clearLinkedRosterTargets);
+  window.addEventListener('offline', onOffline);
+  bindLinkedRosterPageLifecycle();
   // Slot 11 — subscribe via the central event bus (in-tab CustomEvent +
   // cross-tab storage event, debounced 150ms). Re-read currentProfile on
   // each fire so the slot 7 distance filter reflects the just-saved
