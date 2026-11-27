@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 import struct
@@ -13,6 +14,75 @@ MAP_MARKER = (0, 255, 0)
 ISS_MARKER = (196, 90, 40)
 BLOCKED_HOSTS = ["g1-fetch.invalid", "g1-websocket.invalid", "g1-xhr.invalid"]
 DEVICE_REQUIRED = {"reason": "Requires on-device proof before W-03 can be called done", "gate": "G1-device"}
+
+
+def passing_evidence():
+    origin = "capacitor://localhost"
+    digest = hashlib.sha256(bytes(range(256)) * 16).hexdigest()
+    egress = {
+        "connectSrcBlockedHosts": BLOCKED_HOSTS,
+        "capacitorHttp": "G1_BRIDGE_DENIED",
+        "capacitorHttpNativeClass": "G1_BRIDGE_DENIED",
+    }
+    pixels = {"positive": 24, "negative": 0, "pixelsSampled": 64, "localTileResponses": 1}
+    map_pixels = {**pixels, "layer": "carto-dark-layer"}
+    iss_pixels = {**pixels, "layer": "iss-lit"}
+    projection = "vertical-perspective"
+    projected = {"projection": projection, "runtime": {"projection": projection, "shaderVariant": "globe", "transition": 1}}
+    pose = {
+        **projected, "appliedPose": True, "verticalFovDeg": 81.20259, "pitchDeg": 30, "analyticPitchDeg": 30,
+        "maxPitchDeg": 90, "radiusErrorM": 0, "subpointErrorDeg": 0, "earthFraction": 1, "limbErrorDeg": 0,
+    }
+    geometry = {
+        "horizon": {**pose, "preset": "horizon"},
+        "nadir": {**pose, "preset": "nadir"},
+        "zoom12": {**projected, "applied": {"zoom": 12}, "tilePixels": 24},
+        "checks": [{"name": name, "pass": True} for name in (
+            "projection", "field of view", "pitch clamp", "camera radius", "sub-point", "limb", "nadir filled",
+            "nested property", "nasa tiles", "horizon and nadir poses applied", "zoom 12 applied",
+        )],
+    }
+    receipts = []
+    for method, path, body in (
+        ("GET", "/manifest.json", ""),
+        ("DELETE", "/api/browser/profiles/g1-fixture/targets/g1-synthetic", ""),
+        ("POST", "/api/log", '{"target_id":"g1-synthetic","notes":"Limb—合","action":"shoot"}\n'),
+        ("PUT", "/api/browser/profiles/g1-fixture/targets",
+         '{"targets":[{"id":"g1-synthetic","name":"Earth – 北","geom":{"type":"point","lat":28,"lon":-97}}]}\n'),
+    ):
+        headers = {"accept": "application/json", "x-g1-fixture": "g1"}
+        content = body.encode("utf-8")
+        receipt = {"method": method, "path": path, "headers": headers, "bodyAbsent": not body, "bytes": len(content)}
+        if body:
+            headers["content-type"] = "application/json"
+            receipt["receivedBodyHex"] = content.hex()
+        else:
+            receipt["unexpectedBodyRejected"] = True
+        receipts.append(receipt)
+    state = {"tab": "tab-iss", "token": "synthetic-token", "localOrigin": origin}
+    before = {**state, "documentId": "first-doc"}
+    after = {**state, "documentId": "second-doc"}
+    move_times = list(range(29_000, 300_000, 29_000))
+    return {
+        1: {"localOrigin": origin, "isSecureContext": True, "web": digest, "native": digest, "bytes": 4096, "egress": egress},
+        2: {"workers": [{"url": f"{origin}/assets/maplibre-gl-worker-fixture.js", "type": "module"}],
+            "featureQuery": True, "dynamicMapTabLoaded": True},
+        3: {"version": "WebGL 2.0", "width": 32, "height": 32},
+        4: map_pixels,
+        5: {**iss_pixels, "geometry": geometry},
+        6: {"verbs": receipts},
+        7: {"count": 100, "elapsedMs": 1000, "tilesPerSecond": 100, "bytesPerTile": 64, "witnessedPaths": 100,
+            "observedPaths": [f"/__g1/tiles/{index}.png" for index in range(100)],
+            "route": "/__g1/tiles/<index>.png", "cache": "no-store"},
+        8: {"before": before, "after": after, "beforeLaunchId": "first-app", "afterLaunchId": "second-app",
+            "beforeAppPID": 10, "afterAppPID": 20, "appQuitObserved": True},
+        9: {"before": before, "after": after, "terminationCallbacks": 1, "reloads": 1, "egress": egress, "tiles": iss_pixels},
+        10: {"requestedDurationMs": 600_000, "actualDurationMs": 600_000, "webProcessTerminations": 0,
+             "memory": {"observedDurationMs": 600_000, "peakBytes": 123_456},
+             "sessions": [{"tab": tab, "elapsedMs": 300_000, "moves": len(move_times),
+                           "tileFrames": len(move_times), "minimumTilePixels": 8, "verifiedMoveTimesMs": move_times}
+                          for tab in ("map", "iss")]},
+    }
 
 
 def fixture_png(marker):
@@ -46,23 +116,12 @@ class HostProofExportTests(unittest.TestCase):
                 }
                 for check_id in range(1, 11)
             ]
+            details = passing_evidence()
             for result in results:
                 if result["id"] not in performed_checks:
                     result.update(status="not-run", evidence=DEVICE_REQUIRED.copy())
-            for number in (1, 9):
-                if number not in performed_checks or number in checks_without_details:
-                    continue
-                results[number - 1]["evidence"]["egress"] = {
-                    "connectSrcBlockedHosts": BLOCKED_HOSTS,
-                    "capacitorHttp": "G1_BRIDGE_DENIED",
-                    "capacitorHttpNativeClass": "G1_BRIDGE_DENIED",
-                }
-            if 10 in performed_checks and 10 not in checks_without_details:
-                results[9]["evidence"].update(
-                    requestedDurationMs=600_000,
-                    actualDurationMs=600_000,
-                    memory={"observedDurationMs": 600_000, "peakBytes": 123_456},
-                )
+                elif result["status"] == "pass" and result["id"] not in checks_without_details:
+                    result["evidence"].update(details[result["id"]])
             for number, evidence in (evidence_overrides or {}).items():
                 results[number - 1]["evidence"] = evidence
             results.extend(extra_rows)
@@ -224,6 +283,77 @@ class HostProofExportTests(unittest.TestCase):
         self.assertIn("Duplicate result for check 1", process.stderr)
         self.assertIn("Duplicate result for check 1", report["evidenceExportErrors"][0])
         self.assertIn("Duplicate result for check 1", table.split("## Proof evidence export errors")[1])
+
+    def test_malformed_duplicate_id_invalidates_its_selected_check(self):
+        for check_id in (8.0, "8"):
+            with self.subTest(check_id=check_id):
+                process, report, table = self.export(
+                    "success", {}, checks="6,8", performed_checks=(6, 8),
+                    extra_rows=({"id": check_id, "status": "fail", "evidence": {"reason": "duplicate evidence"}},),
+                )
+                self.assertEqual(process.returncode, 1, process.stderr)
+                self.assertEqual(report["results"][5]["status"], "pass")
+                self.assertEqual(report["results"][7]["status"], "fail")
+                self.assertIn("Unexpected check number", report["results"][7]["evidence"]["evidenceError"])
+                self.assertIn("| 8 | localStorage after app relaunch | fail |", table)
+
+    def test_unidentifiable_id_invalidates_all_selected_checks(self):
+        process, report, table = self.export(
+            "failure", {}, checks="6,8", performed_checks=(6, 8),
+            extra_rows=({"id": [], "status": "fail", "evidence": {"reason": "unknown row"}},),
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        for index in (5, 7):
+            self.assertEqual(report["results"][index]["status"], "fail")
+            self.assertIn("Unexpected check number", report["results"][index]["evidence"]["evidenceError"])
+        self.assertEqual(table.count("| fail |"), 2)
+        self.assertEqual(table.count("| not-run (on-device required) |"), 8)
+
+    def test_placeholder_cannot_stand_in_for_any_passing_evidence(self):
+        process, report, table = self.export(
+            "success", {"G1-map": fixture_png(MAP_MARKER), "G1-iss": fixture_png(ISS_MARKER)},
+            evidence_overrides={number: {"placeholder": True} for number in range(1, 11)},
+        )
+        self.assertEqual(process.returncode, 1, process.stderr)
+        self.assertEqual([row["status"] for row in report["results"]], ["fail"] * 10)
+        self.assertEqual(table.count("| fail |"), 10)
+        self.assertEqual(len(report["evidenceExportErrors"]), 10)
+
+    def test_bridge_write_bytes_and_bodyless_rejection_are_verified(self):
+        for index, key, value in ((0, "unexpectedBodyRejected", False), (1, "headers", {}),
+                                  (2, "receivedBodyHex", "00"), (3, "path", "/api/log")):
+            with self.subTest(index=index, key=key):
+                evidence = passing_evidence()[6]
+                evidence["verbs"][index][key] = value
+                process, report, table = self.export(
+                    "success", {}, checks="6", performed_checks=(6,), evidence_overrides={6: evidence},
+                )
+                self.assertEqual(process.returncode, 1, process.stderr)
+                self.assertEqual(report["results"][5]["status"], "fail")
+                self.assertIn("native bridge receipt", table)
+
+    def test_tile_observations_and_relaunch_identities_are_verified(self):
+        proof = passing_evidence()
+        proof[7]["observedPaths"][-1] = proof[7]["observedPaths"][0]
+        proof[8]["after"]["documentId"] = proof[8]["before"]["documentId"]
+        process, report, table = self.export(
+            "success", {}, checks="7,8", performed_checks=(7, 8),
+            evidence_overrides={7: proof[7], 8: proof[8]},
+        )
+        self.assertEqual(process.returncode, 1, process.stderr)
+        self.assertEqual([report["results"][index]["status"] for index in (6, 7)], ["fail", "fail"])
+        self.assertIn("per-path native tile observations", table)
+        self.assertIn("distinct WebView documents", table)
+
+    def test_stress_duration_and_rss_without_regular_raster_frames_does_not_pass(self):
+        stress = passing_evidence()[10]
+        stress["sessions"][0]["verifiedMoveTimesMs"][1] = 60_000
+        process, report, table = self.export(
+            "success", {}, checks="10", performed_checks=(10,), evidence_overrides={10: stress},
+        )
+        self.assertEqual(process.returncode, 1, process.stderr)
+        self.assertEqual(report["results"][9]["status"], "fail")
+        self.assertIn("missing verified full-duration raster frames for map", table)
 
     def test_excluded_evidence_is_canonical(self):
         for evidence in ({"waived": True}, None):

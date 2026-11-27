@@ -80,6 +80,6 @@ All three signed app runs include the CryptoKit digest comparison (1), Capacitor
 
 ## W-03 ground-device proof
 
-Before distributing the signed ground proof through TestFlight or W-74, W-03 must provide an in-app launch trigger that works without XCTest launch arguments. W-03 must also provide the evidence procedure for the required app and Safari runs. The app procedure must verify exit and relaunch with the storage token intact, WebContent termination and recovery, and peak WebContent memory and termination count during the full ten-minute run, all without the Mac-side `simctl` observer.
+In GitHub Actions, open **iOS release → Run workflow** on `main` and enter the Apple Developer Team ID as `team_id`. Approve the `ios-release` deployment. When Apple finishes processing, assign the build to the internal TestFlight group in App Store Connect. [Release workflow](../../.github/workflows/ios-release.yml)
 
-Run the full proof on the installed signed build on all three devices and collect the web-only evidence in Safari on iPad. Record the build, delivery channel or browser version, device model, OS version, each check result and its evidence here. [W-03 work package](WORK_PLAN.md#w-03-signed-host-proof-on-a-ground-device-s)
+Use the in-app controls to run and export the proof on each signed app target. Follow the ground checklist for exit and relaunch, WebContent recovery, the ten-minute memory trace and Safari on iPad. Record the build, delivery channel or browser version, device model, OS version and check results here. [Ground checklist](W-03-GROUND-CHECKLIST.md) · [W-03 work package](WORK_PLAN.md#w-03-signed-host-proof-on-a-ground-device-s)

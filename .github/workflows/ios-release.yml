@@ -1,0 +1,214 @@
+name: iOS release
+
+on:
+  workflow_dispatch:
+    inputs:
+      team_id:
+        description: Apple Developer Team ID (10 uppercase letters or digits)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    name: Validate release dispatch
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require main and a valid team ID
+        env:
+          TEAM_ID: ${{ inputs.team_id }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != refs/heads/main ]]; then
+            printf '%s\n' 'Dispatch the release from main.' >&2
+            exit 1
+          fi
+          export LC_ALL=C
+          if [[ ! "$TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]; then
+            printf '%s\n' 'Enter a 10-character Apple Developer Team ID.' >&2
+            exit 1
+          fi
+
+  prepare:
+    name: Prepare unsigned proof assets
+    needs: dispatch
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      asset_name: ${{ steps.package.outputs.asset_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.3'
+      - name: Install locked frontend dependencies
+        working-directory: frontend
+        run: bun install --frozen-lockfile
+      - name: Test, build and prepare proof assets
+        run: |
+          set -euo pipefail
+          node --test app/host-proof/proof.test.mjs
+          python3 -B app/scripts/test_export_host_proof.py
+          python3 -B app/scripts/test_observe_host_proof.py
+          node app/host-proof/build.mjs
+          python3 app/scripts/prepare-ios.py --host-proof
+      - name: Package the exact HostProof resources
+        id: package
+        run: |
+          set -euo pipefail
+          python3 app/scripts/release-support.py package-assets app/ios/App/App "$RUNNER_TEMP/snap-proof-web"
+          python3 app/scripts/release-support.py scan "$RUNNER_TEMP/snap-proof-web"
+          printf 'asset_name=snap-proof-web-%s-%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.package.outputs.asset_name }}
+          path: ${{ runner.temp }}/snap-proof-web
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  sign:
+    name: Sign and upload SNAP HostProof
+    needs: [dispatch, prepare]
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-26
+    environment: ios-release
+    timeout-minutes: 40
+    concurrency:
+      group: ios-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.prepare.outputs.asset_name }}
+          path: ${{ runner.temp }}/snap-proof-web
+      - name: Verify proof resources, Xcode and export options
+        env:
+          TEAM_ID: ${{ inputs.team_id }}
+        run: |
+          set -euo pipefail
+          python3 app/scripts/release-support.py restore-assets app/ios/App/App "$RUNNER_TEMP/snap-proof-web"
+          sudo xcode-select -s /Applications/Xcode_26.6.app/Contents/Developer
+          version=$(xcodebuild -version)
+          if [[ "$version" != $'Xcode 26.6\nBuild version 17F113' ]]; then
+            printf '%s\n' 'The selected Xcode version does not match the release pin.' >&2
+            exit 1
+          fi
+          python3 app/scripts/release-support.py prepare-export "$RUNNER_TEMP/snap-release-options"
+      - name: Archive, verify, export and upload signed proof
+        id: release
+        env:
+          TEAM_ID: ${{ inputs.team_id }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          logs="$RUNNER_TEMP/snap-release-logs"
+          raw_logs="$RUNNER_TEMP/snap-release-private-logs"
+          auth="$RUNNER_TEMP/snap-release-auth"
+          key="$auth/AuthKey.p8"
+          options="$RUNNER_TEMP/snap-release-options"
+          files="$RUNNER_TEMP/snap-release-output"
+          archive="$files/SNAP.xcarchive"
+          export_dir="$RUNNER_TEMP/snap-release-export"
+          packages="$RUNNER_TEMP/snap-release-swiftpm"
+          project=app/ios/App/App.xcodeproj
+          support=app/scripts/release-support.py
+          build=$(<"$options/build-number")
+          mkdir "$logs" "$files" "$raw_logs" "$auth"
+          trap 'rm -rf -- "$auth"' EXIT
+          if [[ -z "$APP_STORE_CONNECT_KEY_ID" || -z "$APP_STORE_CONNECT_ISSUER_ID" || -z "$APP_STORE_CONNECT_PRIVATE_KEY" ]]; then
+            printf '%s\n' 'A protected signing credential is missing.' >&2
+            exit 1
+          fi
+          printf '%s' "$APP_STORE_CONNECT_PRIVATE_KEY" > "$key"
+          export -n APP_STORE_CONNECT_KEY_ID APP_STORE_CONNECT_ISSUER_ID APP_STORE_CONNECT_PRIVATE_KEY
+          authentication=(
+            -authenticationKeyPath "$key"
+            -authenticationKeyID "$APP_STORE_CONNECT_KEY_ID"
+            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID"
+            -allowProvisioningUpdates
+          )
+          run_xcode() {
+            local phase=$1 status=0
+            shift
+            xcodebuild "$@" "${authentication[@]}" 2>&1 | tee "$raw_logs/$phase.log" >/dev/null || status=$?
+            APP_STORE_CONNECT_KEY_ID="$APP_STORE_CONNECT_KEY_ID" \
+              APP_STORE_CONNECT_ISSUER_ID="$APP_STORE_CONNECT_ISSUER_ID" \
+              APP_STORE_CONNECT_PRIVATE_KEY="$APP_STORE_CONNECT_PRIVATE_KEY" \
+              python3 "$support" redact "$raw_logs/$phase.log" "$logs/$phase.log" "$key"
+            rm -- "$raw_logs/$phase.log"
+            if (( status != 0 )); then
+              printf 'Xcode %s failed. See the redacted release logs.\n' "$phase" >&2
+            fi
+            return "$status"
+          }
+
+          run_xcode archive archive \
+            -project "$project" -scheme HostProof -configuration HostProof \
+            -destination generic/platform=iOS -archivePath "$archive" \
+            -derivedDataPath "$RUNNER_TEMP/snap-release-derived" \
+            -onlyUsePackageVersionsFromResolvedFile -disablePackageRepositoryCache \
+            -clonedSourcePackagesDirPath "$packages" \
+            CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM="$TEAM_ID" CURRENT_PROJECT_VERSION="$build"
+          python3 "$support" verify-signing "$archive/Products/Applications/App.app" "$build" archive \
+            > "$logs/archive-signing.log" 2>&1
+          python3 app/scripts/check-archive-privacy.py --archive "$archive" \
+            --package-resolved "$project/project.xcworkspace/xcshareddata/swiftpm/Package.resolved" \
+            --source-packages "$packages" --output "$logs/privacy-check.log"
+
+          run_xcode export -exportArchive -archivePath "$archive" \
+            -exportOptionsPlist "$options/export.plist" -exportPath "$export_dir"
+          shopt -s nullglob
+          ipa=("$export_dir"/*.ipa)
+          if (( ${#ipa[@]} != 1 )); then
+            printf '%s\n' 'The export did not produce exactly one IPA.' >&2
+            exit 1
+          fi
+          mv -- "${ipa[0]}" "$files/SNAP.ipa"
+          inspection="$RUNNER_TEMP/snap-release-inspect"
+          ditto -x -k "$files/SNAP.ipa" "$inspection"
+          python3 "$support" verify-signing "$inspection/Payload/App.app" "$build" export \
+            > "$logs/export-signing.log" 2>&1
+          ditto -c -k --keepParent "$archive" "$files/SNAP.xcarchive.zip"
+          python3 "$support" scan "$logs" "$files/SNAP.xcarchive.zip" "$files/SNAP.ipa"
+
+          run_xcode upload -exportArchive -archivePath "$archive" \
+            -exportOptionsPlist "$options/upload.plist" -exportPath "$RUNNER_TEMP/snap-release-upload"
+      - name: Check redacted log artifacts
+        id: check-logs
+        if: always() && steps.release.outcome != 'skipped'
+        run: python3 app/scripts/release-support.py scan "$RUNNER_TEMP/snap-release-logs"
+      - name: Upload redacted release logs
+        if: always() && steps.check-logs.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: snap-release-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/snap-release-logs/*.log
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload verified archive and IPA
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: snap-host-proof-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/snap-release-output/SNAP.xcarchive.zip
+            ${{ runner.temp }}/snap-release-output/SNAP.ipa
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove temporary signing credentials and raw logs
+        if: always()
+        run: |
+          rm -rf -- "$RUNNER_TEMP/snap-release-auth" "$RUNNER_TEMP/snap-release-private-logs" \
+            "$RUNNER_TEMP/private_keys" "$GITHUB_WORKSPACE/private_keys" \
+            "$HOME/.appstoreconnect" "$HOME/private_keys" "$HOME/.private_keys"

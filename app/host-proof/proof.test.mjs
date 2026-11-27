@@ -59,7 +59,9 @@ test('tile throughput consumes bytes and rejects corruption, cache aliases, and 
   const tileURL = (index) => `capacitor://localhost/__g1/tiles/${index}.png`;
   const delivered = [];
   const options = { expected: BODY, tileURL, tileRequests: async () => [...delivered], localURL: 'capacitor://localhost/', fetchTile: async (url) => { delivered.push(new URL(url).pathname); return new Response(BODY); }, now: (() => { let call = 0; return () => call++ * 1000; })() };
-  assert.equal((await measureTiles(options)).tilesPerSecond, 100);
+  const measured = await measureTiles(options);
+  assert.equal(measured.tilesPerSecond, 100);
+  assert.deepEqual(measured.observedPaths, delivered);
   await assert.rejects(measureTiles({ ...options, fetchTile: async () => new Response(null, { status: 404 }) }), /route failed/);
   await assert.rejects(measureTiles({ ...options, fetchTile: async () => new Response([1]) }), /bytes changed/);
   await assert.rejects(measureTiles({ ...options, tileURL: (index) => `capacitor://localhost/__g1/tiles/0.png?request=${index}` }), /unique/);
@@ -73,10 +75,10 @@ test('a stalled native operation produces a timeout instead of hanging the proof
   await assert.rejects(withDeadline(() => new Promise(() => {}), 5, 'Proof frontend startup'), /Proof frontend startup timed out/);
 });
 
-function createProofHarness(t) {
+function createProofHarness(t, origin = 'capacitor://localhost') {
   const fixture = makeFixture(['synthetic line 1', 'synthetic line 2']);
   const tile = Buffer.from(fixture.tile, 'base64');
-  const location = new URL('capacitor://localhost/');
+  const location = new URL(origin);
   const storage = new Map();
   let activeTab = 'map';
   let now = 0;
@@ -249,6 +251,27 @@ test('GPU-free proof keeps native checks and relaunch available with no renderer
   for (const tab of ['map', 'iss']) {
     await assert.rejects(relaunched.capture(tab), /Renderers are disabled/);
   }
+});
+
+test('Safari checks exercise browser egress and storage without a Capacitor bridge', async (t) => {
+  const { makeProof } = createProofHarness(t, 'https://g1-fixture.invalid');
+  delete globalThis.Capacitor;
+  const proof = makeProof();
+  const digest = await proof.safari.runCheck(1);
+  assert.equal(digest.status, 'pass', JSON.stringify(digest.evidence));
+  assert.equal(digest.evidence.web, digest.evidence.expected);
+  assert.deepEqual(digest.evidence.egress.connectSrcBlockedHosts, [
+    'g1-fetch.invalid', 'g1-websocket.invalid', 'g1-xhr.invalid',
+  ]);
+  assert.equal(digest.evidence.egress.capacitorHttp, undefined);
+  assert.equal((await proof.runCheck(1)).status, 'fail');
+  assert.throws(() => proof.safari.runCheck(6), /Safari fixture runs checks 1 through 5/);
+  const before = proof.prepareRelaunch();
+  assert.equal((await proof.safari.verifyStorage(before)).status, 'fail');
+  const reloaded = makeProof();
+  const storage = await reloaded.safari.verifyStorage(before);
+  assert.equal(storage.status, 'pass', JSON.stringify(storage.evidence));
+  assert.equal(storage.evidence.after.token, before.token);
 });
 
 test('independent checks return the full report and the native-driven phases reach checks 8–10', async (t) => {

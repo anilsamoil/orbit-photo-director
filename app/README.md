@@ -62,15 +62,7 @@ The unsigned workflow builds `HostProof` with `CODE_SIGNING_ALLOWED=NO`. Hosted 
 
 ### W-03 signed proof archive
 
-On the W-03 runner, build and prepare the proof assets with the commands above. Select the `HostProof` archive action, using the approved W-03 automatic provisioning and signing inputs.
-
-```sh
-xcodebuild archive -project app/ios/App/App.xcodeproj -scheme HostProof \
-  -destination 'generic/platform=iOS' -onlyUsePackageVersionsFromResolvedFile \
-  -archivePath /tmp/SNAP-host-proof.xcarchive
-```
-
-Verify the resolved signing identity and provisioning for the selected archive and export. Verify that the archive contains `App.app/public/__g1/build.json` and perform the SDK privacy check before upload. Record redacted evidence under the W-03 release procedure. [W-03 work package](../docs/ios/WORK_PLAN.md#w-03-signed-host-proof-on-a-ground-device-s)
+Open **Actions → iOS release → Run workflow** on `main`, enter the Apple Developer Team ID as `team_id`, and approve the `ios-release` deployment. The workflow builds and tests the proof assets in an unprivileged job. The signing job verifies the asset manifest and the archive's signing and SDK privacy evidence before TestFlight upload. The owner assigns the processed build to the internal TestFlight group. [Release workflow](../.github/workflows/ios-release.yml) · [Ground checklist](../docs/ios/W-03-GROUND-CHECKLIST.md)
 
 ## SDK inventory
 
@@ -83,3 +75,5 @@ The app links the local `CapApp-SPM` source package. Its only external dependenc
 | Cordova | 8.6.2 Ionic distribution, prebuilt `Cordova.xcframework` | `PrivacyInfo.xcprivacy` present in device and simulator slices. Both passed plist lint. | Outer XCFramework passed local `codesign --verify --strict` with a Drifty Co. Developer ID signature. Xcode validation pending. |
 
 Both published ZIPs matched the SHA-256 checksums in the pinned Swift package manifest. All four inspected privacy manifests declared no tracking, collected data or accessed API types. This Mac has Command Line Tools only. Xcode SDK-origin validation and privacy manifest placement in the selected signed archive remain open for the W-03 check. [Ionic release assets](https://github.com/ionic-team/capacitor-swift-pm/releases/tag/8.6.2) · [Apple's SDK requirements](https://developer.apple.com/support/third-party-SDK-requirements/) · [W-03 archive check](../docs/ios/WORK_PLAN.md#sdk-privacy-check-before-upload)
+
+The W-03 host stores proof results in its own app container using ordinary file reads and writes. The native host code has no identified required-reason API use. The app uses Apple platform cryptography and sets `ITSAppUsesNonExemptEncryption` to false in the plist shared by both builds.

@@ -7,6 +7,24 @@ on:
     branches: [main]
 
 jobs:
+  release-workflow-guard:
+    name: Release workflow guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check workflow boundaries
+        run: |
+          python3 -m venv "$RUNNER_TEMP/release-checks"
+          python="$RUNNER_TEMP/release-checks/bin/python"
+          "$python" -m pip install --disable-pip-version-check PyYAML==6.0.3
+          "$python" scripts/check_release_workflow_guard.py
+          "$python" -m unittest discover -s scripts -p test_release_workflow_guard.py
+          "$python" -m unittest discover -s app/scripts -p test_release_support.py
+          "$python" -B app/scripts/test_check_archive_privacy.py
+
   python:
     runs-on: ubuntu-latest
     name: Python (generator)
