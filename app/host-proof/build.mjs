@@ -95,6 +95,16 @@ function replaceRequired(source, anchor, replacement) {
   return source.replace(anchor, replacement);
 }
 
+export const issCameraHold = {
+  name: 'g1-proof-iss-camera',
+  enforce: 'pre',
+  transform(source, id) {
+    if (!id.endsWith('/src/iss-view/index.ts')) return;
+    const entry = "async function paint(source: 'timer' | 'resize' = 'resize'): Promise<void> {";
+    return replaceRequired(source, entry, `${entry}\n    if (Reflect.get(window, '__opdG1')?.heldCamera === 'iss') return;`);
+  },
+};
+
 export async function buildProof() {
   const { build } = await import(pathToFileURL(resolve(root, 'frontend/node_modules/vite/dist/node/index.js')));
   const fixture = makeFixture((await readFile(resolve(root, 'tests/fixtures/iss-2026-11-10.txt'), 'utf8')).trim().split('\n'));
@@ -102,7 +112,7 @@ export async function buildProof() {
   const result = await build({
     configFile: false, root: resolve(root, 'frontend'),
     define: { __APP_VERSION__: JSON.stringify((await readFile(resolve(root, 'VERSION'), 'utf8')).trim()) },
-    plugins: [{
+    plugins: [issCameraHold, {
       name: 'g1-proof-source',
       enforce: 'pre',
       transform(source, id) {
@@ -116,12 +126,6 @@ export async function buildProof() {
         if (id.endsWith('/src/map/index.ts')) {
           return replaceRequired(source, 'core = createMapCore(vendor, clock);',
             "core = createMapCore(Reflect.get(window, '__opdG1').guardMapCamera(vendor), clock);");
-        }
-        if (id.endsWith('/src/iss-view/index.ts')) {
-          // The proof owns the camera during scripted jumps. Preset clicks
-          // and normal ISS rendering continue to use the real scene.
-          return replaceRequired(source, "void paint('timer');",
-            "if (Reflect.get(window, '__opdG1')?.heldCamera !== 'iss') void paint('timer');");
         }
       },
     }, {

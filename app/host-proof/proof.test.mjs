@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { registerHooks } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { compileFunction } from 'node:vm';
 import { inflateSync } from 'node:zlib';
 import test from 'node:test';
-import { makeFixture, tilePNG } from './build.mjs';
+import { Window } from '../../frontend/node_modules/happy-dom/lib/index.js';
+import { build } from '../../frontend/node_modules/vite/dist/node/index.js';
+import { issCameraHold, makeFixture, tilePNG } from './build.mjs';
 import { BODY, BRIDGE_REQUESTS, CHECKS, TAB_STORAGE_KEY, TILE_COLORS, createProof, measureTiles, verifyEcho, verifyMove, verifyPixels, verifyRecovery, verifyRelaunch, verifyStress, withDeadline } from './probes.mjs';
 
 test('fixture artifacts carry matching lengths and SHA-256 digests', () => {
@@ -450,6 +455,79 @@ test('Map stress keeps its requested camera while a zoom-out waits for tiles', a
   assert.equal(bearingWrites, 0);
   camera.setCenter(issCenter);
   assert.deepEqual(map.getCenter(), { lng: -97, lat: 28 });
+});
+
+test('ISS stress keeps its requested camera if the window resizes while a zoom-out waits for tiles', async (t) => {
+  const [bundle] = await build({
+    configFile: false,
+    root: fileURLToPath(new URL('../../frontend/', import.meta.url)),
+    publicDir: false,
+    logLevel: 'silent',
+    plugins: [issCameraHold],
+    build: {
+      lib: { entry: 'src/iss-view/index.ts', name: 'IssView', formats: ['iife'] },
+      minify: false,
+      write: false,
+    },
+  });
+  const tle = await readFile(new URL('../../tests/fixtures/iss-2026-11-10.txt', import.meta.url), 'utf8');
+  const fixture = makeFixture(tle.trim().split('\n'));
+  const { makeProof } = createProofHarness(t);
+  const proof = makeProof();
+  const map = window.__opdIss;
+  const jumpTo = map.jumpTo;
+  const repaint = map.triggerRepaint;
+  const browser = new Window({ url: 'https://g1-fixture.invalid/' });
+  const host = browser.document.createElement('div');
+  browser.document.body.append(host);
+  browser.__opdG1 = proof;
+  const load = compileFunction(bundle.output[0].code + '\nreturn IssView;',
+    ['window', 'document', 'HTMLElement', 'getComputedStyle', 'ResizeObserver'], { filename: 'iss-view-proof.js' });
+  const { mountIssScene } = load(browser, browser.document, browser.HTMLElement, browser.getComputedStyle.bind(browser), browser.ResizeObserver);
+  const scene = mountIssScene(host, {
+    nowMs: () => fixture.now, drive: 'manual', launches: () => [], session: { mode: 'horizon' },
+    createRenderer: () => ({
+      ready: async () => {}, resize() {}, destroy() {},
+      aim({ pose }) {
+        jumpTo({ center: [pose.camera.lonDeg, pose.camera.latDeg], zoom: 4.8478066574280145 });
+      },
+    }),
+  });
+  t.after(async () => {
+    scene.dispose();
+    await browser.happyDOM.close();
+  });
+  scene.update({ manifestVersion: 'g1', generatedAtMs: fixture.now, track: JSON.parse(fixture.files['/v/g1/track.json']) });
+  await Promise.resolve();
+  assert.equal(scene.phase(), 'running');
+  const nadir = host.querySelector('[data-iss-preset="nadir"]');
+  const querySelector = document.querySelector;
+  t.mock.method(document, 'querySelector', (selector) => (
+    selector === '[data-iss-preset="nadir"]' ? nadir : querySelector(selector)
+  ));
+  const readCamera = () => ({ center: map.getCenter(), zoom: map.getZoom() });
+  nadir.click();
+  const nadirCamera = readCamera();
+  const resize = () => browser.dispatchEvent(new browser.Event('resize'));
+  let zoomOutFrames = null;
+  t.mock.method(map, 'jumpTo', (next) => {
+    if (zoomOutFrames === null && map.getZoom() === 4.9 && next.zoom === 3) {
+      zoomOutFrames = 0;
+      map.blankNextFrame();
+    }
+    jumpTo(next);
+  });
+  t.mock.method(map, 'triggerRepaint', () => {
+    if (zoomOutFrames !== null && zoomOutFrames++ === 1) resize();
+    repaint();
+  });
+
+  const result = await proof.stress(600_000);
+  assert.equal(result.status, 'pass', JSON.stringify(result.evidence));
+  assert.ok(zoomOutFrames >= 2);
+  assert.notDeepEqual(readCamera(), nadirCamera);
+  resize();
+  assert.deepEqual(readCamera(), nadirCamera);
 });
 
 test('failed stress retains the rendered and requested camera evidence', async (t) => {
