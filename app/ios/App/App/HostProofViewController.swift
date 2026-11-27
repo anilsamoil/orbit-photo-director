@@ -4,21 +4,25 @@ import Network
 import UIKit
 import WebKit
 
-private typealias ProofJSON = [String: Any]
+typealias ProofJSON = [String: Any]
 
 final class HostProofViewController: CAPBridgeViewController {
-    private static let stressDurationMs = 600_000
+    static let stressDurationMs = 600_000
+    private static let processLaunchID = UUID().uuidString
+    private static let proofStoreID = UUID(uuidString: "5CBDA0D0-95F7-4F66-AE6F-7338D3FB5A9C")!
+    private let testMode = ProcessInfo.processInfo.arguments.contains("--g1-ui-test")
     // XCTest validates the input and forwards the canonical list of check IDs.
     private let selectedChecks = Set(ProcessInfo.processInfo.environment["G1_CHECKS"].map {
         $0.split(separator: ",").compactMap { Int($0) }
     } ?? Array(1...10))
     private let proofRouter = HostProofRouter()
-    private let launchID = UUID().uuidString
+    let launchID = HostProofViewController.processLaunchID
     private let proofStatus = UILabel()
     private let screenshotStatus = UILabel()
     private let lifecycleStatus = UILabel()
-    private var proofNavigation: HostProofNavigation?
+    private(set) var proofNavigation: HostProofNavigation?
     private var screenshotTask: Task<Void, Never>?
+    private var ground: HostProofGround?
 
     override func router() -> Router { proofRouter }
 
@@ -26,7 +30,9 @@ final class HostProofViewController: CAPBridgeViewController {
         let configuration = super.webViewConfiguration(for: instanceConfiguration)
         var offlineProxy = ProxyConfiguration(httpCONNECTProxy: .hostPort(host: "127.0.0.1", port: 1))
         offlineProxy.allowFailover = false
-        configuration.websiteDataStore.proxyConfigurations = [offlineProxy]
+        let proofStore = WKWebsiteDataStore(forIdentifier: Self.proofStoreID)
+        proofStore.proxyConfigurations = [offlineProxy]
+        configuration.websiteDataStore = proofStore
         return configuration
     }
 
@@ -46,7 +52,7 @@ final class HostProofViewController: CAPBridgeViewController {
         let content = webView.configuration.userContentController
         content.removeAllScriptMessageHandlers()
         content.add(HostProofBridgeIngress(downstream: downstream, localURL: localURL), contentWorld: .page, name: "bridge")
-        if selectedChecks.isDisjoint(with: [2, 3, 4, 5, 9, 10]) {
+        if testMode && selectedChecks.isDisjoint(with: [2, 3, 4, 5, 9, 10]) {
             content.addUserScript(WKUserScript(source: "globalThis.__opdG1RenderersDisabled = true;",
                                               injectionTime: .atDocumentStart, forMainFrameOnly: true))
         }
@@ -57,18 +63,25 @@ final class HostProofViewController: CAPBridgeViewController {
         // Capacitor's default popup delegate can hand URLs off to UIApplication.
         webView.uiDelegate = nil
 
-        if ProcessInfo.processInfo.arguments.contains("--g1-ui-test") {
+        if testMode {
             navigation.didFinish = { [weak self, weak navigation] in
                 navigation?.didFinish = nil
                 Task { await self?.runProof() }
+            }
+        } else {
+            navigation.didFinish = { [weak self, weak navigation] in
+                navigation?.didFinish = nil
+                self?.ground?.navigationReady()
             }
         }
     }
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        if ProcessInfo.processInfo.arguments.contains("--g1-ui-test") {
+        if testMode {
             installTestControls()
+        } else {
+            ground = HostProofGround(host: self)
         }
     }
 
@@ -168,14 +181,8 @@ final class HostProofViewController: CAPBridgeViewController {
                       let beforeAppPID = arguments["appPID"] as? Int, beforeAppPID != Int(getpid()),
                       arguments["appQuitObserved"] as? Bool == true
                 else { throw HostProofError("Missing XCUITest quit witness") }
-                let witness: ProofJSON = [
-                    "beforeLaunchId": beforeLaunchID,
-                    "afterLaunchId": launchID,
-                    "beforeAppPID": beforeAppPID,
-                    "afterAppPID": Int(getpid()),
-                    "appQuitObserved": true
-                ]
-                return try await web("verifyRelaunch", arguments: [before, witness])
+                return try await verifyRelaunch(before: before, launch: beforeLaunchID, pid: beforeAppPID,
+                                                observation: "XCTest app termination")
             }
             results.append(relaunch)
         }
@@ -226,6 +233,22 @@ final class HostProofViewController: CAPBridgeViewController {
             "reloads": proofNavigation.finishes - baselineNavigations,
             "process": exit
         ]
+        return await recoveryResult(before: before, witness: witness)
+    }
+
+    func verifyRelaunch(before: ProofJSON, launch: String, pid: Int, observation: String) async throws -> ProofJSON {
+        guard launch != launchID, pid != Int(getpid()) else {
+            throw HostProofError("The native app process did not change")
+        }
+        let witness: ProofJSON = [
+            "beforeLaunchId": launch, "afterLaunchId": launchID,
+            "beforeAppPID": pid, "afterAppPID": Int(getpid()),
+            "appQuitObserved": true, "observation": observation
+        ]
+        return try await web("verifyRelaunch", arguments: [before, witness])
+    }
+
+    func recoveryResult(before: ProofJSON, witness: ProofJSON) async -> ProofJSON {
         var result = await checked(9) { try await web("verifyRecovery", arguments: [before, witness]) }
         var evidence = result["evidence"] as? ProofJSON ?? [:]
         evidence["native"] = witness
@@ -282,7 +305,7 @@ final class HostProofViewController: CAPBridgeViewController {
         return result
     }
 
-    private func web(_ operation: String, arguments: [Any] = []) async throws -> ProofJSON {
+    func web(_ operation: String, arguments: [Any] = []) async throws -> ProofJSON {
         guard let webView else { throw HostProofError("The Capacitor web view is missing") }
         if let proofNavigation, proofNavigation.isReloading {
             let deadline = ContinuousClock.now.advanced(by: .seconds(45))
@@ -341,17 +364,17 @@ final class HostProofViewController: CAPBridgeViewController {
         return result
     }
 
-    private func checked(_ id: Int, _ operation: () async throws -> ProofJSON) async -> ProofJSON {
+    func checked(_ id: Int, _ operation: () async throws -> ProofJSON) async -> ProofJSON {
         do { return try await operation() }
         catch { return failure(id, evidence: errorEvidence(error)) }
     }
 
-    private func errorEvidence(_ error: Error) -> ProofJSON {
+    func errorEvidence(_ error: Error) -> ProofJSON {
         if let error = error as? WebProofError { return error.evidence }
         return ["error": error.localizedDescription]
     }
 
-    private func failure(_ id: Int, _ error: String, evidence: ProofJSON = [:]) -> ProofJSON {
+    func failure(_ id: Int, _ error: String, evidence: ProofJSON = [:]) -> ProofJSON {
         var details = evidence
         details["error"] = error
         return failure(id, evidence: details)
@@ -404,7 +427,7 @@ private enum WebProofError: Error {
     }
 }
 
-private struct HostProofError: LocalizedError {
+struct HostProofError: LocalizedError {
     let message: String
     init(_ message: String) { self.message = message }
     var errorDescription: String? { message }

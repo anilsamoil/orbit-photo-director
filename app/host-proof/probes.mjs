@@ -14,6 +14,7 @@ const TILE_LAYERS = {
   iss: { layer: 'iss-lit', source: 'iss-lit' },
 };
 const storageKey = 'opd-g1-storage';
+const bodySHA256 = 'c8f5d0341d54d951a71b136e6e2afcb14d11ed8489a7ae126a8fee0df6ecf193';
 const requireValue = (condition, reason) => { if (!condition) throw new Error(reason); };
 const bytesEqual = (actual, expected) => actual?.length === expected.length && expected.every((byte, index) => actual[index] === byte);
 const hex = (bytes) => Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -82,8 +83,12 @@ export function verifyPixels(tilePixels, backgroundPixels, tab = 'map') {
 
 export function verifyRelaunch(before, after, native) {
   requireValue(native?.appQuitObserved === true && native.beforeLaunchId && native.afterLaunchId && native.beforeLaunchId !== native.afterLaunchId, 'Missing actual app quit and distinct launch identifiers');
-  requireValue(before.token === after.token && before.token && before.documentId && after.documentId && before.documentId !== after.documentId, 'Storage did not survive app relaunch');
-  return { before, after, ...native };
+  return { ...verifyStorage(before, after), ...native };
+}
+
+function verifyStorage(before, after) {
+  requireValue(before.token === after.token && before.token && before.documentId && after.documentId && before.documentId !== after.documentId, 'Storage did not survive relaunch');
+  return { before, after };
 }
 
 export function verifyRecovery(before, after, native) {
@@ -113,7 +118,7 @@ export function verifyStress(sessions, durationMs) {
       tab + ' stress has no verified move in the final ' + MAX_VERIFIED_MOVE_GAP_MS + ' ms');
   }
   const actualDurationMs = sessions.reduce((sum, { elapsedMs }) => sum + elapsedMs, 0);
-  return { sessions, requestedDurationMs: durationMs, actualDurationMs, maxVerifiedMoveGapMs: MAX_VERIFIED_MOVE_GAP_MS, simulatorIsIndicative: true };
+  return { sessions, requestedDurationMs: durationMs, actualDurationMs, maxVerifiedMoveGapMs: MAX_VERIFIED_MOVE_GAP_MS };
 }
 
 const longitudeError = (a, b) => Math.abs((((a - b) % 360) + 540) % 360 - 180);
@@ -131,12 +136,15 @@ function matchesMove(camera, center, zoom) {
 }
 
 export function verifyMove(before, after, center, zoom) {
-  requireValue(matchesMove(after, center, zoom)
+  if (matchesMove(after, center, zoom)
     && (longitudeError(before.lng, after.lng) > 0.001 || Math.abs(before.lat - after.lat) > 0.001)
-    && Math.abs(before.zoom - after.zoom) > 0.001, 'Scripted pan and zoom did not reach the requested camera');
+    && Math.abs(before.zoom - after.zoom) > 0.001) return;
+  throw Object.assign(new Error('Scripted pan and zoom did not reach the requested camera'), {
+    evidence: { before, actual: after, requested: { center, zoom } },
+  });
 }
 
-async function verifyOfflineEgress(rawFetch) {
+async function verifyOfflineEgress(rawFetch, includeNative = true) {
   const fetchURL = 'https://g1-fetch.invalid/offline-proof';
   const xhrURL = 'https://g1-xhr.invalid/offline-proof';
   const webSocketURL = 'wss://g1-websocket.invalid/offline-proof';
@@ -186,6 +194,7 @@ async function verifyOfflineEgress(rawFetch) {
   } finally {
     document.removeEventListener('securitypolicyviolation', observe);
   }
+  if (!includeNative) return denied;
   const capacitor = globalThis.Capacitor;
   for (const [name, call] of [
     ['capacitorHttp', () => capacitor.Plugins.CapacitorHttp.get({ url: fetchURL })],
@@ -224,9 +233,11 @@ export async function measureTiles({ fetchTile, tileURL, tileRequests, localURL,
   requireValue(elapsedMs > 0 && Number.isFinite(elapsedMs), 'Invalid tile duration');
   const tilesPerSecond = count * 1000 / elapsedMs;
   const received = await withDeadline(tileRequests);
-  requireValue(Array.isArray(received) && paths.every((path) => received.filter((item) => item === path).length
-    > previous.filter((item) => item === path).length), 'Native handler did not witness every tile response');
-  const evidence = { count, elapsedMs, tilesPerSecond, bytesPerTile: expected.length, witnessedPaths: paths.length,
+  requireValue(Array.isArray(received), 'Native tile witness is unavailable');
+  const observedPaths = paths.filter((path) => received.filter((item) => item === path).length
+    > previous.filter((item) => item === path).length);
+  requireValue(observedPaths.length === count, 'Native handler did not witness every tile response');
+  const evidence = { count, elapsedMs, tilesPerSecond, bytesPerTile: expected.length, witnessedPaths: observedPaths.length, observedPaths,
     route: '/__g1/tiles/<index>.png', cache: 'no-store' };
   if (tilesPerSecond < 50) throw Object.assign(new Error('Tile route delivered fewer than 50 tiles per second'), { evidence });
   return evidence;
@@ -388,7 +399,16 @@ export function createProof({ rawFetch, tile, workers, localTiles, offline, fixt
     }
   };
   const proof = {
-    fixtureSHA256: fixture?.fixtureSHA256, documentId, checks: CHECKS, holdIssCamera: false,
+    fixtureSHA256: fixture?.fixtureSHA256, documentId, checks: CHECKS, heldCamera: null,
+    guardMapCamera(vendor) {
+      for (const method of ['setCenter', 'setBearing', 'easeTo']) {
+        const write = vendor[method];
+        vendor[method] = (value) => {
+          if (proof.heldCamera !== 'map') write(value);
+        };
+      }
+      return vendor;
+    },
     prepareRelaunch() { localStorage.setItem(storageKey, hex(crypto.getRandomValues(new Uint8Array(24)))); return state(); },
     state,
     async select(tab) {
@@ -432,11 +452,11 @@ export function createProof({ rawFetch, tile, workers, localTiles, offline, fixt
           for (const tab of ['map', 'iss']) {
             const map = await selectRenderer(tab);
             if (tab === 'iss') await preset(map, 'nadir');
-            const restore = tab === 'map' ? mapFixture(map) : () => { proof.holdIssCamera = false; };
-            proof.holdIssCamera = tab === 'iss';
+            const restore = tab === 'map' ? mapFixture(map) : undefined;
             const start = performance.now();
             const session = { tab, elapsedMs: 0, moves: 0, tileFrames: 0, minimumTilePixels: 64, verifiedMoveTimesMs: [] };
             sessions.push(session);
+            proof.heldCamera = tab;
             try {
               map.jumpTo({ center: [0, 0], zoom: 2, pitch: 0 });
               while (performance.now() - start < halfMs) {
@@ -455,13 +475,14 @@ export function createProof({ rawFetch, tile, workers, localTiles, offline, fixt
               }
             } finally {
               session.elapsedMs = performance.now() - start;
-              restore();
+              proof.heldCamera = null;
+              restore?.();
             }
           }
           return verifyStress(sessions, durationMs);
         } catch (error) {
           const actualDurationMs = sessions.reduce((sum, item) => sum + item.elapsedMs, 0);
-          throw Object.assign(error, { evidence: { sessions, actualDurationMs } });
+          throw Object.assign(error, { evidence: { ...error.evidence, sessions, actualDurationMs } });
         }
       }, { timeoutMs: FULL_STRESS_MS + 60_000, tabs: ['map', 'iss'] });
     },
@@ -471,12 +492,15 @@ export function createProof({ rawFetch, tile, workers, localTiles, offline, fixt
     requireValue(plugin, 'Native HostProof plugin is unavailable');
     return plugin;
   };
+  const webDigest = async () => {
+    requireValue(isSecureContext && crypto.subtle, 'Local origin is not a secure context');
+    return hex(new Uint8Array(await crypto.subtle.digest('SHA-256', BODY)));
+  };
   const initialChecks = {
     1: {
       timeoutMs: 15_000,
       async run() {
-        requireValue(isSecureContext && crypto.subtle, 'Local origin is not a secure context');
-        const web = hex(new Uint8Array(await crypto.subtle.digest('SHA-256', BODY)));
+        const web = await webDigest();
         const { digest } = await native().digest({ bytes: [...BODY] });
         requireValue(web === digest, 'Native SHA-256 and WebCrypto differ');
         const egress = await verifyOfflineEgress(rawFetch);
@@ -529,7 +553,7 @@ export function createProof({ rawFetch, tile, workers, localTiles, offline, fixt
         const geometry = await measureGeometry({
           map, track, when: fixture.now, preset, pixels,
           tileFrame: () => freshTileFrame('iss', map),
-          holdCamera: (hold) => { proof.holdIssCamera = hold; },
+          holdCamera: (hold) => { proof.heldCamera = hold ? 'iss' : null; },
         });
         return { ...await tileProbe('iss', map), geometry };
       },
@@ -563,5 +587,20 @@ export function createProof({ rawFetch, tile, workers, localTiles, offline, fixt
       }),
     },
   };
+  if (globalThis.location?.protocol === 'https:') {
+    proof.safari = {
+      runCheck(id) {
+        if (id === 1) return check(1, async () => {
+          const web = await webDigest();
+          requireValue(web === bodySHA256, 'WebCrypto differs from the fixture SHA-256');
+          const egress = await verifyOfflineEgress(rawFetch, false);
+          return { localOrigin: localOrigin(), isSecureContext, web, expected: bodySHA256, bytes: BODY.length, egress };
+        }, initialChecks[1]);
+        requireValue([2, 3, 4, 5].includes(id), 'Safari fixture runs checks 1 through 5');
+        return proof.runCheck(id);
+      },
+      verifyStorage: (before) => check(8, () => verifyStorage(before, state())),
+    };
+  }
   return proof;
 }

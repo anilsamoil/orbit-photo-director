@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { registerHooks } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { compileFunction } from 'node:vm';
 import { inflateSync } from 'node:zlib';
 import test from 'node:test';
-import { makeFixture, tilePNG } from './build.mjs';
+import { Window } from '../../frontend/node_modules/happy-dom/lib/index.js';
+import { build } from '../../frontend/node_modules/vite/dist/node/index.js';
+import { issCameraHold, makeFixture, tilePNG } from './build.mjs';
 import { BODY, BRIDGE_REQUESTS, CHECKS, TAB_STORAGE_KEY, TILE_COLORS, createProof, measureTiles, verifyEcho, verifyMove, verifyPixels, verifyRecovery, verifyRelaunch, verifyStress, withDeadline } from './probes.mjs';
 
 test('fixture artifacts carry matching lengths and SHA-256 digests', () => {
@@ -59,7 +64,9 @@ test('tile throughput consumes bytes and rejects corruption, cache aliases, and 
   const tileURL = (index) => `capacitor://localhost/__g1/tiles/${index}.png`;
   const delivered = [];
   const options = { expected: BODY, tileURL, tileRequests: async () => [...delivered], localURL: 'capacitor://localhost/', fetchTile: async (url) => { delivered.push(new URL(url).pathname); return new Response(BODY); }, now: (() => { let call = 0; return () => call++ * 1000; })() };
-  assert.equal((await measureTiles(options)).tilesPerSecond, 100);
+  const measured = await measureTiles(options);
+  assert.equal(measured.tilesPerSecond, 100);
+  assert.deepEqual(measured.observedPaths, delivered);
   await assert.rejects(measureTiles({ ...options, fetchTile: async () => new Response(null, { status: 404 }) }), /route failed/);
   await assert.rejects(measureTiles({ ...options, fetchTile: async () => new Response([1]) }), /bytes changed/);
   await assert.rejects(measureTiles({ ...options, tileURL: (index) => `capacitor://localhost/__g1/tiles/0.png?request=${index}` }), /unique/);
@@ -73,10 +80,10 @@ test('a stalled native operation produces a timeout instead of hanging the proof
   await assert.rejects(withDeadline(() => new Promise(() => {}), 5, 'Proof frontend startup'), /Proof frontend startup timed out/);
 });
 
-function createProofHarness(t) {
+function createProofHarness(t, origin = 'capacitor://localhost') {
   const fixture = makeFixture(['synthetic line 1', 'synthetic line 2']);
   const tile = Buffer.from(fixture.tile, 'base64');
-  const location = new URL('capacitor://localhost/');
+  const location = new URL(origin);
   const storage = new Map();
   let activeTab = 'map';
   let now = 0;
@@ -251,6 +258,27 @@ test('GPU-free proof keeps native checks and relaunch available with no renderer
   }
 });
 
+test('Safari checks exercise browser egress and storage without a Capacitor bridge', async (t) => {
+  const { makeProof } = createProofHarness(t, 'https://g1-fixture.invalid');
+  delete globalThis.Capacitor;
+  const proof = makeProof();
+  const digest = await proof.safari.runCheck(1);
+  assert.equal(digest.status, 'pass', JSON.stringify(digest.evidence));
+  assert.equal(digest.evidence.web, digest.evidence.expected);
+  assert.deepEqual(digest.evidence.egress.connectSrcBlockedHosts, [
+    'g1-fetch.invalid', 'g1-websocket.invalid', 'g1-xhr.invalid',
+  ]);
+  assert.equal(digest.evidence.egress.capacitorHttp, undefined);
+  assert.equal((await proof.runCheck(1)).status, 'fail');
+  assert.throws(() => proof.safari.runCheck(6), /Safari fixture runs checks 1 through 5/);
+  const before = proof.prepareRelaunch();
+  assert.equal((await proof.safari.verifyStorage(before)).status, 'fail');
+  const reloaded = makeProof();
+  const storage = await reloaded.safari.verifyStorage(before);
+  assert.equal(storage.status, 'pass', JSON.stringify(storage.evidence));
+  assert.equal(storage.evidence.after.token, before.token);
+});
+
 test('independent checks return the full report and the native-driven phases reach checks 8–10', async (t) => {
   const { fixture, offline, workers, makeProof } = createProofHarness(t);
   const proof = makeProof();
@@ -391,6 +419,133 @@ test('stress reports a renderer failure', async () => {
   }
 });
 
+test('Map stress keeps its requested camera while a zoom-out waits for tiles', async (t) => {
+  const { makeProof } = createProofHarness(t);
+  const proof = makeProof();
+  const map = window.__opdMap;
+  const jumpTo = map.jumpTo;
+  const repaint = map.triggerRepaint;
+  const issCenter = [-97, 28];
+  let bearingWrites = 0;
+  const camera = proof.guardMapCamera({
+    setCenter: (center) => jumpTo({ center, zoom: map.getZoom() }),
+    easeTo: ({ center }) => jumpTo({ center, zoom: map.getZoom() }),
+    setBearing: () => { bearingWrites++; },
+  });
+  let zoomOutFrames = null;
+  t.mock.method(map, 'jumpTo', (next) => {
+    if (zoomOutFrames === null && map.getZoom() === 4.9 && next.zoom === 3) {
+      zoomOutFrames = 0;
+      map.blankNextFrame();
+    }
+    jumpTo(next);
+  });
+  t.mock.method(map, 'triggerRepaint', () => {
+    if (zoomOutFrames !== null && zoomOutFrames++ === 1) {
+      camera.setCenter(issCenter);
+      camera.easeTo({ center: issCenter });
+      camera.setBearing(0);
+    }
+    repaint();
+  });
+
+  const result = await proof.stress(600_000);
+  assert.equal(result.status, 'pass', JSON.stringify(result.evidence));
+  assert.ok(zoomOutFrames >= 2);
+  assert.equal(bearingWrites, 0);
+  camera.setCenter(issCenter);
+  assert.deepEqual(map.getCenter(), { lng: -97, lat: 28 });
+});
+
+test('ISS stress keeps its requested camera if the window resizes while a zoom-out waits for tiles', async (t) => {
+  const [bundle] = await build({
+    configFile: false,
+    root: fileURLToPath(new URL('../../frontend/', import.meta.url)),
+    publicDir: false,
+    logLevel: 'silent',
+    plugins: [issCameraHold],
+    build: {
+      lib: { entry: 'src/iss-view/index.ts', name: 'IssView', formats: ['iife'] },
+      minify: false,
+      write: false,
+    },
+  });
+  const tle = await readFile(new URL('../../tests/fixtures/iss-2026-11-10.txt', import.meta.url), 'utf8');
+  const fixture = makeFixture(tle.trim().split('\n'));
+  const { makeProof } = createProofHarness(t);
+  const proof = makeProof();
+  const map = window.__opdIss;
+  const jumpTo = map.jumpTo;
+  const repaint = map.triggerRepaint;
+  const browser = new Window({ url: 'https://g1-fixture.invalid/' });
+  const host = browser.document.createElement('div');
+  browser.document.body.append(host);
+  browser.__opdG1 = proof;
+  const load = compileFunction(bundle.output[0].code + '\nreturn IssView;',
+    ['window', 'document', 'HTMLElement', 'getComputedStyle', 'ResizeObserver'], { filename: 'iss-view-proof.js' });
+  const { mountIssScene } = load(browser, browser.document, browser.HTMLElement, browser.getComputedStyle.bind(browser), browser.ResizeObserver);
+  const scene = mountIssScene(host, {
+    nowMs: () => fixture.now, drive: 'manual', launches: () => [], session: { mode: 'horizon' },
+    createRenderer: () => ({
+      ready: async () => {}, resize() {}, destroy() {},
+      aim({ pose }) {
+        jumpTo({ center: [pose.camera.lonDeg, pose.camera.latDeg], zoom: 4.8478066574280145 });
+      },
+    }),
+  });
+  t.after(async () => {
+    scene.dispose();
+    await browser.happyDOM.close();
+  });
+  scene.update({ manifestVersion: 'g1', generatedAtMs: fixture.now, track: JSON.parse(fixture.files['/v/g1/track.json']) });
+  await Promise.resolve();
+  assert.equal(scene.phase(), 'running');
+  const nadir = host.querySelector('[data-iss-preset="nadir"]');
+  const querySelector = document.querySelector;
+  t.mock.method(document, 'querySelector', (selector) => (
+    selector === '[data-iss-preset="nadir"]' ? nadir : querySelector(selector)
+  ));
+  const readCamera = () => ({ center: map.getCenter(), zoom: map.getZoom() });
+  nadir.click();
+  const nadirCamera = readCamera();
+  const resize = () => browser.dispatchEvent(new browser.Event('resize'));
+  let zoomOutFrames = null;
+  t.mock.method(map, 'jumpTo', (next) => {
+    if (zoomOutFrames === null && map.getZoom() === 4.9 && next.zoom === 3) {
+      zoomOutFrames = 0;
+      map.blankNextFrame();
+    }
+    jumpTo(next);
+  });
+  t.mock.method(map, 'triggerRepaint', () => {
+    if (zoomOutFrames !== null && zoomOutFrames++ === 1) resize();
+    repaint();
+  });
+
+  const result = await proof.stress(600_000);
+  assert.equal(result.status, 'pass', JSON.stringify(result.evidence));
+  assert.ok(zoomOutFrames >= 2);
+  assert.notDeepEqual(readCamera(), nadirCamera);
+  resize();
+  assert.deepEqual(readCamera(), nadirCamera);
+});
+
+test('failed stress retains the rendered and requested camera evidence', async (t) => {
+  const { makeProof } = createProofHarness(t);
+  const proof = makeProof();
+  t.mock.method(window.__opdMap, 'getCenter', () => ({ lng: 0, lat: 0 }));
+
+  const { status, evidence } = await proof.stress(600_000);
+  assert.equal(status, 'fail');
+  assert.match(evidence.error, /requested camera/);
+  assert.deepEqual(evidence.sessions.map(({ tab, moves }) => ({ tab, moves })), [{ tab: 'map', moves: 0 }]);
+  assert.equal(evidence.before.zoom, 2);
+  assert.equal(evidence.actual.zoom, 3);
+  assert.deepEqual([evidence.actual.lng, evidence.actual.lat], [0, 0]);
+  assert.equal(evidence.requested.zoom, 3);
+  assert.notDeepEqual(evidence.requested.center, [0, 0]);
+});
+
 test('stress rejects a shortened or increased duration', async (t) => {
   const { makeProof } = createProofHarness(t);
   const proof = makeProof();
@@ -414,7 +569,10 @@ test('rendered stress frames must match the requested pan and zoom', () => {
   const before = { lng: 0, lat: 0, zoom: 3 };
   const after = { lng: 12, lat: 15, zoom: 4 };
   assert.doesNotThrow(() => verifyMove(before, after, [12, 15], 4));
-  assert.throws(() => verifyMove(before, before, [12, 15], 4), /requested camera/);
+  assert.throws(() => verifyMove(before, before, [12, 15], 4), {
+    message: /requested camera/,
+    evidence: { before, actual: before, requested: { center: [12, 15], zoom: 4 } },
+  });
   assert.throws(() => verifyMove(before, { ...after, zoom: 3 }, [12, 15], 3), /requested camera/);
   assert.throws(() => verifyMove(before, { ...after, lng: 0, lat: 0 }, [0, 0], 4), /requested camera/);
   assert.equal(CHECKS.length, 10);

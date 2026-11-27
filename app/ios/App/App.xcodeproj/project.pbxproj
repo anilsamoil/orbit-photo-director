@@ -21,6 +21,7 @@
 		F20000000000000000000006 /* HostProofViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000005 /* HostProofViewController.swift */; };
 		F20000000000000000000008 /* HostProofTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000007 /* HostProofTests.swift */; };
 		F2000000000000000000000A /* RenderedScreenshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000009 /* RenderedScreenshot.swift */; };
+		F20000000000000000000011 /* HostProofGround.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000010 /* HostProofGround.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -50,6 +51,7 @@
 		F20000000000000000000005 /* HostProofViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostProofViewController.swift; sourceTree = "<group>"; };
 		F20000000000000000000007 /* HostProofTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostProofTests.swift; sourceTree = "<group>"; };
 		F20000000000000000000009 /* RenderedScreenshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RenderedScreenshot.swift; sourceTree = "<group>"; };
+		F20000000000000000000010 /* HostProofGround.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostProofGround.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -88,6 +90,7 @@
 			isa = PBXGroup;
 			children = (
 				9582B6822FE993A50072D4E8 /* SceneDelegate.swift */,
+				F20000000000000000000010 /* HostProofGround.swift */,
 				F20000000000000000000005 /* HostProofViewController.swift */,
 				F20000000000000000000003 /* HostProofNavigation.swift */,
 				F20000000000000000000001 /* HostProofPlugin.swift */,
@@ -218,6 +221,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
+				F20000000000000000000011 /* HostProofGround.swift in Sources */,
 				9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */,
 				F20000000000000000000006 /* HostProofViewController.swift in Sources */,
 				F20000000000000000000004 /* HostProofNavigation.swift in Sources */,

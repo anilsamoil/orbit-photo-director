@@ -110,7 +110,7 @@ function drawLimb(canvas: HTMLCanvasElement, column: number[], errorDeg: number 
   context.fillText(errorDeg === null ? 'no limb' : `limb error ${errorDeg.toFixed(3)} deg`, 8, 14);
 }
 
-async function decodePair(subsolar: { lat: number; lon: number }): Promise<{ blue: string; black: string; day: string; twilight: string; night: string }> {
+async function decodePair(subsolar: { lat: number; lon: number }) {
   const blueUrl = fillTileUrl(BLUE_MARBLE_TEMPLATE, 0, 0, 0);
   const blackUrl = fillTileUrl(BLACK_MARBLE_2016_TEMPLATE, 0, 0, 0);
   const [blueResponse, blackResponse] = await Promise.all([fetch(blueUrl), fetch(blackUrl)]);
@@ -122,8 +122,12 @@ async function decodePair(subsolar: { lat: number; lon: number }): Promise<{ blu
     createImageBitmap(await blackResponse.blob()),
   ]);
   try {
-    const blue = `${blueBitmap.width}x${blueBitmap.height}`;
-    const black = `${blackBitmap.width}x${blackBitmap.height}`;
+    const nasaTiles = {
+      blue: { width: blueBitmap.width, height: blueBitmap.height },
+      black: { width: blackBitmap.width, height: blackBitmap.height },
+    };
+    const blue = `${nasaTiles.blue.width}x${nasaTiles.blue.height}`;
+    const black = `${nasaTiles.black.width}x${nasaTiles.black.height}`;
     const canvas = new OffscreenCanvas(blueBitmap.width, blueBitmap.height);
     const context = canvas.getContext('2d');
     if (!context) throw new Error('NASA decode had no canvas');
@@ -141,7 +145,7 @@ async function decodePair(subsolar: { lat: number; lon: number }): Promise<{ blu
       if (!picks.twilight && elevation < -2.5 && elevation > -3.5) picks.twilight = color;
       if (!picks.night && elevation < -20) picks.night = color;
     }
-    return { blue, black, ...picks };
+    return { blue, black, ...picks, nasaTiles };
   } finally {
     blueBitmap.close();
     blackBitmap.close();

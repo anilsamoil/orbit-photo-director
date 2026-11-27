@@ -45,8 +45,12 @@ class HostProofObserverTests(unittest.TestCase):
         failure = subprocess.TimeoutExpired(["/bin/ps"], 7)
         baseline = {MANAGER_PID}
         with (
-            patch.object(observer, "process_table", side_effect=[failure, PROCESSES, failure, PROCESSES]),
+            patch.object(
+                observer, "process_table",
+                side_effect=[failure, PROCESSES, failure, PROCESSES, PROCESSES, {}],
+            ),
             patch.object(observer.time, "sleep"),
+            patch.object(observer.time, "monotonic_ns", side_effect=[100_000_000, 101_000_000, 350_000_000]),
             patch.object(observer.os, "kill") as kill,
             contextlib.redirect_stdout(io.StringIO()) as log,
         ):
@@ -54,11 +58,27 @@ class HostProofObserverTests(unittest.TestCase):
                 {"operation": "terminate", "appPID": APP_PID}, baseline, None, MANAGER_PID,
             )
         kill.assert_called_once_with(WEB_PID, observer.signal.SIGTERM)
-        self.assertEqual(result["pid"], WEB_PID)
+        self.assertEqual(result, {
+            "process": "WebContent", "pid": WEB_PID, "launchdPID": MANAGER_PID, "appPID": APP_PID,
+            "observedAtMs": 100,
+            "termination": {"pid": WEB_PID, "signal": "SIGTERM", "signaledAtMs": 101, "exitedAtMs": 350},
+        })
         self.assertIn(WEB_PID, baseline)
         self.assertIsNone(sample)
         self.assertIn("WebContent discovery process snapshot failed", log.getvalue())
         self.assertIn("WebContent confirmation process snapshot 1/2 failed", log.getvalue())
+
+    def test_signaling_a_pid_does_not_issue_a_receipt_when_its_exit_is_unobserved(self):
+        with (
+            patch.object(observer, "find_web_content", return_value=(MANAGER_PID, WEB_PID, 1024)),
+            patch.object(observer, "process_table", return_value=PROCESSES),
+            patch.object(observer.time, "monotonic", side_effect=[0, 0.1, 0.2, 3]),
+            patch.object(observer.time, "sleep"),
+            patch.object(observer.os, "kill") as kill,
+            self.assertRaisesRegex(ValueError, "exit was not observed after SIGTERM"),
+        ):
+            observer.handle_operation({"operation": "terminate", "appPID": APP_PID}, set(), None, MANAGER_PID)
+        kill.assert_called_once_with(WEB_PID, observer.signal.SIGTERM)
 
     def test_pid_lookup_distinguishes_missing_renderer_from_command_failure(self):
         absent = subprocess.CalledProcessError(1, ["/bin/ps"], output="", stderr="")

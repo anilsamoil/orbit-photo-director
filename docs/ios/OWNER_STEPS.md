@@ -1,6 +1,6 @@
 # SNAP for iPhone and iPad: owner steps
 
-Start steps 1 to 4 in parallel with the unsigned work. Steps 2 and 3 complete the signing prerequisites for G0. Step 4 prepares the chosen ground route for W-03.
+Start steps 1 to 4 in parallel with the unsigned work. Complete steps 2 and 3 and register a ground device in step 4 for G0. Step 4 also prepares the chosen ground route for W-03.
 
 Agents never create, read or move Apple credentials. Where a step produces a key, the owner places it and no one else sees it.
 
@@ -32,9 +32,15 @@ Then on GitHub, in the repository's Settings, Environments: create an environmen
 
 The key authenticates Xcode on the hosted runner. Xcode provisions the build and signs the export with Apple Distribution. The protected environment requires your approval for release jobs. Share the bundle identifier and app name with the organizer. Keep the key private.
 
+Before dispatching the release, confirm the G0 device registration in step 4. Xcode's automatic archive signing can create a development provisioning profile before the distribution export. That profile requires at least one registered device.
+
+Approve the `ios-release` deployment within three days of the unsigned proof asset upload. If the artifact expires, dispatch a fresh run from `main`.
+
 ## 4. A ground tester
 
 Arrange a tester on Earth with an iPad on iPadOS 26 if available. An iPhone on iOS 26 can serve as the ground fallback with the simulator checks in G3. The tester runs W-03, G3 and the App Store upgrade at G6. Share only the ground device model, OS version and test outcome in the public records.
+
+Register the ground device in the Apple Developer account for G0, even when delivering through TestFlight. Keep its identifier private. [Development provisioning requirements](https://developer.apple.com/help/account/provisioning-profiles/create-a-development-provisioning-profile/)
 
 - **TestFlight.** Add the tester as an App Store Connect user and include them in an internal tester group. Internal testing can start without Beta App Review.
 - **Ad hoc (W-74).** Before W-03 and G1, privately collect the identifiers of both physical ground devices, including the second device reserved for the W-33 restore. Register both with Apple Developer and include them in the ad hoc provisioning profile. Pair each with a Mac and enable Developer Mode under **Settings → Privacy & Security** before its first W-74 install. Confirm the restart and on-device prompt. Record readiness for both devices without sharing identifiers. If HTTPS installation is unavailable, install the same signed W-74 `.ipa` from a Mac using Device Hub or Apple Configurator. [Developer Mode](https://developer.apple.com/documentation/xcode/enabling-developer-mode-on-a-device) · [Registered-device distribution](https://developer.apple.com/documentation/xcode/distributing-apps-to-your-development-devices)

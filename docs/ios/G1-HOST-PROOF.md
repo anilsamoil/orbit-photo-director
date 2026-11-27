@@ -48,6 +48,10 @@ Capacitor's default asset handler serves static files. The throughput check fetc
 
 With `G1_CHECKS` unset, the proof runs all ten checks. In a full simulator run, the observer identifies and terminates the app's WebContent process and samples its resident set size throughout the scripted pan and zoom. The scoped hosted proof skips the renderer screenshots and the stress phase.
 
+For simulator check 9, the report requires a native observer receipt linking the observed WebContent PID to the SIGTERM and observed process exit. The observation, signal and exit timestamps must be in order on the observer's monotonic clock. The WebKit callback and same-tab reload are separate required evidence.
+
+For simulator check 10, the observer samples RSS every 250 ms. The report requires at least two successful RSS samples and zero missing samples. The observed duration must be at least 600,000 ms and at least the actual stress duration rounded down to a whole millisecond. It must be at most the sample count times the longest gap. The gap calculation includes the time from the final sample to the end of observation. The longest gap must be positive and at most 2,000 ms. A recovered process-table read error may remain in the trace if the gap stays within that limit.
+
 XCTest and artifact export each check for the tab's raster color in the central canvas region of the screenshot, green for Map and orange for ISS. Whenever the corresponding probe passes, the exported row requires that screenshot even if XCTest fails overall. A missing or invalid screenshot fails the row. The placeholder launch test retains its dark-background and light-text check.
 
 Each `ios-host-proof-<device>-<run>-<attempt>` artifact retains `proof-results.json`, `checks.md`, build hashes, runner logs, the `.xcresult` and any observer logs and exported attachments. The JSON records the selection, and the report labels excluded checks “not-run (on-device required)”. If a check fails with the default host, record its evidence before trying a custom WKWebView host under the same checks.
@@ -80,6 +84,10 @@ All three signed app runs include the CryptoKit digest comparison (1), Capacitor
 
 ## W-03 ground-device proof
 
-Before distributing the signed ground proof through TestFlight or W-74, W-03 must provide an in-app launch trigger that works without XCTest launch arguments. W-03 must also provide the evidence procedure for the required app and Safari runs. The app procedure must verify exit and relaunch with the storage token intact, WebContent termination and recovery, and peak WebContent memory and termination count during the full ten-minute run, all without the Mac-side `simctl` observer.
+Before dispatch, verify that the ground device is registered in the Apple Developer account for G0. Automatic archive signing can create a development provisioning profile before the Apple Distribution export. [Owner steps](OWNER_STEPS.md#4-a-ground-tester)
 
-Run the full proof on the installed signed build on all three devices and collect the web-only evidence in Safari on iPad. Record the build, delivery channel or browser version, device model, OS version, each check result and its evidence here. [W-03 work package](WORK_PLAN.md#w-03-signed-host-proof-on-a-ground-device-s)
+In GitHub Actions, open **iOS release → Run workflow** on `main` and enter the Apple Developer Team ID as `team_id`. Approve the `ios-release` deployment. When Apple finishes processing, assign the build to the internal TestFlight group in App Store Connect. [Release workflow](../../.github/workflows/ios-release.yml)
+
+Get the signed build from TestFlight. The signed job publishes a `snap-release-evidence` artifact with redacted phase summaries, signing facts and the SDK privacy check result. The archive and IPA stay on the runner.
+
+Use the in-app controls to run and export the proof on each signed app target. Follow the ground checklist for exit and relaunch, WebContent recovery, the ten-minute memory trace and Safari on iPad. Record the build, delivery channel or browser version, device model, OS version and check results here. [Ground checklist](W-03-GROUND-CHECKLIST.md) · [W-03 work package](WORK_PLAN.md#w-03-signed-host-proof-on-a-ground-device-s)
