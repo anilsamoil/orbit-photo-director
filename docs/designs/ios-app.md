@@ -115,7 +115,7 @@ Visual design was skipped on purpose. Release 1's new interface is small and reu
 
 ## Open Questions
 
-1. Bundle identifier and the App Store name. "SNAP" alone is likely taken as a store name.
+1. App Store name. "SNAP Orbit Photo Director" is a candidate. The bundle identifier is `dev.astroanil.snap`. [Decision record](../ios/DECISIONS.md)
 2. Install Xcode on the main generator Mac for faster simulator work, or keep simulator runs on hosted runners? W-33 uses the designated ground Mac for the debugger run.
 3. <a id="esri-rights"></a>If offline Esri layers are needed, confirm permission for the exact imagery, dark grey, and label sources and for the proposed prefetch, retention, and access method. Record the permission and its limits in `DECISIONS.md` before enabling native offline Esri use. [Esri offline use rules](https://doc.esri.com/en/arcgis-online/latest/manage-data/take-maps-offline.html).
 4. Alert defaults: lead time, which targets, and a sleep window with no alerts.

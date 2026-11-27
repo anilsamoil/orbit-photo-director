@@ -12,6 +12,7 @@ The unsigned W-01 skeleton in `app/` loads a bundled placeholder by default. W-0
 | [ARCHITECTURE.md](ARCHITECTURE.md) | The shape, the nouns, the contracts, the rules the build enforces |
 | [WORK_PLAN.md](WORK_PLAN.md) | The work packages, their order, the gates, the rules for every pull request |
 | [OWNER_STEPS.md](OWNER_STEPS.md) | The steps only the owner can do |
+| [W-71-NASA-APPROVAL-PACKET.md](W-71-NASA-APPROVAL-PACKET.md) | Draft for owner review before G7 |
 | [codex-cold-read-2026-11-15.md](codex-cold-read-2026-11-15.md) | The second opinion and its findings |
 | [STATUS.md](STATUS.md) | Where the work stands today |
 | [DECISIONS.md](DECISIONS.md) | Decisions made after the design doc |

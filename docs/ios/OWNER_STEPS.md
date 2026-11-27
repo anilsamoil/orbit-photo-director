@@ -51,6 +51,8 @@ Reserve two compatible physical ground devices that can be erased for the W-33 e
 
 Ask NASA early about packet requirements and timing. After G3 and G6 pass, send W-71's approval packet and the live App Store listing to NASA. Ask NASA to approve and install SNAP on the iPad and iPhone in orbit (G7). The packet covers app behavior, every outbound origin, on-device storage, notification permission and the absence of tracking or third-party analytics.
 
+Review the [draft NASA approval packet](W-71-NASA-APPROVAL-PACKET.md).
+
 Step 8 explains how to publish the App Store listing used for G7.
 
 **Why:** no build reaches orbit without this approval. It may take longer than any code.
