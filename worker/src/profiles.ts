@@ -79,7 +79,7 @@ export function validateTarget(t: unknown, profileName: string): string | null {
   const idProfile = v.id.split(':')[1];
   if (idProfile !== profileName) return 'id_profile_mismatch';
   if (typeof v.name !== 'string') return 'name_must_be_string';
-  if (v.name.length === 0) return 'name_empty';
+  if (v.name.trim().length === 0) return 'name_empty';
   if (v.name.length > TARGET_NAME_MAX_LEN) return 'name_too_long';
   if (typeof v.lat !== 'number' || !Number.isFinite(v.lat)) return 'lat_must_be_finite_number';
   if (v.lat < -90 || v.lat > 90) return 'lat_out_of_range';

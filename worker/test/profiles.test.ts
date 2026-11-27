@@ -267,7 +267,7 @@ describe('PUT /api/profiles/<name>/targets', () => {
     const env = makeEnv();
     const list = [validTarget(), validTarget({
       id: 'personal:jack:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
-      name: 'Kyoto',
+      name: ' Kyoto ',
       lat: 35.0,
       lon: 135.7,
     })];
@@ -286,7 +286,7 @@ describe('PUT /api/profiles/<name>/targets', () => {
     });
     const getBody = (await getRes.json()) as { targets: Array<{ name: string }> };
     expect(getBody.targets).toHaveLength(2);
-    expect(getBody.targets[1]?.name).toBe('Kyoto');
+    expect(getBody.targets[1]?.name).toBe(' Kyoto ');
   });
 
   it('stores removed curated ids and returns them without dropping targets', async () => {
@@ -410,6 +410,22 @@ describe('PUT /api/profiles/<name>/targets', () => {
     expect(body.errors[0]?.error).toBe('name_must_be_string');
   });
 
+  it.each(['', ' \t\n '])('rejects a target named %j', async (name) => {
+    const env = makeEnv();
+    const r = await fetchWorker(env, '/api/profiles/jack/targets', {
+      method: 'PUT',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        targets: [validTarget(), validTarget({ id: 'personal:jack:blank', name })],
+      }),
+    });
+    expect(r.status).toBe(400);
+    expect(await r.json()).toEqual({
+      error: 'invalid_targets',
+      errors: [{ index: 1, error: 'name_empty' }],
+    });
+  });
+
   it('rejects target whose id profile-segment does not match URL profile', async () => {
     const env = makeEnv();
     const r = await fetchWorker(env, '/api/profiles/jack/targets', {
@@ -487,11 +503,14 @@ describe('POST /api/profiles/<name>/targets', () => {
     const r = await fetchWorker(env, '/api/profiles/jack/targets', {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify(validTarget()),
+      body: JSON.stringify(validTarget({ name: ' Boston ' })),
     });
     expect(r.status).toBe(200);
     const body = (await r.json()) as { ok: boolean; count: number };
     expect(body.count).toBe(1);
+
+    const getRes = await fetchWorker(env, '/api/profiles/jack/targets', { headers: authHeaders() });
+    expect(await getRes.json()).toMatchObject({ targets: [{ name: ' Boston ' }] });
   });
 
   it('appends a target to an existing list', async () => {
@@ -542,6 +561,17 @@ describe('POST /api/profiles/<name>/targets', () => {
     const body = (await r.json()) as { error: string; detail: string };
     expect(body.error).toBe('invalid_target');
     expect(body.detail).toBe('lon_out_of_range');
+  });
+
+  it.each(['', ' \t\n '])('rejects a target named %j', async (name) => {
+    const env = makeEnv();
+    const r = await fetchWorker(env, '/api/profiles/jack/targets', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(validTarget({ name })),
+    });
+    expect(r.status).toBe(400);
+    expect(await r.json()).toEqual({ error: 'invalid_target', detail: 'name_empty' });
   });
 });
 

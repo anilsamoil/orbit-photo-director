@@ -117,6 +117,10 @@ function showToast(text: string, kind: 'success' | 'warn' | 'error' = 'success')
   toastTimers.add(fade);
 }
 
+function isOpaqueProfileName(name: string): boolean {
+  return /^u-[a-f0-9]{28}$/.test(name);
+}
+
 /** Re-render the CRUD section for the given profile. Idempotent —
  *  callers (profile-ui after a save, or the optimistic flow after
  *  every mutation) just call this and let it rebuild from scratch.
@@ -705,7 +709,9 @@ export async function handleAdd(profileName: string, target: PersonalTarget): Pr
   const apiResult = await postProfileTarget(profileName, target);
   if (apiResult.ok) {
     showToast(
-      `Added "${target.name}" — appears on the map & queue after the next hourly update`,
+      isOpaqueProfileName(profileName)
+        ? `Saved "${target.name}" — shows on the map.`
+        : `Added "${target.name}" — appears on the map & queue after the next hourly update`,
       'success',
     );
     return 'ok';
@@ -983,7 +989,12 @@ export async function handleEdit(profileName: string, edited: PersonalTarget): P
   mergedList[idx] = edited;
   const put = await putProfileTargets(profileName, mergedList);
   if (put.ok) {
-    showToast(`Updated "${edited.name}" — map & queue refresh on the next hourly update`, 'success');
+    showToast(
+      isOpaqueProfileName(profileName)
+        ? `Saved "${edited.name}" — shows on the map.`
+        : `Updated "${edited.name}" — map & queue refresh on the next hourly update`,
+      'success',
+    );
     return 'ok';
   }
   return rollbackEdit(profileName, before, edited, apiSyncErrorMessage(put.reason, put.detail));
@@ -1783,8 +1794,11 @@ async function handleCsvImport(profileName: string, valid: ParsedValidRow[]): Pr
   }
 
   if (failedIds.length === 0) {
+    const summary = `Imported ${okCount} target${okCount === 1 ? '' : 's'}`;
     showToast(
-      `Imported ${okCount} target${okCount === 1 ? '' : 's'} — they appear on the map & queue after the next hourly update.`,
+      isOpaqueProfileName(profileName)
+        ? `${summary} — saved and shown on the map.`
+        : `${summary} — they appear on the map & queue after the next hourly update.`,
       'success',
     );
     return;
