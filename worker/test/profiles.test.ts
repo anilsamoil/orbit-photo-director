@@ -410,7 +410,23 @@ describe('PUT /api/profiles/<name>/targets', () => {
     expect(body.errors[0]?.error).toBe('name_must_be_string');
   });
 
-  it('rejects a list containing a whitespace-only target name', async () => {
+  it('preserves a stored whitespace-only target alongside an edit to another target', async () => {
+    const env = makeEnv();
+    const legacy = validTarget({ id: 'personal:jack:blank', name: ' \t\n ', lat: 40, lon: -75 });
+    await env.CALIB.put('profiles/jack/targets.json', JSON.stringify([legacy, validTarget()]));
+    const targets = [legacy, validTarget({ name: 'Cambridge' })];
+    const r = await fetchWorker(env, '/api/profiles/jack/targets', {
+      method: 'PUT',
+      headers: authHeaders(),
+      body: JSON.stringify({ targets }),
+    });
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({ ok: true, count: 2 });
+    const got = await fetchWorker(env, '/api/profiles/jack/targets', { headers: authHeaders() });
+    expect(await got.json()).toMatchObject({ targets });
+  });
+
+  it('rejects a new target with a whitespace-only name', async () => {
     const env = makeEnv();
     const r = await fetchWorker(env, '/api/profiles/jack/targets', {
       method: 'PUT',
@@ -425,6 +441,28 @@ describe('PUT /api/profiles/<name>/targets', () => {
       errors: [{ index: 1, error: 'name_empty' }],
     });
     expect(env.CALIB.has('profiles/jack/targets.json')).toBe(false);
+  });
+
+  it.each([
+    ['a different blank name', { name: '\t' }],
+    ['an unknown id with the same blank name', { id: 'personal:jack:other' }],
+    ['invalid coordinates with the same id and name', { lat: 91 }],
+  ])('rejects a PUT with %s', async (_description, overrides) => {
+    const env = makeEnv();
+    const legacy = validTarget({ name: '   ' });
+    const stored = JSON.stringify([legacy]);
+    await env.CALIB.put('profiles/jack/targets.json', stored);
+    const r = await fetchWorker(env, '/api/profiles/jack/targets', {
+      method: 'PUT',
+      headers: authHeaders(),
+      body: JSON.stringify({ targets: [{ ...legacy, ...overrides }] }),
+    });
+    expect(r.status).toBe(400);
+    expect(await r.json()).toEqual({
+      error: 'invalid_targets',
+      errors: [{ index: 0, error: 'name_empty' }],
+    });
+    expect(env.CALIB.raw('profiles/jack/targets.json')).toBe(stored);
   });
 
   it('rejects target whose id profile-segment does not match URL profile', async () => {

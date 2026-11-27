@@ -268,9 +268,20 @@ async function handlePutTargets(
   // Validate each entry; collect per-index errors so the client can show a
   // useful "row 3: lat_out_of_range" message instead of "something's wrong."
   const errors: Array<{ index: number; error: string }> = [];
+  let storedTargets: PersonalTarget[] | undefined;
   for (let i = 0; i < targets.length; i++) {
-    const e = validateTarget(targets[i], profileName);
-    if (e) errors.push({ index: i, error: e });
+    const target: unknown = targets[i];
+    const error = validateTarget(target, profileName);
+    if (error === 'name_empty') {
+      const legacy = target as Pick<PersonalTarget, 'id' | 'name'>;
+      const { id, name } = legacy;
+      // Change one character for validation so the original length is still checked.
+      if (validateTarget({ ...legacy, name: `x${name.slice(1)}` }, profileName) === null) {
+        storedTargets ??= await readTargets(env, profileName);
+        if (storedTargets.some((stored) => stored?.id === id && stored.name === name)) continue;
+      }
+    }
+    if (error) errors.push({ index: i, error });
   }
   if (errors.length > 0) {
     return jsonResponse({ error: 'invalid_targets', errors }, 400);

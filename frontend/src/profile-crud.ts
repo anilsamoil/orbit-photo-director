@@ -991,10 +991,7 @@ export async function handleEdit(profileName: string, edited: PersonalTarget): P
   }
   const mergedList = serverList.data.targets.slice();
   mergedList[idx] = edited;
-  const put = await putProfileTargets(profileName, mergedList.filter((target, index) => {
-    const name = target?.name;
-    return index === idx || typeof name !== 'string' || name === '' || name.trim() !== '';
-  }));
+  const put = await putProfileTargets(profileName, mergedList);
   if (put.ok) {
     showToast(
       isOpaqueProfileName(profileName)

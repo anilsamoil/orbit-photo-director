@@ -404,30 +404,25 @@ describe('optimistic add flow', () => {
 });
 
 describe('optimistic edit flow', () => {
-  it('saves an edit when the fresh server list contains a legacy whitespace-only name', async () => {
+  it('preserves legacy whitespace-only names when saving an edit', async () => {
     const target = makeTarget();
     const legacy = makeTarget({ name: ' \t\n ' });
     const serverOnly = makeTarget({ name: '  From another device  ' });
     const edited = { ...target, name: 'Edited target' };
+    const serverTargets = [serverOnly, legacy, target];
     saveProfile(addPersonalTarget(createDefaultProfile(PROFILE), target));
 
-    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
-      if (init?.method !== 'PUT') {
-        return Response.json({ targets: [serverOnly, legacy, target] });
-      }
-      const { targets }: { targets: PersonalTarget[] } = JSON.parse(String(init.body));
-      const index = targets.findIndex((row) => row.name.trim() === '');
-      if (index !== -1) {
-        return Response.json({ error: 'invalid_targets', errors: [{ index, error: 'name_empty' }] }, { status: 400 });
-      }
-      return Response.json({ ok: true, count: targets.length });
-    });
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) =>
+      init?.method === 'PUT'
+        ? Response.json({ ok: true, count: serverTargets.length })
+        : Response.json({ targets: serverTargets }),
+    );
     vi.stubGlobal('fetch', fetchMock);
 
     expect(await _test.handleEdit(PROFILE, edited)).toBe('ok');
 
     const put = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT');
-    expect(JSON.parse(String(put?.[1]?.body))).toEqual({ targets: [serverOnly, edited] });
+    expect(JSON.parse(String(put?.[1]?.body))).toEqual({ targets: [serverOnly, legacy, edited] });
     expect(loadProfile(PROFILE)?.additions).toEqual([edited]);
   });
 });
