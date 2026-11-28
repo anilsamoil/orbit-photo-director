@@ -50,6 +50,9 @@ export async function measureGeometry({ map, track, when, preset, pixels, tileFr
     if (!modeled.ok) throw new Error('Fixture cannot calculate ISS ' + name + ': ' + modeled.reason);
     const pose = modeled.pose;
     await preset(map, name);
+    // Rendering the new pose updates which raster tiles the viewport needs.
+    await pixels(map);
+    await waitFor(() => map.isSourceLoaded('iss-lit'), 'ISS ' + name + ' raster coverage');
     const frame = await measure(() => pixels(map, true));
     const applied = frame.camera;
     const camera = reconstructCamera({

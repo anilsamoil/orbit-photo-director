@@ -60,6 +60,61 @@ test('pixels distinguish the two fixture rasters and reject background-only fram
   assert.throws(() => verifyPixels(orange, black), /tile pixels/);
 });
 
+test('ISS geometry captures both presets after their raster tiles load', async (t) => {
+  // The proof harness stubs geometry.mjs at its original module URL.
+  const geometryURL = new URL('./geometry.mjs?raster-readiness', import.meta.url).href;
+  const browserModules = {
+    '/src/map/adapters/maplibre/iss-g1-page.ts': 'export const checksFor = () => [], decodePair = () => ({});',
+    '/src/iss-g1/model.ts': `export const angularSeparationDeg = () => 0, reconstructCamera = () => ({}),
+      verticalAngleDeg = () => 0;`,
+    '/src/iss-view/model.ts': `export const EARTH_VIEW_ROLL_DEG = 180;
+      export const sceneFrame = () => ({ ok: true, pose: {
+        targetLatDeg: 0, targetLonDeg: 0, bearingDeg: 0, camera: {},
+      } });`,
+    '/src/terminator.ts': 'export const subsolarPoint = () => ({});',
+  };
+  const hook = registerHooks({
+    resolve(specifier, context, nextResolve) {
+      const stub = context.parentURL === geometryURL && browserModules[specifier];
+      return nextResolve(stub ? 'data:text/javascript,' + encodeURIComponent(stub) : specifier, context);
+    },
+  });
+  t.after(() => hook.deregister());
+  const { measureGeometry } = await import(geometryURL);
+
+  const camera = { lat: 0, lng: 0, bearing: 0, roll: 180, zoom: 5 };
+  const tile = Uint8Array.of(...TILE_COLORS.iss, 255);
+  const blank = new Uint8Array(tile.length);
+  let requestedRaster;
+  let renderedRaster = { loaded: true };
+  const map = {
+    addLayer() {}, addSource() {}, removeLayer() {}, removeSource() {},
+    getLayer: () => undefined, getSource: () => undefined,
+    getCanvas: () => ({}), getMaxPitch: () => 90,
+    calculateCameraOptionsFromTo: () => ({ zoom: camera.zoom }),
+    project: (center) => center, queryRenderedFeatures: () => [], jumpTo() {},
+    isSourceLoaded: (source) => source !== 'iss-lit' || renderedRaster.loaded,
+  };
+  const evidence = await measureGeometry({
+    map, when: 0,
+    preset() { requestedRaster = { loaded: false }; },
+    async pixels(_map, wholeFrame) {
+      if (wholeFrame) {
+        const bytes = renderedRaster === requestedRaster && renderedRaster.loaded ? tile : blank;
+        return { bytes, width: 1, height: 1, camera };
+      }
+      const raster = requestedRaster;
+      await new Promise((resolve) => setImmediate(resolve));
+      renderedRaster = raster;
+      setImmediate(() => { raster.loaded = true; });
+    },
+    tileFrame: () => ({ camera: { zoom: 12 } }),
+    holdCamera() {},
+  });
+  assert.equal(evidence.horizon.earthFraction, 1, 'horizon captured a frame without ISS raster tiles');
+  assert.equal(evidence.nadir.earthFraction, 1, 'nadir captured a frame without ISS raster tiles');
+});
+
 test('tile throughput consumes bytes and rejects corruption, cache aliases, and slow routes', async () => {
   const tileURL = (index) => `capacitor://localhost/__g1/tiles/${index}.png`;
   const delivered = [];
